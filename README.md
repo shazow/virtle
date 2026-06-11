@@ -6,6 +6,7 @@ VM manager for sandbox workflows.
 ## Features
 
 - Runs a QEMU microvm.
+- Allocates block overlay images.
 - Manages [`virtiofsd`](https://gitlab.com/virtio-fs/virtiofsd) daemons for virtiofs mounts.
 - Provisions SSH between host and guest.
 - Connects over SSH upon boot via signaling.

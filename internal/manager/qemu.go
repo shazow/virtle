@@ -137,7 +137,7 @@ func buildQEMUArgs(qemu manifest.QEMU, cid int, incoming bool) ([]string, error)
 		args = append(args,
 			"-chardev", fmt.Sprintf("socket,path=%s,server=on,wait=off,id=ready_char", qemu.SSHReady.SocketPath),
 			"-device", fmt.Sprintf("%s,id=ready-serial", serialDriver),
-			"-device", "virtserialport,chardev=ready_char,name=virtie.ready",
+			"-device", "virtserialport,chardev=ready_char,name=virtle.ready",
 		)
 	}
 

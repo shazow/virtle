@@ -59,18 +59,18 @@ func (errorReader) Read([]byte) (int, error) {
 }
 
 func TestTimeoutFromEnv(t *testing.T) {
-	t.Setenv("VIRTIE_TEST_TIMEOUT", "5m")
-	if got, want := TimeoutFromEnv("VIRTIE_TEST_TIMEOUT", time.Second), 5*time.Minute; got != want {
+	t.Setenv("VIRTLE_TEST_TIMEOUT", "5m")
+	if got, want := TimeoutFromEnv("VIRTLE_TEST_TIMEOUT", time.Second), 5*time.Minute; got != want {
 		t.Fatalf("unexpected parsed timeout: got %s want %s", got, want)
 	}
 
-	t.Setenv("VIRTIE_TEST_TIMEOUT", "0")
-	if got, want := TimeoutFromEnv("VIRTIE_TEST_TIMEOUT", time.Second), time.Second; got != want {
+	t.Setenv("VIRTLE_TEST_TIMEOUT", "0")
+	if got, want := TimeoutFromEnv("VIRTLE_TEST_TIMEOUT", time.Second), time.Second; got != want {
 		t.Fatalf("unexpected fallback timeout: got %s want %s", got, want)
 	}
 
-	t.Setenv("VIRTIE_TEST_TIMEOUT", "bad")
-	if got, want := TimeoutFromEnv("VIRTIE_TEST_TIMEOUT", time.Second), time.Second; got != want {
+	t.Setenv("VIRTLE_TEST_TIMEOUT", "bad")
+	if got, want := TimeoutFromEnv("VIRTLE_TEST_TIMEOUT", time.Second), time.Second; got != want {
 		t.Fatalf("unexpected invalid fallback timeout: got %s want %s", got, want)
 	}
 }

@@ -9,7 +9,7 @@ import (
 )
 
 func TestStartControlServesRuntimeHandler(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "virtie.sock")
+	socketPath := filepath.Join(t.TempDir(), "virtle.sock")
 	handler := fakeRuntimeHandler{}
 	router, err := control.NewRouter(control.Handlers{Core: handler})
 	if err != nil {

@@ -339,7 +339,7 @@ func (s KeyStore) Ensure() (Key, error) {
 
 	comment := s.Comment
 	if comment == "" {
-		comment = "virtie-autoprovision"
+		comment = "virtle-autoprovision"
 	}
 	block, err := ssh.MarshalPrivateKey(privateKey, comment)
 	if err != nil {
@@ -459,7 +459,7 @@ type AuthorizedKeysAppendCommand struct {
 
 func NewAuthorizedKeysInstallPlan(user string, authorizedKey string) AuthorizedKeysInstallPlan {
 	authorizedKeysPath := AuthorizedKeysPath(user)
-	tempKeyPath := "/run/virtie-autoprovision-authorized-key.pub"
+	tempKeyPath := "/run/virtle-autoprovision-authorized-key.pub"
 	return AuthorizedKeysInstallPlan{
 		AuthorizedKeysPath: authorizedKeysPath,
 		SSHDir:             path.Dir(authorizedKeysPath),
@@ -483,7 +483,7 @@ func (p AuthorizedKeysInstallPlan) AppendCommand(shellPath string) AuthorizedKey
 	return AuthorizedKeysAppendCommand{
 		Name:      "append authorized_keys",
 		Path:      shellPath,
-		Args:      []string{"-c", p.AppendScript, "virtie-ssh-autoprovision", p.AuthorizedKeysPath, p.TempKeyPath},
+		Args:      []string{"-c", p.AppendScript, "virtle-ssh-autoprovision", p.AuthorizedKeysPath, p.TempKeyPath},
 		InputPath: p.AuthorizedKeysPath,
 	}
 }

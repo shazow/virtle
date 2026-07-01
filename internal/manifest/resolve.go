@@ -124,7 +124,7 @@ func (m *Manifest) ResolvedSSHReadySocketPath() (string, error) {
 }
 
 func (m *Manifest) ResolvedControlSocketPath() (string, error) {
-	return m.resolveSocketPath("virtie.sock")
+	return m.resolveSocketPath("virtle.sock")
 }
 
 func (m *Manifest) ResolvedQEMU() (QEMU, error) {

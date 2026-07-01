@@ -96,7 +96,7 @@ func runtimeLockManifest(tmpDir string) *manifest.Manifest {
 		Identity: manifest.Identity{HostName: "agent"},
 		Paths: manifest.Paths{
 			WorkingDir: tmpDir,
-			LockPath:   filepath.Join(tmpDir, "virtie.lock"),
+			LockPath:   filepath.Join(tmpDir, "virtle.lock"),
 		},
 		Persistence: manifest.Persistence{StateDir: filepath.Join(tmpDir, ".state")},
 	}

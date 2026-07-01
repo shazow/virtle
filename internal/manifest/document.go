@@ -10,9 +10,9 @@ const (
 	KernelSerialPrint   = "print"
 	KernelSerialConsole = "console"
 
-	defaultHostName    = "virtie"
+	defaultHostName    = "virtle"
 	defaultWorkingDir  = "."
-	defaultBaseDir     = ".virtie"
+	defaultBaseDir     = ".virtle"
 	defaultMachineType = "microvm"
 	defaultMemorySize  = units.MiB(1024)
 	defaultQMP         = "qmp.sock"

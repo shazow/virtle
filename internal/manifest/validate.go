@@ -238,7 +238,7 @@ func validateRun(index int, run Run) error {
 	}
 	if _, err := NewTemplateRenderer(RunTemplateProvider{
 		CID:      3,
-		StateDir: ".virtie",
+		StateDir: ".virtle",
 		Workspace: Workspace{
 			GuestDir: "/workspace",
 			HostDir:  "/host/workspace",

@@ -7,7 +7,7 @@ import (
 
 func TestFileLockerRejectsConcurrentAcquire(t *testing.T) {
 	locker := &fileLocker{}
-	lockPath := filepath.Join(t.TempDir(), "virtie.lock")
+	lockPath := filepath.Join(t.TempDir(), "virtle.lock")
 
 	lock, err := locker.Acquire(lockPath)
 	if err != nil {
@@ -22,7 +22,7 @@ func TestFileLockerRejectsConcurrentAcquire(t *testing.T) {
 
 func TestFileLockerRecoversAfterUncleanClose(t *testing.T) {
 	locker := &fileLocker{}
-	lockPath := filepath.Join(t.TempDir(), "virtie.lock")
+	lockPath := filepath.Join(t.TempDir(), "virtle.lock")
 
 	lock, err := locker.Acquire(lockPath)
 	if err != nil {

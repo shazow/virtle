@@ -62,7 +62,7 @@ func TestDocumentWithDefaultsPreservesKeyResolvedDefaults(t *testing.T) {
 	if got := manifest.Persistence.StateDir; got != defaultBaseDir {
 		t.Fatalf("state dir = %q, want %q", got, defaultBaseDir)
 	}
-	if got, want := manifest.Paths.LockPath, ".virtie/virtie.lock"; got != want {
+	if got, want := manifest.Paths.LockPath, ".virtle/virtle.lock"; got != want {
 		t.Fatalf("lock path = %q, want %q", got, want)
 	}
 	if got := manifest.QEMU.Machine.Type; got != defaultMachineType {

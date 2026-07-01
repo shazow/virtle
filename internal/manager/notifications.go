@@ -139,8 +139,8 @@ func (n *commandNotifier) enabled(state string) bool {
 
 func notificationEnv(state string, message string, values map[string]string) ([]string, error) {
 	env := []string{
-		"VIRTIE_NOTIFY_STATE=" + state,
-		"VIRTIE_NOTIFY_MESSAGE=" + message,
+		"VIRTLE_NOTIFY_STATE=" + state,
+		"VIRTLE_NOTIFY_MESSAGE=" + message,
 	}
 
 	keys := make([]string, 0, len(values))
@@ -153,7 +153,7 @@ func notificationEnv(state string, message string, values map[string]string) ([]
 		if err != nil {
 			return nil, err
 		}
-		env = append(env, fmt.Sprintf("VIRTIE_NOTIFY_CONTEXT_%s=%s", envKey, values[key]))
+		env = append(env, fmt.Sprintf("VIRTLE_NOTIFY_CONTEXT_%s=%s", envKey, values[key]))
 	}
 	return env, nil
 }

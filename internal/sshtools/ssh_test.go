@@ -198,7 +198,7 @@ func TestAuthorizedKeysInstallPlan(t *testing.T) {
 	if got, want := command.Path, "/bin/sh"; got != want {
 		t.Fatalf("unexpected append command path: got %q want %q", got, want)
 	}
-	if got, want := command.Args, []string{"-c", plan.AppendScript, "virtie-ssh-autoprovision", plan.AuthorizedKeysPath, plan.TempKeyPath}; !reflect.DeepEqual(got, want) {
+	if got, want := command.Args, []string{"-c", plan.AppendScript, "virtle-ssh-autoprovision", plan.AuthorizedKeysPath, plan.TempKeyPath}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected append command args: got %v want %v", got, want)
 	}
 	if got, want := command.InputPath, plan.AuthorizedKeysPath; got != want {

@@ -2,7 +2,6 @@
 /dist/
 /coverage.out
 /virtle
-/virtie
 *.test
 *.prof
 .direnv/

@@ -26,7 +26,7 @@ func TestRuntimeStatusAndBalloonUseOwnedQMP(t *testing.T) {
 	runtime := runtimepkg.New(runtimepkg.RuntimeConfig{
 		Manifest: cfg,
 		Paths: launch.RuntimePaths{
-			ControlSocket: filepath.Join(tmpDir, "virtie.sock"),
+			ControlSocket: filepath.Join(tmpDir, "virtle.sock"),
 			QMPSocket:     filepath.Join(tmpDir, "qmp.sock"),
 		},
 		CID:        9,
@@ -63,7 +63,7 @@ func TestRuntimeBalloonMapsMissingDeviceToFailedPrecondition(t *testing.T) {
 	runtime := runtimepkg.New(runtimepkg.RuntimeConfig{
 		Manifest: cfg,
 		Paths: launch.RuntimePaths{
-			ControlSocket: filepath.Join(tmpDir, "virtie.sock"),
+			ControlSocket: filepath.Join(tmpDir, "virtle.sock"),
 			QMPSocket:     filepath.Join(tmpDir, "qmp.sock"),
 		},
 		CID:        9,
@@ -91,7 +91,7 @@ func TestRuntimeSuspendQueuesAndWaitsForLaunchLoop(t *testing.T) {
 	runtime := runtimepkg.New(runtimepkg.RuntimeConfig{
 		Manifest: cfg,
 		Paths: launch.RuntimePaths{
-			ControlSocket: filepath.Join(tmpDir, "virtie.sock"),
+			ControlSocket: filepath.Join(tmpDir, "virtle.sock"),
 			QMPSocket:     filepath.Join(tmpDir, "qmp.sock"),
 		},
 		CID:              9,
@@ -147,7 +147,7 @@ func TestRuntimeSuspendMapsMissingCoordinatorToFailedPrecondition(t *testing.T) 
 	runtime := runtimepkg.New(runtimepkg.RuntimeConfig{
 		Manifest: cfg,
 		Paths: launch.RuntimePaths{
-			ControlSocket: filepath.Join(tmpDir, "virtie.sock"),
+			ControlSocket: filepath.Join(tmpDir, "virtle.sock"),
 			QMPSocket:     filepath.Join(tmpDir, "qmp.sock"),
 		},
 		CID:        9,
@@ -171,7 +171,7 @@ func TestRuntimeSuspendMapsMissingCoordinatorToFailedPrecondition(t *testing.T) 
 func TestRuntimeStartControlServesStatus(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
-	controlPath := filepath.Join(tmpDir, "virtie.sock")
+	controlPath := filepath.Join(tmpDir, "virtle.sock")
 	runtime := runtimepkg.New(runtimepkg.RuntimeConfig{
 		Manifest: cfg,
 		Paths: launch.RuntimePaths{
@@ -212,7 +212,7 @@ func TestRuntimeMarkSavedSuspendSkipsCloseWriteBack(t *testing.T) {
 	runtime := runtimepkg.New(runtimepkg.RuntimeConfig{
 		Manifest: cfg,
 		Paths: launch.RuntimePaths{
-			ControlSocket: filepath.Join(tmpDir, "virtie.sock"),
+			ControlSocket: filepath.Join(tmpDir, "virtle.sock"),
 			QMPSocket:     filepath.Join(tmpDir, "qmp.sock"),
 		},
 		CID:           11,
@@ -248,7 +248,7 @@ func TestRuntimeCloseStopsProcessesAndDisconnectsQMPOnce(t *testing.T) {
 	runtime := runtimepkg.New(runtimepkg.RuntimeConfig{
 		Manifest: cfg,
 		Paths: launch.RuntimePaths{
-			ControlSocket: filepath.Join(tmpDir, "virtie.sock"),
+			ControlSocket: filepath.Join(tmpDir, "virtle.sock"),
 			QMPSocket:     filepath.Join(tmpDir, "qmp.sock"),
 		},
 		CID:           11,

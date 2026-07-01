@@ -74,7 +74,7 @@ func WriteHostFileAtomic(hostPath string, data []byte) error {
 	if info, err := os.Stat(hostPath); err == nil {
 		mode = info.Mode().Perm()
 	}
-	temp, err := os.CreateTemp(dir, ".virtie-writeback-*")
+	temp, err := os.CreateTemp(dir, ".virtle-writeback-*")
 	if err != nil {
 		return err
 	}

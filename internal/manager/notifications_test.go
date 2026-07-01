@@ -43,16 +43,16 @@ func TestCommandNotifierHonorsStateAllowlistAndPassesEnv(t *testing.T) {
 		t.Fatalf("unexpected command dir: got %q want %q", got, want)
 	}
 	for _, want := range []string{
-		"VIRTIE_NOTIFY_STATE",
-		"VIRTIE_NOTIFY_MESSAGE",
-		"VIRTIE_NOTIFY_CONTEXT_CID",
-		"VIRTIE_NOTIFY_CONTEXT_VM_STATE_PATH",
+		"VIRTLE_NOTIFY_STATE",
+		"VIRTLE_NOTIFY_MESSAGE",
+		"VIRTLE_NOTIFY_CONTEXT_CID",
+		"VIRTLE_NOTIFY_CONTEXT_VM_STATE_PATH",
 	} {
 		if record.Env[want] == "" {
 			t.Fatalf("expected env %q in %#v", want, record.Env)
 		}
 	}
-	if got, want := record.Env["VIRTIE_NOTIFY_STATE"], notifyStateRuntimeResume; got != want {
+	if got, want := record.Env["VIRTLE_NOTIFY_STATE"], notifyStateRuntimeResume; got != want {
 		t.Fatalf("unexpected state env: got %q want %q", got, want)
 	}
 }
@@ -118,7 +118,7 @@ func TestCommandNotifierLogsAndIgnoresHookFailure(t *testing.T) {
 	recordPath := filepath.Join(tmpDir, "notify.json")
 	cfg := validManifest(tmpDir)
 	cfg.Notifications.Command = notificationHookCommand(t, recordPath)
-	cfg.Notifications.Command.Env = append(cfg.Notifications.Command.Env, "VIRTIE_NOTIFY_EXIT=1")
+	cfg.Notifications.Command.Env = append(cfg.Notifications.Command.Env, "VIRTLE_NOTIFY_EXIT=1")
 	var logs bytes.Buffer
 	notifier := newCommandNotifier(cfg, slog.New(slog.NewTextHandler(&logs, nil)))
 
@@ -164,7 +164,7 @@ func TestSaveSuspendStateConnectedNotifiesAfterSavedStateWrite(t *testing.T) {
 func TestLaunchResumeNotifiesAfterMigrationAndContinue(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
-	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtie.lock")
+	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
 	cfg.Volumes[0].AutoCreate = false
 	statePath := launch.VMStatePath(cfg)
 	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
@@ -236,12 +236,12 @@ type notificationHookRecord struct {
 }
 
 func TestNotificationHookChild(t *testing.T) {
-	if os.Getenv("VIRTIE_NOTIFY_CHILD") != "1" {
+	if os.Getenv("VIRTLE_NOTIFY_CHILD") != "1" {
 		return
 	}
-	recordPath := os.Getenv("VIRTIE_NOTIFY_RECORD")
+	recordPath := os.Getenv("VIRTLE_NOTIFY_RECORD")
 	if recordPath == "" {
-		t.Fatal("missing VIRTIE_NOTIFY_RECORD")
+		t.Fatal("missing VIRTLE_NOTIFY_RECORD")
 	}
 	dir, err := os.Getwd()
 	if err != nil {
@@ -267,7 +267,7 @@ func TestNotificationHookChild(t *testing.T) {
 	if err := os.WriteFile(recordPath, data, 0o644); err != nil {
 		t.Fatalf("write record: %v", err)
 	}
-	if os.Getenv("VIRTIE_NOTIFY_EXIT") != "" {
+	if os.Getenv("VIRTLE_NOTIFY_EXIT") != "" {
 		os.Exit(1)
 	}
 	os.Exit(0)
@@ -289,8 +289,8 @@ func notificationHookCommandWithPath(recordPath string, path string, args ...str
 		Path: path,
 		Args: commandArgs,
 		Env: []string{
-			"VIRTIE_NOTIFY_CHILD=1",
-			"VIRTIE_NOTIFY_RECORD=" + recordPath,
+			"VIRTLE_NOTIFY_CHILD=1",
+			"VIRTLE_NOTIFY_RECORD=" + recordPath,
 		},
 	}
 }

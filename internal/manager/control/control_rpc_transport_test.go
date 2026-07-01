@@ -199,7 +199,7 @@ func TestControlRouterRequiresExplicitHotplugRegistration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("router: %v", err)
 	}
-	serverPath := filepath.Join(t.TempDir(), "virtie.sock")
+	serverPath := filepath.Join(t.TempDir(), "virtle.sock")
 	startTestControlRouterAt(t, serverPath, router)
 
 	_, err = Dial(serverPath).Hotplug(context.Background(), HotplugRequest{ID: "disk0"})
@@ -212,7 +212,7 @@ func TestControlRouterRequiresExplicitHotplugRegistration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("router with hotplug: %v", err)
 	}
-	registeredPath := filepath.Join(t.TempDir(), "virtie.sock")
+	registeredPath := filepath.Join(t.TempDir(), "virtle.sock")
 	startTestControlRouterAt(t, registeredPath, router)
 
 	resp, err := Dial(registeredPath).Hotplug(context.Background(), HotplugRequest{ID: "disk0", Detach: true})
@@ -230,7 +230,7 @@ func TestControlRouterRequiresExplicitGuestRegistration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("router: %v", err)
 	}
-	serverPath := filepath.Join(t.TempDir(), "virtie.sock")
+	serverPath := filepath.Join(t.TempDir(), "virtle.sock")
 	startTestControlRouterAt(t, serverPath, router)
 
 	_, err = Dial(serverPath).GuestPS(context.Background(), GuestPSRequest{})
@@ -243,7 +243,7 @@ func TestControlRouterRequiresExplicitGuestRegistration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("router with guest: %v", err)
 	}
-	registeredPath := filepath.Join(t.TempDir(), "virtie.sock")
+	registeredPath := filepath.Join(t.TempDir(), "virtle.sock")
 	startTestControlRouterAt(t, registeredPath, router)
 
 	resp, err := Dial(registeredPath).GuestPS(context.Background(), GuestPSRequest{})
@@ -300,7 +300,7 @@ func TestControlInvalidJSONAndUnknownMethod(t *testing.T) {
 
 func startTestControlServer(t *testing.T, runtime any) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "virtie.sock")
+	path := filepath.Join(t.TempDir(), "virtle.sock")
 
 	core, ok := runtime.(RuntimeCore)
 	if !ok {

@@ -1,0 +1,3 @@
+[kernel]
+path = "/tmp/vmlinuz"
+initrd_path = "/tmp/initrd"

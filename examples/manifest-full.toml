@@ -1,0 +1,345 @@
+# Proposed simplified virtle manifest.
+# This annotated manifest documents the supported snake_case schema.
+
+# This names the guest and is also used to derive default lock/state names.
+# It must be configurable because multiple manifests may run from the same host
+# account, and a stable name makes logs and persisted state attributable.
+host_name = "virtie"  # Default: "virtie"
+
+# Relative host paths need a stable root. Keeping this explicit lets generated
+# manifests point at the repository checkout while hand-written manifests can
+# opt into another base directory without changing every path below.
+# During launch, virtle resolves a relative working_dir from the directory
+# where virtle was run and persists the absolute path back into the manifest.
+working_dir = "."  # Default: "." (launch CWD)
+
+# virtle needs one host-side directory for files it owns: lock files, active
+# PID files, saved suspend state, and derived runtime sockets. Put volume images
+# under this directory too when they should move with the VM's local state.
+state_dir = ".virtie"  # Default: ".virtie"
+
+[qemu]
+# virtle launches QEMU directly instead of relying on a wrapper. The executable
+# must be configurable so Nix-generated manifests can pin an exact package while
+# hand-written manifests can use a PATH-resolved binary. Extra arguments are an
+# escape hatch for QEMU features virtle does not model yet; they are appended
+# after generated arguments and can affect launch behavior. virtle substitutes
+# Go text/template values in each argv element before launching QEMU. Available
+# values are {{.HostName}}, {{.WorkingDir}}, {{.StateDir}}, {{.HostOS}},
+# {{.HostArch}}, {{.HostSystem}}, and host environment values such as
+# {{.Env.USER}}. qemu.exec only receives the substituted argv; virtle does not
+# inject those values as QEMU environment variables.
+exec = ["qemu-system-x86_64"]  # Default: qemu-system-$host_arch
+
+# Guest-to-host port forwarding uses QEMU guestfwd cmd: rules. This command
+# opens the host-side connection for each forward where from = "guest".
+# Native argv templates use {{.Host}} and {{.Port}}. QEMU starts guestfwd
+# commands directly, so HOST and PORT are not injected into the environment.
+# Netcat and shell examples:
+#   fwd_tunnel_exec = ["nc", "{{.Host}}", "{{.Port}}"]
+#   fwd_tunnel_exec = ["sh", "-c", "socat - TCP:{{.Host}}:{{.Port}}"]
+fwd_tunnel_exec = ["nc", "{{.Host}}", "{{.Port}}"]  # Default
+
+# QEMU can drop privileges to another host user before running the VM. This is
+# useful for generated manifests that know the host account policy; leaving it
+# empty keeps the current process user.
+user = ""  # Default: do not pass QEMU -user
+
+# QEMU seccomp blocks some host syscalls from the VM process. It improves
+# isolation when the packaged QEMU supports it, but enabling it against a QEMU
+# build or host setup that lacks support can prevent the VM from launching.
+seccomp = false  # Default: Disabled unless generated from known QEMU support
+
+# QEMU machine options are exposed because some board details, such as
+# acceleration preference or PCIe availability, must line up with host
+# capability and device choices. Omit this to let virtle derive conservative
+# defaults for the selected backend.
+machine_options = { accel = "kvm:tcg", pcie = "on" }  # Default: Derived for host/backend/devices
+
+# QEMU monitor and virtio-serial sockets are normally derived under state_dir.
+# Explicit names are useful for wrappers, tests, and integrations that need
+# stable socket paths. Paths are relative to state_dir.
+qmp_socket = "qmp.sock"  # Default: "qmp.sock"
+guest_agent_socket = "qga.sock"  # Default: "qga.sock"
+
+# Hotplugged PCI devices need root ports created when QEMU starts. virtle
+# automatically allocates one port for each entry under [hotplug].
+
+[machine]
+# The machine profile is the backend-neutral VM shape virtle should run. For
+# QEMU today this maps to a board model; another backend may map it to its own
+# closest machine class. Changing it can affect boot compatibility and devices.
+type = "microvm"  # Options: microvm (default: microvm)
+
+# A stable machine id lets generated configurations preserve VM identity across
+# launches. Omit it when the backend should use its own default identity.
+id = "virtie"  # Default: no explicit machine id
+
+# Memory sizing affects backend allocation, guest capacity, and balloon controller
+# bounds. It is required in non-trivial manifests because too small a value can
+# fail boot or package builds, while too large a value can starve the host.
+memory = 1024  # Default: 1024 MiB
+
+# vCPU count is optional because host defaults are often acceptable. Set it
+# when reproducibility or multi-queue network behavior matters.
+vcpu = 2  # Default: All available cores
+
+# The CPU model determines which guest CPU features are exposed. Host-passthrough
+# is fast and capable but less portable; a generic model is more reproducible.
+cpu = "host,+x2apic,-sgx"  # Default: Host-specific best fit
+
+# KVM acceleration is the normal Linux fast path. Disabling it falls back to
+# emulation for hosts without /dev/kvm or for debugging, at a major performance
+# cost.
+kvm = true  # Default: Enabled on Linux when supported
+
+[kernel]
+# virtle cannot infer the guest kernel/initrd: these are build artifacts from
+# the surrounding system. They must be explicit so launch is decoupled from Nix
+# evaluation and can also work with hand-written manifests.
+path = "/run/booted-system/kernel"
+initrd_path = "/run/booted-system/initrd"
+
+# Kernel params are the guest boot contract. This remains configurable for
+# debugging, console policy, and guest feature flags, but empty should be enough
+# for the standard generated sandbox.
+params = []  # Default: virtle adds required runtime params only
+
+# Serial controls QEMU serial wiring and kernel console params. "print" streams
+# kernel and init output without implying an interactive guest login prompt;
+# "console" is for full serial-console guest configurations.
+serial = "off"  # Options: off, print, console (default: off)
+
+[graphics]
+# Graphics switches QEMU out of headless mode and selects the host display
+# backend. Omit this section for the normal terminal/SSH workflow.
+backend = "headless"  # Options: headless, gtk, cocoa (default: headless)
+
+[ssh]
+# virtle connects through SSH after the guest signals readiness. The user is
+# part of the guest image contract, so it must match the account provisioned
+# inside the VM.
+user = "agent"  # Default: "agent"
+
+# The SSH executable and fixed arguments are configurable. Default: [] (no
+# automatic SSH attach or command hint). Generated manifests can pin OpenSSH and
+# identity options. Template values include {{.CID}}, {{.User}},
+# {{.Destination}}, and {{.Env.USER}}.
+exec = [
+  "ssh",
+  "-q",
+  "-o", "StrictHostKeyChecking=no",
+  "-o", "UserKnownHostsFile=/dev/null",
+  "-o", "GlobalKnownHostsFile=/dev/null",
+]
+
+ready_socket = "ready.sock"  # Default: "" (disabled)
+
+# When ready_socket is set, virtle waits for ssh to start via signaling socket
+# (ready.sock) carrying the SSH-READY token. When exec is non-empty and SSH
+# attach is requested, virtle retries the host-side SSH command at this
+# interval until it starts or fails with a non-transient error.
+retry_delay = 0.5  # Default: 0.5 seconds
+
+# When enabled, virtle can recover from public-key authentication failure by
+# generating a state-dir key, appending its public key to authorized_keys through
+# the guest agent, and retrying SSH with that identity.
+autoprovision = true  # Default: false
+
+[vsock]
+# virtle allocates a runtime vsock CID to avoid collisions between concurrent
+# VMs. The range exists for hosts or orchestrators that reserve parts of the
+# CID space; narrowing it too much can make launch fail under concurrency.
+cid_range = { min = 3, max = 65535 }  # Default: Full allocatable CID range
+
+[workspace]
+# Workspace paths are passed into run command templates. mount_cwd asks virtle
+# to bind the host launch CWD into the guest workspace after SSH readiness.
+guest_dir = "/home/agent/workspace"
+host_dir = ".virtie/workspace"
+mount_cwd = true  # Default: false
+
+[[mounts]]
+type = "image"
+# Image mounts attach host disk images to the guest. The source path is
+# necessary because virtle creates and validates the host file before QEMU
+# starts.
+source = ".virtie/root.img"
+read_only = false  # Default: attach writable
+
+# Auto-creation lets a manifest describe persistent storage without a separate
+# provisioning step. The size and filesystem matter because virtle can only
+# create supported filesystems, and changing them after creation does not
+# rewrite an existing image.
+image.size = 4096  # Default: Minimum auto-created image size
+image.fs = "ext4"  # Options: ext4 (default: ext4)
+image.format = "raw"  # Options: raw, qcow2 (default: raw)
+image.create = true  # Default: Use existing image only
+image.label = "root"  # Default: no filesystem label
+image.direct = false  # Default: backend cache policy
+
+[[mounts]]
+type = "virtiofs"
+# Mounts are shared host directories. The type selects the backend, so each
+# entry only carries common mount fields plus its backend-specific table.
+tag = "workspace"
+source = "."
+read_only = false  # Default: guest can write to the share
+
+# QEMU talks to virtiofsd through this socket. Keeping the socket named in the
+# manifest lets virtle wait for readiness and place it under state_dir.
+virtiofs.socket = "workspace.sock"
+
+# When the socket already exists, virtle treats it as externally managed. When
+# it is missing, virtle starts virtiofsd with these values. Template values
+# include {{.Socket}}, {{.MountSource}}, {{.MountTag}}, and {{.Env.USER}}.
+virtiofs.bin = "virtiofsd"
+virtiofs.args = ["--socket-path={{.Socket}}", "--shared-dir={{.MountSource}}", "--tag={{.MountTag}}"]
+
+[[mounts]]
+type = "9p"
+tag = "cache"
+source = ".cache"
+read_only = false
+
+# 9p filesystem security policy is backend-specific, so it lives under the
+# nested 9p table.
+9p.security_model = "mapped"  # Options: mapped, none, passthrough (default: mapped)
+
+[[hotplug.mounts]]
+# A hotplugged virtiofs mount uses the same fields as a launch mount, but lives
+# under hotplug.mounts so it is not attached during launch. The mount tag is the
+# `virtle hotplug` id. target is optional; omit it when the guest mounts the
+# share itself.
+type = "virtiofs"
+tag = "cache"
+source = "/tmp/cache"
+target = "/mnt/cache"  # Optional: omit when the guest mounts it through fstab or another mechanism
+virtiofs.socket = "cache.sock"  # Default for hotplugged virtiofs: "<tag>.sock"
+virtiofs.bin = "virtiofsd"
+
+[[hotplug.mounts]]
+# Moving a mount between launch-time and hotplug is just changing the header
+# between [[mounts]] and [[hotplug.mounts]].
+type = "virtiofs"
+tag = "tools"
+source = "/tmp/tools"
+target = "/mnt/tools"
+virtiofs.socket = "tools.sock"  # Default: "<tag>.sock"
+virtiofs.bin = "virtiofsd"  # Default: "virtiofsd"
+
+[[hotplug.networks]]
+# Network hotplug v1 attaches only the QEMU device. Guest-side interface naming,
+# DHCP/static configuration, and routing policy are future work. Hotplug network
+# forwarding supports host-origin QEMU hostfwd only; from = "guest" is rejected
+# because hotplug net has no tunnel command lifecycle yet.
+id = "vpn"
+type = "user"  # v1 supports user only
+mac = "02:02:00:00:00:10"
+forward = [
+  { host = "127.0.0.1:2223", guest = "10.0.2.15:22" }, # proto defaults to tcp; from defaults to host
+]
+
+[[hotplug.mounts]]
+# Block hotplug v1 attaches only the QEMU block device. Guest-side discovery,
+# partition/filesystem policy, and mounting are future work.
+type = "image"
+source = "data.qcow2"
+read_only = false
+image.serial = "data"
+image.format = "qcow2"  # Options: raw, qcow2 (default: raw)
+
+[[run]]
+# Run commands are host-side processes managed for the VM lifetime. They start
+# before QEMU and are stopped with the VM. virtle does not wait for command
+# readiness; socket paths should be explicit in vars when needed.
+
+# Additional template variables
+vars = { Namespace = "org.freedesktop.*", SocketDir = ".virtie" }
+
+# Template values include {{.Workspace.GuestPath}} for the guest workspace path,
+# {{.Workspace.HostPath}} for the host workspace path, {{.StateDir}}, {{.CID}},
+# vars entries, and {{.Env.USER}}.
+exec = ["xdg-dbus-proxy", "{{.Env.DBUS_SESSION_BUS_ADDRESS}}", "{{.SocketDir}}/dbus-notifications.sock", "--filter", "--see={{.Namespace}}"]
+
+[[networks]]
+# Network devices default to QEMU user networking, but the manifest needs a
+# place to describe non-default device identity and port forwarding. The id and
+# MAC are stable handles for QEMU and the guest.
+id = "microvm1"
+type = "user"  # Options: user (default: user)
+mac = "02:02:00:00:00:01"
+
+# Port forwards are host/guest integration points. They are explicit because
+# they expose host listeners or guest callbacks and can conflict with ports
+# already in use.
+forward = [
+  { proto = "tcp", from = "host", host = "127.0.0.1:2222", guest = "10.0.2.15:22" }, # proto options: tcp, udp (default: tcp); from options: host, guest (default: host)
+  { proto = "tcp", from = "guest", host = "127.0.0.1:5432", guest = "10.0.2.15:15432" },
+]
+
+[balloon]
+# The balloon device lets virtle reclaim or grow guest memory at runtime. It is
+# optional because it adds a QEMU device and depends on guest driver support.
+enabled = false  # Default: false
+
+# deflateOnOOM lets the guest reclaim ballooned memory during pressure. It can
+# improve survivability under OOM but weakens the host's control over memory
+# reclamation.
+deflate_on_oom = false  # Default: Host keeps control of balloon target
+
+# Free page reporting gives the host better information about reclaimable guest
+# memory. It is useful for dynamic memory management when supported by QEMU and
+# the guest kernel.
+free_page_reporting = true  # Default: Enabled when balloon is enabled
+
+[balloon.controller]
+# Controller thresholds define when virtle changes the balloon target. These
+# are policy knobs rather than launch requirements; bad thresholds can cause
+# memory churn or leave the guest under-provisioned.
+min_actual = 512  # MiB
+max_actual = 1024  # MiB
+grow_below_available = 256  # MiB
+reclaim_above_available = 512  # MiB
+step = 256  # MiB
+poll_interval_seconds = 5
+reclaim_holdoff_seconds = 30
+
+[[write_files]]
+# Guest file writes depend on the QEMU guest agent. They belong in the manifest
+# because they are part of first-boot guest configuration rather than the host
+# launch command.
+guest_path = "/etc/example.conf"
+chown = "agent:users"  # Default: preserve guest agent write ownership
+
+# Inline text is convenient for small config files. Use a host source file for
+# binary or larger payloads so TOML encoding does not become the transport.
+text = "example"
+
+# Mode and overwrite are explicit because accidental permissions or replacing
+# an existing guest file can be security-sensitive and hard to diagnose later.
+mode = "0644"
+overwrite = false  # Default: Preserve existing guest files
+follow_links = true  # Default: follow host symlinks for source payloads
+
+[[write_files]]
+# Host-file sources are the alternative to inline text for binary or larger
+# payloads. A write_files entry must choose exactly one of text or source. When
+# write_back is true, virtle copies the guest file back to the host source path
+# during teardown.
+guest_path = "/var/lib/virtle/host"
+source = "host-file"
+overwrite = true
+follow_links = false  # Default: true
+write_back = true  # Requires source
+
+[notifications]
+# Notifications are host-side hooks for surfacing runtime state changes. The
+# command is optional because hooks can run arbitrary host code; when set, its
+# exit status should not become VM lifecycle policy.
+# Template values include {{.State}}, {{.Message}}, and {{.Env.USER}}. Hook
+# processes also receive VIRTIE_NOTIFY_* environment variables.
+exec = ["notify-send", "virtle: {{.State}}", "{{.Message}}"]
+
+# Empty means all supported states. A non-empty list limits hook execution.
+states = ["runtime:suspend", "runtime:resume", "balloon:resize"]  # Default: Notify on all states

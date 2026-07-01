@@ -264,7 +264,7 @@ func TestDocumentRunResolvesAndResolvesCommand(t *testing.T) {
 	document := validDocument()
 	document.Workspace = WorkspaceInput{
 		GuestDir: "/home/agent/workspace",
-		HostDir:  "/tmp/work/.virtie/workspace",
+		HostDir:  "/tmp/work/.virtle/workspace",
 	}
 	document.Mounts = MountsInput{}
 	document.Run = []RunInput{
@@ -281,7 +281,7 @@ func TestDocumentRunResolvesAndResolvesCommand(t *testing.T) {
 				"Name": "notifications",
 				"Config": map[string]any{
 					"workspace": map[string]any{
-						"hostDir": "/tmp/work/.virtie/workspace",
+						"hostDir": "/tmp/work/.virtle/workspace",
 					},
 				},
 			},
@@ -313,7 +313,7 @@ func TestDocumentRunResolvesAndResolvesCommand(t *testing.T) {
 	wantExec := []string{
 		"xdg-dbus-proxy",
 		"unix:path=/run/user/1000/bus",
-		"/tmp/work/.virtie/workspace/dbus-notifications.sock",
+		"/tmp/work/.virtle/workspace/dbus-notifications.sock",
 		"--name=notifications",
 		"--workspace=/home/agent/workspace",
 		"--cid=7",
@@ -391,7 +391,7 @@ func TestDocumentRunValidation(t *testing.T) {
 
 func TestDocumentVirtioFSUsesExistingSocketWithoutRun(t *testing.T) {
 	tmpDir := t.TempDir()
-	socketPath := filepath.Join(tmpDir, ".virtie", "fs.sock")
+	socketPath := filepath.Join(tmpDir, ".virtle", "fs.sock")
 	if err := os.MkdirAll(filepath.Dir(socketPath), 0o755); err != nil {
 		t.Fatalf("create socket directory: %v", err)
 	}
@@ -423,7 +423,7 @@ func TestDocumentVirtioFSUsesExistingSocketWithoutRun(t *testing.T) {
 
 func TestDocumentVirtioFSStartsRunForStaleSocket(t *testing.T) {
 	tmpDir := t.TempDir()
-	socketPath := filepath.Join(tmpDir, ".virtie", "fs.sock")
+	socketPath := filepath.Join(tmpDir, ".virtle", "fs.sock")
 	if err := os.MkdirAll(filepath.Dir(socketPath), 0o755); err != nil {
 		t.Fatalf("create socket directory: %v", err)
 	}
@@ -466,7 +466,7 @@ func TestDocumentVirtioFSStartsRunForStaleSocket(t *testing.T) {
 
 func TestDocumentVirtioFSWarnsAndGeneratesRunForExistingNonSocket(t *testing.T) {
 	tmpDir := t.TempDir()
-	socketPath := filepath.Join(tmpDir, ".virtie", "fs.sock")
+	socketPath := filepath.Join(tmpDir, ".virtle", "fs.sock")
 	if err := os.MkdirAll(filepath.Dir(socketPath), 0o755); err != nil {
 		t.Fatalf("create socket directory: %v", err)
 	}
@@ -512,14 +512,14 @@ func TestDocumentManagedVirtioFSAddsCleanupFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve cleanup files: %v", err)
 	}
-	if got, want := paths, []string{filepath.Join(tmpDir, ".virtie", "fs.sock")}; !reflect.DeepEqual(got, want) {
+	if got, want := paths, []string{filepath.Join(tmpDir, ".virtle", "fs.sock")}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected resolved cleanup files: got %#v want %#v", got, want)
 	}
 }
 
 func TestDocumentExternalVirtioFSSocketIsNotAutoRemovedOnShutdown(t *testing.T) {
 	tmpDir := t.TempDir()
-	socketPath := filepath.Join(tmpDir, ".virtie", "fs.sock")
+	socketPath := filepath.Join(tmpDir, ".virtle", "fs.sock")
 	if err := os.MkdirAll(filepath.Dir(socketPath), 0o755); err != nil {
 		t.Fatalf("create socket directory: %v", err)
 	}
@@ -855,7 +855,7 @@ func TestDocumentQEMUExecRendersTemplates(t *testing.T) {
 	wantArgs := []string{
 		"-name=agent-sandbox",
 		"-sandbox=/tmp/work",
-		"-state=.virtie",
+		"-state=.virtle",
 		"-host=linux/x86_64-linux",
 		"-user=template-user",
 	}
@@ -1276,7 +1276,7 @@ func TestManifestNotificationsValidationAndResolution(t *testing.T) {
 		data := []byte(`{
 			"host_name": "agent-sandbox",
 			"working_dir": "/tmp/work",
-			"state_dir": ".virtie",
+			"state_dir": ".virtle",
 			"ssh": {"exec": ["/bin/ssh"], "user": "agent"},
 			"qemu": {"exec": ["/bin/qemu-system-x86_64"]},
 			"machine": {"memory": 1024},
@@ -1997,7 +1997,7 @@ func TestDocumentHotplugVirtioFSMountGeneratesHotplugEntry(t *testing.T) {
 	if got, want := device.VirtioFS.Bin, "/tmp/virtiofsd-workspace"; got != want {
 		t.Fatalf("unexpected hotplug exec path: got %q want %q", got, want)
 	}
-	if !containsString(device.VirtioFS.Args, "--socket-path=/tmp/work/.virtie/workspace.sock") {
+	if !containsString(device.VirtioFS.Args, "--socket-path=/tmp/work/.virtle/workspace.sock") {
 		t.Fatalf("expected resolved socket arg, got %#v", device.VirtioFS.Args)
 	}
 	if !containsString(device.VirtioFS.Args, "--shared-dir=/tmp/work/shares/cache") {
@@ -2046,7 +2046,7 @@ func TestDocumentHotplugVirtioFSRendersCustomArgs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve manifest: %v", err)
 	}
-	if got, want := manifest.Hotplug[0].VirtioFS.Args, []string{"--socket-path=/tmp/work/.virtie/cache.sock", "--shared-dir=/tmp/work/shares/cache", "--tag=cache", "--user=template-user"}; !reflect.DeepEqual(got, want) {
+	if got, want := manifest.Hotplug[0].VirtioFS.Args, []string{"--socket-path=/tmp/work/.virtle/cache.sock", "--shared-dir=/tmp/work/shares/cache", "--tag=cache", "--user=template-user"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected hotplug args: got %#v want %#v", got, want)
 	}
 }
@@ -2110,7 +2110,7 @@ func TestDocumentTypedHotplugEntries(t *testing.T) {
 	if got, want := []hotplug.Kind{manifest.Hotplug[0].Kind, manifest.Hotplug[1].Kind, manifest.Hotplug[2].Kind}, []hotplug.Kind{hotplug.KindVirtioFS, hotplug.KindBlock, hotplug.KindNet}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected hotplug order: got %#v want %#v", got, want)
 	}
-	if got, want := manifest.Hotplug[0].VirtioFS.SocketPath, "/tmp/work/.virtie/cache.sock"; got != want {
+	if got, want := manifest.Hotplug[0].VirtioFS.SocketPath, "/tmp/work/.virtle/cache.sock"; got != want {
 		t.Fatalf("unexpected virtiofs socket: got %q want %q", got, want)
 	}
 	if got, want := manifest.Hotplug[0].VirtioFS.Bin, "virtiofsd"; got != want {
@@ -2233,7 +2233,7 @@ source = "."
 
 [[hotplug.mounts]]
 type = "image"
-source = ".virtie/root.img"
+source = ".virtle/root.img"
 image.serial = "root"
 
 [[hotplug.networks]]
@@ -2548,7 +2548,7 @@ func validDocument() Document {
 	return Document{
 		HostName:   "agent-sandbox",
 		WorkingDir: "/tmp/work",
-		StateDir:   ".virtie",
+		StateDir:   ".virtle",
 		QEMU: QEMUInput{
 			Exec:           []string{"/bin/qemu-system-x86_64"},
 			Seccomp:        true,

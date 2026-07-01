@@ -109,7 +109,7 @@ func ReadLaunchPID(manifest *manifest.Manifest) (int, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return 0, fmt.Errorf("launch pid file %q does not exist; is virtie launch running for host %q?", path, manifest.Identity.HostName)
+			return 0, fmt.Errorf("launch pid file %q does not exist; is virtle launch running for host %q?", path, manifest.Identity.HostName)
 		}
 		return 0, fmt.Errorf("read launch pid %q: %w", path, err)
 	}

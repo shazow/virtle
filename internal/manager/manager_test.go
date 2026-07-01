@@ -167,7 +167,7 @@ func newLaunchProviderTestManager(runner launch.Runner) *manager {
 
 func validProviderLaunchManifest(workingDir string) *manifest.Manifest {
 	cfg := validManifest(workingDir)
-	cfg.Paths.LockPath = filepath.Join(workingDir, "virtie.lock")
+	cfg.Paths.LockPath = filepath.Join(workingDir, "virtle.lock")
 	cfg.Run = nil
 	cfg.CleanupFiles = nil
 	cfg.Volumes = nil
@@ -231,7 +231,7 @@ func TestManagerPlanLaunchResolvesRuntimeInputs(t *testing.T) {
 	if got, want := plan.RemoteCommand, []string{"uname", "-a"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("expected copied remote command: got %#v want %#v", got, want)
 	}
-	if got, want := plan.Paths.ControlSocket, filepath.Join(tmpDir, ".runtime", "virtie.sock"); got != want {
+	if got, want := plan.Paths.ControlSocket, filepath.Join(tmpDir, ".runtime", "virtle.sock"); got != want {
 		t.Fatalf("unexpected control socket path: got %q want %q", got, want)
 	}
 	if got, want := plan.Paths.QMPSocket, filepath.Join(tmpDir, ".runtime", "qmp.sock"); got != want {
@@ -261,7 +261,7 @@ func TestManagerPlanUsesDefaultConfig(t *testing.T) {
 	if got, want := plan.RemoteCommand, []string{"hostname"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("expected copied remote command: got %#v want %#v", got, want)
 	}
-	if got, want := plan.Paths.ControlSocket, filepath.Join(tmpDir, "virtie.sock"); got != want {
+	if got, want := plan.Paths.ControlSocket, filepath.Join(tmpDir, "virtle.sock"); got != want {
 		t.Fatalf("unexpected control socket path: got %q want %q", got, want)
 	}
 }
@@ -269,8 +269,8 @@ func TestManagerPlanUsesDefaultConfig(t *testing.T) {
 func TestManagerLaunchSequenceAndTeardownOrder(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
-	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtie.lock")
-	cfg.Paths.RuntimeDir = manifest.RuntimeDir{Mode: manifest.RuntimeDirPath, Path: ".virtie"}
+	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
+	cfg.Paths.RuntimeDir = manifest.RuntimeDir{Mode: manifest.RuntimeDirPath, Path: ".virtle"}
 	cfg.Persistence.Directories = []string{"persist"}
 	cfg.QEMU.QMP.SocketPath = "qmp.sock"
 	cfg.QEMU.Devices.Block[0].ImagePath = "overlay.img"
@@ -286,11 +286,11 @@ func TestManagerLaunchSequenceAndTeardownOrder(t *testing.T) {
 	cfg.Run = []manifest.Run{
 		{
 			Exec: []string{"/bin/virtiofsd-ro-store"},
-			Vars: map[string]any{"Socket": filepath.Join(tmpDir, ".virtie", "sock-a")},
+			Vars: map[string]any{"Socket": filepath.Join(tmpDir, ".virtle", "sock-a")},
 		},
 		{
 			Exec: []string{"/bin/virtiofsd-workspace"},
-			Vars: map[string]any{"Socket": filepath.Join(tmpDir, ".virtie", "sock-b")},
+			Vars: map[string]any{"Socket": filepath.Join(tmpDir, ".virtle", "sock-b")},
 		},
 	}
 	cfg.QEMU.Devices.VirtioFS = []manifest.QEMUVirtioFSShare{
@@ -305,8 +305,8 @@ func TestManagerLaunchSequenceAndTeardownOrder(t *testing.T) {
 	}
 
 	volumeImage := filepath.Join(tmpDir, "overlay.img")
-	cleanupPath := filepath.Join(tmpDir, ".virtie", "cleanup.sock")
-	untouchedPath := filepath.Join(tmpDir, ".virtie", "external.sock")
+	cleanupPath := filepath.Join(tmpDir, ".virtle", "cleanup.sock")
+	untouchedPath := filepath.Join(tmpDir, ".virtle", "external.sock")
 	if err := os.MkdirAll(filepath.Dir(cleanupPath), 0o755); err != nil {
 		t.Fatalf("create cleanup directory: %v", err)
 	}
@@ -363,7 +363,7 @@ func TestManagerLaunchSequenceAndTeardownOrder(t *testing.T) {
 	if !containsString(runner.qemuArgs(), "-qmp") {
 		t.Fatalf("expected qemu args to contain qmp socket: %v", runner.qemuArgs())
 	}
-	if !containsString(runner.qemuArgs(), "unix:"+filepath.Join(tmpDir, ".virtie", "qmp.sock")+",server,nowait") {
+	if !containsString(runner.qemuArgs(), "unix:"+filepath.Join(tmpDir, ".virtle", "qmp.sock")+",server,nowait") {
 		t.Fatalf("expected qemu args to contain resolved qmp socket path: %v", runner.qemuArgs())
 	}
 	if !containsString(runner.qemuArgs(), "guest-cid=3") {
@@ -375,10 +375,10 @@ func TestManagerLaunchSequenceAndTeardownOrder(t *testing.T) {
 	if !containsString(runner.qemuArgs(), "vhost-user-fs-pci,chardev=char-fs1,tag=workspace") {
 		t.Fatalf("expected qemu args to contain virtiofs share: %v", runner.qemuArgs())
 	}
-	if !containsString(runner.qemuArgs(), "socket,path="+filepath.Join(tmpDir, ".virtie", "ready.sock")+",server=on,wait=off,id=ready_char") {
+	if !containsString(runner.qemuArgs(), "socket,path="+filepath.Join(tmpDir, ".virtle", "ready.sock")+",server=on,wait=off,id=ready_char") {
 		t.Fatalf("expected qemu args to contain ssh readiness socket: %v", runner.qemuArgs())
 	}
-	if !containsString(runner.qemuArgs(), "virtserialport,chardev=ready_char,name=virtie.ready") {
+	if !containsString(runner.qemuArgs(), "virtserialport,chardev=ready_char,name=virtle.ready") {
 		t.Fatalf("expected qemu args to contain ssh readiness port: %v", runner.qemuArgs())
 	}
 	if containsString(runner.qemuArgs(), "balloon") {
@@ -460,8 +460,8 @@ func TestManagerLaunchSequenceAndTeardownOrder(t *testing.T) {
 func TestManagerLaunchStartsRunCommands(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
-	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtie.lock")
-	cfg.Persistence.StateDir = ".virtie"
+	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
+	cfg.Persistence.StateDir = ".virtle"
 	cfg.QEMU.QMP.SocketPath = "qmp.sock"
 	cfg.Volumes[0].AutoCreate = false
 	cfg.Workspace = manifest.Workspace{GuestDir: "/home/agent/workspace"}
@@ -571,9 +571,9 @@ func TestManagerLaunchStartsRunCommands(t *testing.T) {
 func TestManagerLaunchFailsWhenRunStartFails(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
-	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtie.lock")
-	cfg.Paths.RuntimeDir = manifest.RuntimeDir{Mode: manifest.RuntimeDirPath, Path: ".virtie"}
-	cfg.Persistence.StateDir = ".virtie"
+	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
+	cfg.Paths.RuntimeDir = manifest.RuntimeDir{Mode: manifest.RuntimeDirPath, Path: ".virtle"}
+	cfg.Persistence.StateDir = ".virtle"
 	cfg.Volumes[0].AutoCreate = false
 	cfg.QEMU.Devices.VirtioFS = nil
 	cfg.CleanupFiles = []string{"cleanup.sock"}
@@ -582,7 +582,7 @@ func TestManagerLaunchFailsWhenRunStartFails(t *testing.T) {
 			Exec: []string{"/bin/proxy"},
 		},
 	}
-	cleanupPath := filepath.Join(tmpDir, ".virtie", "cleanup.sock")
+	cleanupPath := filepath.Join(tmpDir, ".virtle", "cleanup.sock")
 	createStaleUnixSocket(t, cleanupPath)
 
 	runner := &launchRunner{
@@ -621,8 +621,8 @@ func TestManagerLaunchFailsWhenRunStartFails(t *testing.T) {
 func TestManagerLaunchStopsStartedRunsWhenLaterRunFails(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
-	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtie.lock")
-	cfg.Persistence.StateDir = ".virtie"
+	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
+	cfg.Persistence.StateDir = ".virtle"
 	cfg.Volumes[0].AutoCreate = false
 	cfg.QEMU.Devices.VirtioFS = nil
 	cfg.Run = []manifest.Run{
@@ -676,7 +676,7 @@ func TestManagerLaunchStopsStartedRunsWhenLaterRunFails(t *testing.T) {
 func TestManagerLaunchRemovesCleanupPathAfterQMPStartupFailure(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
-	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtie.lock")
+	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
 	cfg.Volumes[0].AutoCreate = false
 
 	cleanupPath := filepath.Join(tmpDir, "fs.sock")
@@ -823,7 +823,7 @@ func TestCreateVolumeImageRunsChattrBeforeSizingImage(t *testing.T) {
 func TestManagerLaunchWithoutSSHPrintsConnectHintAndWaitsForQEMU(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
-	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtie.lock")
+	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
 	cfg.QEMU.QMP.SocketPath = "qmp.sock"
 	cfg.Volumes[0].AutoCreate = false
 
@@ -888,7 +888,7 @@ func TestManagerLaunchWithoutSSHPrintsConnectHintAndWaitsForQEMU(t *testing.T) {
 func TestManagerStartAndWaitForRunningLaunchWithoutSSH(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
-	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtie.lock")
+	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
 	cfg.QEMU.QMP.SocketPath = "qmp.sock"
 	cfg.Volumes[0].AutoCreate = false
 
@@ -1044,7 +1044,7 @@ func TestWaitForRunningLaunchSavedSuspendSkipsCloseWriteBack(t *testing.T) {
 func TestManagerLaunchWithSSHAndEmptyExecSkipsAutoconnect(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
-	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtie.lock")
+	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
 	cfg.QEMU.QMP.SocketPath = "qmp.sock"
 	cfg.QEMU.SSHReady.SocketPath = ""
 	cfg.Volumes[0].AutoCreate = false
@@ -1092,7 +1092,7 @@ func TestManagerLaunchWithSSHAndEmptyExecSkipsAutoconnect(t *testing.T) {
 func TestManagerLaunchRejectsRemoteCommandWithoutSSHExec(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
-	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtie.lock")
+	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
 	cfg.QEMU.QMP.SocketPath = "qmp.sock"
 	cfg.QEMU.SSHReady.SocketPath = ""
 	cfg.Volumes[0].AutoCreate = false
@@ -1133,7 +1133,7 @@ func TestManagerLaunchRejectsRemoteCommandWithoutSSHExec(t *testing.T) {
 func TestManagerLaunchStartsSSHOnceAfterReadiness(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
-	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtie.lock")
+	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
 	cfg.QEMU.QMP.SocketPath = "qmp.sock"
 	cfg.Volumes[0].AutoCreate = false
 
@@ -1191,7 +1191,7 @@ func TestManagerLaunchStartsSSHOnceAfterReadiness(t *testing.T) {
 func TestManagerLaunchWarnsAfterFiveSSHRetryFailures(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
-	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtie.lock")
+	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
 	cfg.Volumes[0].AutoCreate = false
 
 	runner := &launchRunner{
@@ -1324,7 +1324,7 @@ func TestWaitForSSHReadyRejectsUnexpectedToken(t *testing.T) {
 func TestManagerLaunchPrintsGuestInfoOnSIGUSR1(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
-	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtie.lock")
+	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
 	cfg.QEMU.QMP.SocketPath = "qmp.sock"
 	cfg.QEMU.GuestAgent.SocketPath = "qga.sock"
 	cfg.Volumes[0].AutoCreate = false
@@ -1340,7 +1340,7 @@ func TestManagerLaunchPrintsGuestInfoOnSIGUSR1(t *testing.T) {
 	guestAgent := &fakeGuestAgentClient{
 		execStatuses: []qga.ExecStatus{{
 			Exited:  true,
-			OutData: "cm9vdCB6c2gKYWdlbnQgdmlydGllIGxhdW5jaCAtLXNzaApyb290IGluaXQK",
+			OutData: "cm9vdCB6c2gKYWdlbnQgdmlydGxlIGxhdW5jaCAtLXNzaApyb290IGluaXQK",
 		}},
 		record: func(event string) {
 			if event == "guest-ps" {
@@ -1381,7 +1381,7 @@ func TestManagerLaunchPrintsGuestInfoOnSIGUSR1(t *testing.T) {
 		t.Fatalf("unexpected ps exec: %#v", exec)
 	}
 	logs := logOutput.String()
-	if !strings.Contains(logs, "guest info") || !strings.Contains(logs, "USER COMMAND\nagent virtie\nroot init\nroot zsh\n") {
+	if !strings.Contains(logs, "guest info") || !strings.Contains(logs, "USER COMMAND\nagent virtle\nroot init\nroot zsh\n") {
 		t.Fatalf("expected guest process list in logs, got %q", logs)
 	}
 	if strings.Contains(logs, "--ssh") {
@@ -1392,7 +1392,7 @@ func TestManagerLaunchPrintsGuestInfoOnSIGUSR1(t *testing.T) {
 func TestManagerLaunchLogsGuestInfoFailureOnSIGUSR1(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
-	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtie.lock")
+	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
 	cfg.QEMU.QMP.SocketPath = "qmp.sock"
 	cfg.QEMU.GuestAgent.SocketPath = "qga.sock"
 	cfg.Volumes[0].AutoCreate = false
@@ -1478,7 +1478,7 @@ func TestManagerMountsWorkspaceCWD(t *testing.T) {
 func TestManagerLaunchWritesGuestFilesBeforeSSHSession(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
-	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtie.lock")
+	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
 	cfg.QEMU.QMP.SocketPath = "qmp.sock"
 	cfg.QEMU.GuestAgent.SocketPath = "qga.sock"
 	cfg.Volumes[0].AutoCreate = false
@@ -1493,8 +1493,8 @@ func TestManagerLaunchWritesGuestFilesBeforeSSHSession(t *testing.T) {
 	inlineMode := "0640"
 	overwrite := true
 	cfg.WriteFiles = manifest.WriteFiles{
-		"/etc/virtie/inline":   {Content: manifest.WriteFileContent{Kind: manifest.WriteFileContentText, Text: inlineText}, Chown: inlineChown, Mode: inlineMode, Overwrite: overwrite, FollowLinks: true},
-		"/var/lib/virtie/host": {Content: manifest.WriteFileContent{Kind: manifest.WriteFileContentPath, Path: hostPath}, Overwrite: overwrite, FollowLinks: true},
+		"/etc/virtle/inline":   {Content: manifest.WriteFileContent{Kind: manifest.WriteFileContentText, Text: inlineText}, Chown: inlineChown, Mode: inlineMode, Overwrite: overwrite, FollowLinks: true},
+		"/var/lib/virtle/host": {Content: manifest.WriteFileContent{Kind: manifest.WriteFileContentPath, Path: hostPath}, Overwrite: overwrite, FollowLinks: true},
 	}
 
 	var eventMu sync.Mutex
@@ -1519,18 +1519,18 @@ func TestManagerLaunchWritesGuestFilesBeforeSSHSession(t *testing.T) {
 	guestAgent := &fakeGuestAgentClient{
 		record: record,
 		execStatuses: []qga.ExecStatus{
-			{Exited: true, ExitCode: 1}, // test -d /etc/virtie
+			{Exited: true, ExitCode: 1}, // test -d /etc/virtle
 			{Exited: true},              // test -d /etc
-			{Exited: true},              // install -d /etc/virtie
-			{Exited: true},              // chown /etc/virtie/inline
-			{Exited: true},              // chmod /etc/virtie/inline
-			{Exited: true, ExitCode: 1}, // test -d /var/lib/virtie
+			{Exited: true},              // install -d /etc/virtle
+			{Exited: true},              // chown /etc/virtle/inline
+			{Exited: true},              // chmod /etc/virtle/inline
+			{Exited: true, ExitCode: 1}, // test -d /var/lib/virtle
 			{Exited: true, ExitCode: 1}, // test -d /var/lib
 			{Exited: true, ExitCode: 1}, // test -d /var
 			{Exited: true},              // test -d /
 			{Exited: true},              // install -d /var
 			{Exited: true},              // install -d /var/lib
-			{Exited: true},              // install -d /var/lib/virtie
+			{Exited: true},              // install -d /var/lib/virtle
 		},
 	}
 	manager := &manager{
@@ -1552,16 +1552,16 @@ func TestManagerLaunchWritesGuestFilesBeforeSSHSession(t *testing.T) {
 		t.Fatalf("launch: %v", err)
 	}
 
-	if got, want := guestAgent.writes["/etc/virtie/inline"], "aW5saW5l"; got != want {
+	if got, want := guestAgent.writes["/etc/virtle/inline"], "aW5saW5l"; got != want {
 		t.Fatalf("unexpected inline write text: got %q want %q", got, want)
 	}
-	if got, want := guestAgent.writes["/var/lib/virtie/host"], "ZnJvbSBob3N0"; got != want {
+	if got, want := guestAgent.writes["/var/lib/virtle/host"], "ZnJvbSBob3N0"; got != want {
 		t.Fatalf("unexpected host write text: got %q want %q", got, want)
 	}
 	if got, want := guestAgent.execs, []guestExecCall{
 		{
 			path:          guestTestPath,
-			args:          []string{"-d", "/etc/virtie"},
+			args:          []string{"-d", "/etc/virtle"},
 			captureOutput: true,
 		},
 		{
@@ -1571,22 +1571,22 @@ func TestManagerLaunchWritesGuestFilesBeforeSSHSession(t *testing.T) {
 		},
 		{
 			path:          guestInstallPath,
-			args:          []string{"-d", "-o", "agent", "-g", "users", "-m", "0750", "/etc/virtie"},
+			args:          []string{"-d", "-o", "agent", "-g", "users", "-m", "0750", "/etc/virtle"},
 			captureOutput: true,
 		},
 		{
 			path:          guestChownPath,
-			args:          []string{"agent:users", "/etc/virtie/inline"},
+			args:          []string{"agent:users", "/etc/virtle/inline"},
 			captureOutput: true,
 		},
 		{
 			path:          guestChmodPath,
-			args:          []string{"0640", "/etc/virtie/inline"},
+			args:          []string{"0640", "/etc/virtle/inline"},
 			captureOutput: true,
 		},
 		{
 			path:          guestTestPath,
-			args:          []string{"-d", "/var/lib/virtie"},
+			args:          []string{"-d", "/var/lib/virtle"},
 			captureOutput: true,
 		},
 		{
@@ -1616,7 +1616,7 @@ func TestManagerLaunchWritesGuestFilesBeforeSSHSession(t *testing.T) {
 		},
 		{
 			path:          guestInstallPath,
-			args:          []string{"-d", "/var/lib/virtie"},
+			args:          []string{"-d", "/var/lib/virtle"},
 			captureOutput: true,
 		},
 	}; !reflect.DeepEqual(got, want) {
@@ -1625,16 +1625,16 @@ func TestManagerLaunchWritesGuestFilesBeforeSSHSession(t *testing.T) {
 
 	firstSSH := indexString(events, "start:ssh")
 	ping := indexString(events, "guest-ping")
-	testInline := indexString(events, "guest-test-dir:/etc/virtie")
-	installInline := indexString(events, "guest-install-dir:/etc/virtie")
-	openInline := indexString(events, "guest-open:/etc/virtie/inline")
-	closeInline := indexString(events, "guest-close:/etc/virtie/inline")
-	chownInline := indexString(events, "guest-chown:/etc/virtie/inline:agent:users")
-	chmodInline := indexString(events, "guest-chmod:/etc/virtie/inline:0640")
-	testHost := indexString(events, "guest-test-dir:/var/lib/virtie")
-	installHost := indexString(events, "guest-install-dir:/var/lib/virtie")
-	openHost := indexString(events, "guest-open:/var/lib/virtie/host")
-	closeHost := indexString(events, "guest-close:/var/lib/virtie/host")
+	testInline := indexString(events, "guest-test-dir:/etc/virtle")
+	installInline := indexString(events, "guest-install-dir:/etc/virtle")
+	openInline := indexString(events, "guest-open:/etc/virtle/inline")
+	closeInline := indexString(events, "guest-close:/etc/virtle/inline")
+	chownInline := indexString(events, "guest-chown:/etc/virtle/inline:agent:users")
+	chmodInline := indexString(events, "guest-chmod:/etc/virtle/inline:0640")
+	testHost := indexString(events, "guest-test-dir:/var/lib/virtle")
+	installHost := indexString(events, "guest-install-dir:/var/lib/virtle")
+	openHost := indexString(events, "guest-open:/var/lib/virtle/host")
+	closeHost := indexString(events, "guest-close:/var/lib/virtle/host")
 	sshReady := indexString(events, "ssh-ready-dial:"+filepath.Join(tmpDir, "ready.sock"))
 	if firstSSH < 0 || ping < 0 || testInline < 0 || installInline < 0 || openInline < 0 || closeInline < 0 || chownInline < 0 || chmodInline < 0 || testHost < 0 || installHost < 0 || openHost < 0 || closeHost < 0 || sshReady < 0 {
 		t.Fatalf("expected guest agent and ssh events, got %v", events)
@@ -1647,7 +1647,7 @@ func TestManagerLaunchWritesGuestFilesBeforeSSHSession(t *testing.T) {
 func TestManagerLaunchWritesBackGuestFilesOnShutdown(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
-	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtie.lock")
+	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
 	cfg.QEMU.QMP.SocketPath = "qmp.sock"
 	cfg.QEMU.GuestAgent.SocketPath = "qga.sock"
 	cfg.Volumes[0].AutoCreate = false
@@ -1659,7 +1659,7 @@ func TestManagerLaunchWritesBackGuestFilesOnShutdown(t *testing.T) {
 	overwrite := true
 	writeBack := true
 	cfg.WriteFiles = manifest.WriteFiles{
-		"/var/lib/virtie/host": {Content: manifest.WriteFileContent{Kind: manifest.WriteFileContentPath, Path: hostPath}, Overwrite: overwrite, FollowLinks: true, WriteBack: writeBack},
+		"/var/lib/virtle/host": {Content: manifest.WriteFileContent{Kind: manifest.WriteFileContentPath, Path: hostPath}, Overwrite: overwrite, FollowLinks: true, WriteBack: writeBack},
 	}
 
 	runner := &launchRunner{finishInteractiveSSH: true}
@@ -1670,7 +1670,7 @@ func TestManagerLaunchWritesBackGuestFilesOnShutdown(t *testing.T) {
 	}
 	guestAgent := &fakeGuestAgentClient{
 		readPayloads: map[string][]string{
-			"/var/lib/virtie/host": {"ZnJvbSBndWVzdA=="},
+			"/var/lib/virtle/host": {"ZnJvbSBndWVzdA=="},
 		},
 		execStatuses: []qga.ExecStatus{{Exited: true}},
 	}
@@ -1713,12 +1713,12 @@ func TestLaunchSuspendHandlerWritesBackGuestFilesBeforeSuspend(t *testing.T) {
 	}
 	writeBack := true
 	cfg.WriteFiles = manifest.WriteFiles{
-		"/var/lib/virtie/host": {Content: manifest.WriteFileContent{Kind: manifest.WriteFileContentPath, Path: hostPath}, FollowLinks: true, WriteBack: writeBack},
+		"/var/lib/virtle/host": {Content: manifest.WriteFileContent{Kind: manifest.WriteFileContentPath, Path: hostPath}, FollowLinks: true, WriteBack: writeBack},
 	}
 
 	guestAgent := &fakeGuestAgentClient{
 		readPayloads: map[string][]string{
-			"/var/lib/virtie/host": {"ZnJvbSBzdXNwZW5k"},
+			"/var/lib/virtle/host": {"ZnJvbSBzdXNwZW5k"},
 		},
 	}
 	qmpClient := &fakeQMPClient{status: "running"}
@@ -1762,12 +1762,12 @@ func TestWriteBackGuestFilesDoesNotReplaceHostOnGuestReadError(t *testing.T) {
 	}
 	writeBack := true
 	cfg.WriteFiles = manifest.WriteFiles{
-		"/var/lib/virtie/host": {Content: manifest.WriteFileContent{Kind: manifest.WriteFileContentPath, Path: hostPath}, FollowLinks: true, WriteBack: writeBack},
+		"/var/lib/virtle/host": {Content: manifest.WriteFileContent{Kind: manifest.WriteFileContentPath, Path: hostPath}, FollowLinks: true, WriteBack: writeBack},
 	}
 
 	guestAgent := &fakeGuestAgentClient{
 		readPayloads: map[string][]string{
-			"/var/lib/virtie/host": {"not base64"},
+			"/var/lib/virtle/host": {"not base64"},
 		},
 	}
 	manager := &manager{
@@ -1804,12 +1804,12 @@ func TestWriteBackGuestFilesFollowsHostSymlinkWhenFollowLinksEnabled(t *testing.
 	}
 	writeBack := true
 	cfg.WriteFiles = manifest.WriteFiles{
-		"/var/lib/virtie/host": {Content: manifest.WriteFileContent{Kind: manifest.WriteFileContentPath, Path: linkPath}, FollowLinks: true, WriteBack: writeBack},
+		"/var/lib/virtle/host": {Content: manifest.WriteFileContent{Kind: manifest.WriteFileContentPath, Path: linkPath}, FollowLinks: true, WriteBack: writeBack},
 	}
 
 	guestAgent := &fakeGuestAgentClient{
 		readPayloads: map[string][]string{
-			"/var/lib/virtie/host": {"ZnJvbSBndWVzdA=="},
+			"/var/lib/virtle/host": {"ZnJvbSBndWVzdA=="},
 		},
 	}
 	manager := &manager{
@@ -1841,7 +1841,7 @@ func TestWriteBackGuestFilesFollowsHostSymlinkWhenFollowLinksEnabled(t *testing.
 func TestManagerLaunchAutoprovisionsSSHKeyAfterAuthFailure(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
-	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtie.lock")
+	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
 	cfg.QEMU.QMP.SocketPath = "qmp.sock"
 	cfg.QEMU.GuestAgent.SocketPath = "qga.sock"
 	cfg.Volumes[0].AutoCreate = false
@@ -1891,7 +1891,7 @@ func TestManagerLaunchAutoprovisionsSSHKeyAfterAuthFailure(t *testing.T) {
 	} else if got, want := info.Mode().Perm(), os.FileMode(0o600); got != want {
 		t.Fatalf("unexpected identity mode: got %v want %v", got, want)
 	}
-	if got := guestAgent.writes["/run/virtie-autoprovision-authorized-key.pub"]; got == "" {
+	if got := guestAgent.writes["/run/virtle-autoprovision-authorized-key.pub"]; got == "" {
 		t.Fatalf("expected temporary public key write, got writes %#v", guestAgent.writes)
 	}
 	if !containsGuestExec(guestAgent.execs, launch.GuestShellPath, "/home/agent/.ssh/authorized_keys") {
@@ -1902,7 +1902,7 @@ func TestManagerLaunchAutoprovisionsSSHKeyAfterAuthFailure(t *testing.T) {
 func TestManagerLaunchDoesNotAutoprovisionWhenDisabled(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
-	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtie.lock")
+	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
 	cfg.QEMU.QMP.SocketPath = "qmp.sock"
 	cfg.QEMU.GuestAgent.SocketPath = "qga.sock"
 	cfg.Volumes[0].AutoCreate = false
@@ -1943,7 +1943,7 @@ func TestManagerLaunchDoesNotAutoprovisionWhenDisabled(t *testing.T) {
 func TestManagerLaunchSkipsGuestFileDirectoryInstallWhenParentExists(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
-	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtie.lock")
+	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
 	cfg.QEMU.QMP.SocketPath = "qmp.sock"
 	cfg.QEMU.GuestAgent.SocketPath = "qga.sock"
 	cfg.Volumes[0].AutoCreate = false
@@ -1952,7 +1952,7 @@ func TestManagerLaunchSkipsGuestFileDirectoryInstallWhenParentExists(t *testing.
 	inlineChown := "agent:users"
 	overwrite := true
 	cfg.WriteFiles = manifest.WriteFiles{
-		"/etc/virtie/inline": {Content: manifest.WriteFileContent{Kind: manifest.WriteFileContentText, Text: inlineText}, Chown: inlineChown, Overwrite: overwrite, FollowLinks: true},
+		"/etc/virtle/inline": {Content: manifest.WriteFileContent{Kind: manifest.WriteFileContentText, Text: inlineText}, Chown: inlineChown, Overwrite: overwrite, FollowLinks: true},
 	}
 
 	runner := &launchRunner{finishInteractiveSSH: true}
@@ -1988,18 +1988,18 @@ func TestManagerLaunchSkipsGuestFileDirectoryInstallWhenParentExists(t *testing.
 	if got, want := guestAgent.execs, []guestExecCall{
 		{
 			path:          guestTestPath,
-			args:          []string{"-d", "/etc/virtie"},
+			args:          []string{"-d", "/etc/virtle"},
 			captureOutput: true,
 		},
 		{
 			path:          guestChownPath,
-			args:          []string{"agent:users", "/etc/virtie/inline"},
+			args:          []string{"agent:users", "/etc/virtle/inline"},
 			captureOutput: true,
 		},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected guest execs: got %#v want %#v", got, want)
 	}
-	if got, want := guestAgent.writes["/etc/virtie/inline"], "aW5saW5l"; got != want {
+	if got, want := guestAgent.writes["/etc/virtle/inline"], "aW5saW5l"; got != want {
 		t.Fatalf("unexpected inline write text: got %q want %q", got, want)
 	}
 }
@@ -2007,7 +2007,7 @@ func TestManagerLaunchSkipsGuestFileDirectoryInstallWhenParentExists(t *testing.
 func TestManagerLaunchSkipsGuestFileWhenOverwriteFalseAndPathExists(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
-	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtie.lock")
+	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
 	cfg.QEMU.QMP.SocketPath = "qmp.sock"
 	cfg.QEMU.GuestAgent.SocketPath = "qga.sock"
 	cfg.Volumes[0].AutoCreate = false
@@ -2015,7 +2015,7 @@ func TestManagerLaunchSkipsGuestFileWhenOverwriteFalseAndPathExists(t *testing.T
 	hostPath := "missing-host-file"
 	overwrite := false
 	cfg.WriteFiles = manifest.WriteFiles{
-		"/etc/virtie/existing": {Content: manifest.WriteFileContent{Kind: manifest.WriteFileContentPath, Path: hostPath}, Overwrite: overwrite, FollowLinks: true},
+		"/etc/virtle/existing": {Content: manifest.WriteFileContent{Kind: manifest.WriteFileContentPath, Path: hostPath}, Overwrite: overwrite, FollowLinks: true},
 	}
 
 	runner := &launchRunner{finishInteractiveSSH: true}
@@ -2051,7 +2051,7 @@ func TestManagerLaunchSkipsGuestFileWhenOverwriteFalseAndPathExists(t *testing.T
 	if got, want := guestAgent.execs, []guestExecCall{
 		{
 			path:          guestTestPath,
-			args:          []string{"-e", "/etc/virtie/existing"},
+			args:          []string{"-e", "/etc/virtle/existing"},
 			captureOutput: true,
 		},
 	}; !reflect.DeepEqual(got, want) {
@@ -2060,7 +2060,7 @@ func TestManagerLaunchSkipsGuestFileWhenOverwriteFalseAndPathExists(t *testing.T
 	if len(guestAgent.writes) != 0 {
 		t.Fatalf("expected no guest writes, got %#v", guestAgent.writes)
 	}
-	if logs := logOutput.String(); !strings.Contains(logs, "skipped existing guest file because overwrite is false") || !strings.Contains(logs, "/etc/virtie/existing") {
+	if logs := logOutput.String(); !strings.Contains(logs, "skipped existing guest file because overwrite is false") || !strings.Contains(logs, "/etc/virtle/existing") {
 		t.Fatalf("expected overwrite=false skip log, got %q", logs)
 	}
 }
@@ -2068,7 +2068,7 @@ func TestManagerLaunchSkipsGuestFileWhenOverwriteFalseAndPathExists(t *testing.T
 func TestManagerLaunchCreatesAllMissingGuestParentDirectoriesWithOwnerAndMode(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
-	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtie.lock")
+	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
 	cfg.QEMU.QMP.SocketPath = "qmp.sock"
 	cfg.QEMU.GuestAgent.SocketPath = "qga.sock"
 	cfg.Volumes[0].AutoCreate = false
@@ -2078,7 +2078,7 @@ func TestManagerLaunchCreatesAllMissingGuestParentDirectoriesWithOwnerAndMode(t 
 	mode := "0640"
 	overwrite := true
 	cfg.WriteFiles = manifest.WriteFiles{
-		"/etc/virtie/nested/new": {Content: manifest.WriteFileContent{Kind: manifest.WriteFileContentText, Text: text}, Chown: chown, Mode: mode, Overwrite: overwrite, FollowLinks: true},
+		"/etc/virtle/nested/new": {Content: manifest.WriteFileContent{Kind: manifest.WriteFileContentText, Text: text}, Chown: chown, Mode: mode, Overwrite: overwrite, FollowLinks: true},
 	}
 
 	runner := &launchRunner{finishInteractiveSSH: true}
@@ -2089,11 +2089,11 @@ func TestManagerLaunchCreatesAllMissingGuestParentDirectoriesWithOwnerAndMode(t 
 	}
 	guestAgent := &fakeGuestAgentClient{
 		execStatuses: []qga.ExecStatus{
-			{Exited: true, ExitCode: 1}, // test -d /etc/virtie/nested
-			{Exited: true, ExitCode: 1}, // test -d /etc/virtie
+			{Exited: true, ExitCode: 1}, // test -d /etc/virtle/nested
+			{Exited: true, ExitCode: 1}, // test -d /etc/virtle
 			{Exited: true},              // test -d /etc
-			{Exited: true},              // install -d /etc/virtie
-			{Exited: true},              // install -d /etc/virtie/nested
+			{Exited: true},              // install -d /etc/virtle
+			{Exited: true},              // install -d /etc/virtle/nested
 			{Exited: true},              // chown file
 			{Exited: true},              // chmod file
 		},
@@ -2119,12 +2119,12 @@ func TestManagerLaunchCreatesAllMissingGuestParentDirectoriesWithOwnerAndMode(t 
 	if got, want := guestAgent.execs, []guestExecCall{
 		{
 			path:          guestTestPath,
-			args:          []string{"-d", "/etc/virtie/nested"},
+			args:          []string{"-d", "/etc/virtle/nested"},
 			captureOutput: true,
 		},
 		{
 			path:          guestTestPath,
-			args:          []string{"-d", "/etc/virtie"},
+			args:          []string{"-d", "/etc/virtle"},
 			captureOutput: true,
 		},
 		{
@@ -2134,28 +2134,28 @@ func TestManagerLaunchCreatesAllMissingGuestParentDirectoriesWithOwnerAndMode(t 
 		},
 		{
 			path:          guestInstallPath,
-			args:          []string{"-d", "-o", "agent", "-g", "users", "-m", "0750", "/etc/virtie"},
+			args:          []string{"-d", "-o", "agent", "-g", "users", "-m", "0750", "/etc/virtle"},
 			captureOutput: true,
 		},
 		{
 			path:          guestInstallPath,
-			args:          []string{"-d", "-o", "agent", "-g", "users", "-m", "0750", "/etc/virtie/nested"},
+			args:          []string{"-d", "-o", "agent", "-g", "users", "-m", "0750", "/etc/virtle/nested"},
 			captureOutput: true,
 		},
 		{
 			path:          guestChownPath,
-			args:          []string{"agent:users", "/etc/virtie/nested/new"},
+			args:          []string{"agent:users", "/etc/virtle/nested/new"},
 			captureOutput: true,
 		},
 		{
 			path:          guestChmodPath,
-			args:          []string{"0640", "/etc/virtie/nested/new"},
+			args:          []string{"0640", "/etc/virtle/nested/new"},
 			captureOutput: true,
 		},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected guest execs: got %#v want %#v", got, want)
 	}
-	if got, want := guestAgent.writes["/etc/virtie/nested/new"], "bmVzdGVk"; got != want {
+	if got, want := guestAgent.writes["/etc/virtle/nested/new"], "bmVzdGVk"; got != want {
 		t.Fatalf("unexpected guest write text: got %q want %q", got, want)
 	}
 }
@@ -2163,7 +2163,7 @@ func TestManagerLaunchCreatesAllMissingGuestParentDirectoriesWithOwnerAndMode(t 
 func TestManagerLaunchWritesGuestFileWhenOverwriteFalseAndPathMissing(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
-	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtie.lock")
+	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
 	cfg.QEMU.QMP.SocketPath = "qmp.sock"
 	cfg.QEMU.GuestAgent.SocketPath = "qga.sock"
 	cfg.Volumes[0].AutoCreate = false
@@ -2171,7 +2171,7 @@ func TestManagerLaunchWritesGuestFileWhenOverwriteFalseAndPathMissing(t *testing
 	text := "new"
 	overwrite := false
 	cfg.WriteFiles = manifest.WriteFiles{
-		"/etc/virtie/new": {Content: manifest.WriteFileContent{Kind: manifest.WriteFileContentText, Text: text}, Overwrite: overwrite, FollowLinks: true},
+		"/etc/virtle/new": {Content: manifest.WriteFileContent{Kind: manifest.WriteFileContentText, Text: text}, Overwrite: overwrite, FollowLinks: true},
 	}
 
 	runner := &launchRunner{finishInteractiveSSH: true}
@@ -2208,18 +2208,18 @@ func TestManagerLaunchWritesGuestFileWhenOverwriteFalseAndPathMissing(t *testing
 	if got, want := guestAgent.execs, []guestExecCall{
 		{
 			path:          guestTestPath,
-			args:          []string{"-e", "/etc/virtie/new"},
+			args:          []string{"-e", "/etc/virtle/new"},
 			captureOutput: true,
 		},
 		{
 			path:          guestTestPath,
-			args:          []string{"-d", "/etc/virtie"},
+			args:          []string{"-d", "/etc/virtle"},
 			captureOutput: true,
 		},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected guest execs: got %#v want %#v", got, want)
 	}
-	if got, want := guestAgent.writes["/etc/virtie/new"], "bmV3"; got != want {
+	if got, want := guestAgent.writes["/etc/virtle/new"], "bmV3"; got != want {
 		t.Fatalf("unexpected guest write text: got %q want %q", got, want)
 	}
 }
@@ -2227,7 +2227,7 @@ func TestManagerLaunchWritesGuestFileWhenOverwriteFalseAndPathMissing(t *testing
 func TestManagerLaunchFailsOnGuestFileChownFailure(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
-	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtie.lock")
+	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
 	cfg.QEMU.QMP.SocketPath = "qmp.sock"
 	cfg.QEMU.GuestAgent.SocketPath = "qga.sock"
 	cfg.Volumes[0].AutoCreate = false
@@ -2297,7 +2297,7 @@ func TestManagerLaunchFailsOnGuestFileChownFailure(t *testing.T) {
 func TestManagerLaunchFailsOnGuestFileDirectoryFailure(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
-	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtie.lock")
+	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
 	cfg.QEMU.QMP.SocketPath = "qmp.sock"
 	cfg.QEMU.GuestAgent.SocketPath = "qga.sock"
 	cfg.Volumes[0].AutoCreate = false
@@ -2306,7 +2306,7 @@ func TestManagerLaunchFailsOnGuestFileDirectoryFailure(t *testing.T) {
 	inlineChown := "agent:users"
 	overwrite := true
 	cfg.WriteFiles = manifest.WriteFiles{
-		"/etc/virtie/inline": {Content: manifest.WriteFileContent{Kind: manifest.WriteFileContentText, Text: inlineText}, Chown: inlineChown, Overwrite: overwrite, FollowLinks: true},
+		"/etc/virtle/inline": {Content: manifest.WriteFileContent{Kind: manifest.WriteFileContentText, Text: inlineText}, Chown: inlineChown, Overwrite: overwrite, FollowLinks: true},
 	}
 
 	runner := &launchRunner{finishInteractiveSSH: true}
@@ -2317,9 +2317,9 @@ func TestManagerLaunchFailsOnGuestFileDirectoryFailure(t *testing.T) {
 	}
 	guestAgent := &fakeGuestAgentClient{
 		execStatuses: []qga.ExecStatus{
-			{Exited: true, ExitCode: 1}, // test -d /etc/virtie
+			{Exited: true, ExitCode: 1}, // test -d /etc/virtle
 			{Exited: true},              // test -d /etc
-			{Exited: true, ExitCode: 1, ErrData: "aW5zdGFsbCBmYWlsZWQ="}, // install -d /etc/virtie
+			{Exited: true, ExitCode: 1, ErrData: "aW5zdGFsbCBmYWlsZWQ="}, // install -d /etc/virtle
 		},
 	}
 	manager := &manager{
@@ -2340,7 +2340,7 @@ func TestManagerLaunchFailsOnGuestFileDirectoryFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected launch to fail")
 	}
-	for _, want := range []string{"guest file write", "install -d \"/etc/virtie\" exited with status 1", "install failed"} {
+	for _, want := range []string{"guest file write", "install -d \"/etc/virtle\" exited with status 1", "install failed"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("expected error containing %q, got %v", want, err)
 		}
@@ -2348,7 +2348,7 @@ func TestManagerLaunchFailsOnGuestFileDirectoryFailure(t *testing.T) {
 	if got, want := guestAgent.execs, []guestExecCall{
 		{
 			path:          guestTestPath,
-			args:          []string{"-d", "/etc/virtie"},
+			args:          []string{"-d", "/etc/virtle"},
 			captureOutput: true,
 		},
 		{
@@ -2358,7 +2358,7 @@ func TestManagerLaunchFailsOnGuestFileDirectoryFailure(t *testing.T) {
 		},
 		{
 			path:          guestInstallPath,
-			args:          []string{"-d", "-o", "agent", "-g", "users", "/etc/virtie"},
+			args:          []string{"-d", "-o", "agent", "-g", "users", "/etc/virtle"},
 			captureOutput: true,
 		},
 	}; !reflect.DeepEqual(got, want) {
@@ -2375,7 +2375,7 @@ func TestManagerLaunchFailsOnGuestFileDirectoryFailure(t *testing.T) {
 func TestManagerLaunchFailsOnGuestFileChmodFailure(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
-	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtie.lock")
+	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
 	cfg.QEMU.QMP.SocketPath = "qmp.sock"
 	cfg.QEMU.GuestAgent.SocketPath = "qga.sock"
 	cfg.Volumes[0].AutoCreate = false
@@ -2436,7 +2436,7 @@ func TestManagerLaunchFailsOnGuestFileChmodFailure(t *testing.T) {
 func TestManagerLaunchSkipsGuestFilesOnResume(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
-	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtie.lock")
+	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
 	cfg.QEMU.QMP.SocketPath = "qmp.sock"
 	cfg.QEMU.GuestAgent.SocketPath = "qga.sock"
 	cfg.Volumes[0].AutoCreate = false
@@ -2513,7 +2513,7 @@ func TestManagerWriteGuestFileClosesAfterWriteFailure(t *testing.T) {
 func TestManagerLaunchWithoutSSHSavesQueuedSuspend(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
-	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtie.lock")
+	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
 	cfg.QEMU.QMP.SocketPath = "qmp.sock"
 	cfg.Volumes[0].AutoCreate = false
 
@@ -2573,13 +2573,13 @@ func TestManagerLaunchWithoutSSHSavesQueuedSuspend(t *testing.T) {
 func TestManagerLaunchControlSuspendWaitsForGuestProvisioning(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
-	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtie.lock")
+	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
 	cfg.QEMU.QMP.SocketPath = "qmp.sock"
 	cfg.QEMU.GuestAgent.SocketPath = "qga.sock"
 	cfg.QEMU.SSHReady.SocketPath = ""
 	cfg.Volumes[0].AutoCreate = false
 	cfg.WriteFiles = manifest.WriteFiles{
-		"/etc/virtie/startup": {
+		"/etc/virtle/startup": {
 			Overwrite: true,
 			Content:   manifest.WriteFileContent{Kind: manifest.WriteFileContentText, Text: "ready\n"},
 		},
@@ -2688,7 +2688,7 @@ func TestManagerLaunchControlSuspendWaitsForGuestProvisioning(t *testing.T) {
 func TestManagerLaunchHandlesDuplicateSuspendDuringActiveSessionWithoutForwardingJobControl(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
-	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtie.lock")
+	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
 	cfg.QEMU.QMP.SocketPath = "qmp.sock"
 	cfg.Volumes[0].AutoCreate = false
 
@@ -2749,7 +2749,7 @@ func TestManagerLaunchHandlesDuplicateSuspendDuringActiveSessionWithoutForwardin
 func TestManagerLaunchUsesExternalVirtioFSSocketWithoutManagingDaemon(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
-	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtie.lock")
+	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
 	cfg.QEMU.Devices.Block[0].ImagePath = "root.img"
 	cfg.Volumes[0].AutoCreate = false
 	externalSocket := filepath.Join(tmpDir, "virtiofs-nix-store.sock")
@@ -2807,7 +2807,7 @@ func TestManagerLaunchUsesExternalVirtioFSSocketWithoutManagingDaemon(t *testing
 func TestManagerLaunchRejectsMissingExternalVirtioFSSocket(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
-	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtie.lock")
+	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
 	cfg.QEMU.Devices.Block[0].ImagePath = "root.img"
 	cfg.Volumes[0].AutoCreate = false
 	externalSocket := filepath.Join(tmpDir, "missing-virtiofs.sock")
@@ -2834,7 +2834,7 @@ func TestManagerLaunchRejectsMissingExternalVirtioFSSocket(t *testing.T) {
 func TestManagerLaunchSkipsVirtioFSReadinessWhenNoVirtioFSDevices(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
-	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtie.lock")
+	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
 	cfg.QEMU.Devices.VirtioFS = nil
 	cfg.QEMU.Devices.Block = nil
 	cfg.Volumes = nil
@@ -2893,7 +2893,7 @@ func TestManagerLaunchSkipsVirtioFSReadinessWhenNoVirtioFSDevices(t *testing.T) 
 func TestManagerLaunchWithOnlyNinePShareDoesNotWaitForVirtioFS(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
-	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtie.lock")
+	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
 	cfg.QEMU.Devices.VirtioFS = nil
 	cfg.QEMU.Devices.Block = nil
 	cfg.QEMU.Devices.NineP = []manifest.QEMUNinePShare{
@@ -3076,7 +3076,7 @@ func (h *testSuspendControlHandler) Suspend(context.Context, control.SuspendRequ
 func TestManagerSuspendControlSocketWaitsForLaunchExit(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
-	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtie.lock")
+	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
 	if err := launch.WriteLaunchPID(cfg, 12345); err != nil {
 		t.Fatalf("write launch pid: %v", err)
 	}
@@ -3333,7 +3333,7 @@ func TestManagerLaunchResumeForceNonSavedStateReportsRestoreError(t *testing.T) 
 func TestManagerLaunchResumeAutoFreshLaunchesWithoutSavedState(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
-	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtie.lock")
+	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
 	cfg.Volumes[0].AutoCreate = false
 
 	runner := &launchRunner{finishInteractiveSSH: true}
@@ -3368,7 +3368,7 @@ func TestManagerLaunchResumeAutoFreshLaunchesWithoutSavedState(t *testing.T) {
 func TestManagerLaunchResumeForceRestoresAndRemovesSavedState(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
-	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtie.lock")
+	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
 	cfg.Volumes[0].AutoCreate = false
 	statePath := launch.VMStatePath(cfg)
 	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
@@ -3429,7 +3429,7 @@ func TestManagerLaunchResumeForceRestoresAndRemovesSavedState(t *testing.T) {
 func TestManagerLaunchResumeForceSavesSuspendDuringRestoredSession(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
-	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtie.lock")
+	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
 	cfg.Volumes[0].AutoCreate = false
 	statePath := launch.VMStatePath(cfg)
 	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
@@ -3493,7 +3493,7 @@ func TestManagerLaunchResumeForceSavesSuspendDuringRestoredSession(t *testing.T)
 func TestManagerLaunchResumeCancellationDuringActiveSessionIsNotSuspend(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
-	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtie.lock")
+	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
 	cfg.Volumes[0].AutoCreate = false
 	statePath := launch.VMStatePath(cfg)
 	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
@@ -3553,7 +3553,7 @@ func TestManagerLaunchResumeCancellationDuringActiveSessionIsNotSuspend(t *testi
 func TestManagerLaunchResumeForcePreservesStateWhenSessionStartFails(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
-	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtie.lock")
+	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
 	cfg.Volumes[0].AutoCreate = false
 	statePath := launch.VMStatePath(cfg)
 	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
@@ -3640,7 +3640,7 @@ func TestAllocateCIDSkipsHostUnavailableIDs(t *testing.T) {
 	manifest := &manifest.Manifest{
 		Paths: manifest.Paths{
 			WorkingDir: tmpDir,
-			LockPath:   filepath.Join(tmpDir, "virtie.lock"),
+			LockPath:   filepath.Join(tmpDir, "virtle.lock"),
 		},
 		VSock: manifest.VSock{
 			CIDRange: manifest.VSockCIDRange{
@@ -3669,7 +3669,7 @@ func TestAllocateCIDReturnsHostCheckError(t *testing.T) {
 	manifest := &manifest.Manifest{
 		Paths: manifest.Paths{
 			WorkingDir: tmpDir,
-			LockPath:   filepath.Join(tmpDir, "virtie.lock"),
+			LockPath:   filepath.Join(tmpDir, "virtle.lock"),
 		},
 		VSock: manifest.VSock{
 			CIDRange: manifest.VSockCIDRange{
@@ -3761,8 +3761,8 @@ func (h *testHotplugControlHandler) Hotplug(ctx context.Context, req control.Hot
 func TestManagerHotplugUsesControlSocket(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
-	cfg.Persistence.StateDir = ".virtie"
-	cfg.Paths.RuntimeDir = manifest.RuntimeDir{Mode: manifest.RuntimeDirPath, Path: ".virtie"}
+	cfg.Persistence.StateDir = ".virtle"
+	cfg.Paths.RuntimeDir = manifest.RuntimeDir{Mode: manifest.RuntimeDirPath, Path: ".virtle"}
 
 	controlSocketPath, err := cfg.ResolvedControlSocketPath()
 	if err != nil {
@@ -3782,8 +3782,8 @@ func TestManagerHotplugUsesControlSocket(t *testing.T) {
 func TestLaunchRuntimeRegistersHotplugAtControlPeriphery(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
-	cfg.Persistence.StateDir = ".virtie"
-	cfg.Paths.RuntimeDir = manifest.RuntimeDir{Mode: manifest.RuntimeDirPath, Path: ".virtie"}
+	cfg.Persistence.StateDir = ".virtle"
+	cfg.Paths.RuntimeDir = manifest.RuntimeDir{Mode: manifest.RuntimeDirPath, Path: ".virtle"}
 	cfg.QEMU.Hotplug.PCIEPorts = 1
 	cfg.Hotplug = []hotplug.Device{
 		{
@@ -3827,9 +3827,9 @@ func TestLaunchRuntimeRegistersHotplugAtControlPeriphery(t *testing.T) {
 func TestLaunchRuntimeRegistersGuestRPCsAtControlPeriphery(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
-	cfg.Persistence.StateDir = ".virtie"
-	cfg.Paths.RuntimeDir = manifest.RuntimeDir{Mode: manifest.RuntimeDirPath, Path: ".virtie"}
-	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtie.lock")
+	cfg.Persistence.StateDir = ".virtle"
+	cfg.Paths.RuntimeDir = manifest.RuntimeDir{Mode: manifest.RuntimeDirPath, Path: ".virtle"}
+	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
 	cfg.QEMU.QMP.SocketPath = "qmp.sock"
 	cfg.QEMU.GuestAgent.SocketPath = "qga.sock"
 	cfg.QEMU.SSHReady.SocketPath = ""
@@ -3838,7 +3838,7 @@ func TestLaunchRuntimeRegistersGuestRPCsAtControlPeriphery(t *testing.T) {
 	guestAgent := &fakeGuestAgentClient{
 		execStatuses: []qga.ExecStatus{{
 			Exited:  true,
-			OutData: "cm9vdCBpbml0CmFnZW50IHZpcnRpZQo=",
+			OutData: "cm9vdCBpbml0CmFnZW50IHZpcnRsZQo=",
 		}, {
 			Exited:   true,
 			ExitCode: 3,
@@ -3876,7 +3876,7 @@ func TestLaunchRuntimeRegistersGuestRPCsAtControlPeriphery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("control guest ps: %v", err)
 	}
-	if psResp.ProcessList != "USER COMMAND\nagent virtie\nroot init" {
+	if psResp.ProcessList != "USER COMMAND\nagent virtle\nroot init" {
 		t.Fatalf("unexpected process list: %q", psResp.ProcessList)
 	}
 	if got, want := len(guestAgent.execs), 1; got != want {
@@ -3929,9 +3929,9 @@ func TestLaunchRuntimeRegistersGuestRPCsAtControlPeriphery(t *testing.T) {
 func TestLaunchRuntimeGuestPSMapsFailureToFailedPrecondition(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
-	cfg.Persistence.StateDir = ".virtie"
-	cfg.Paths.RuntimeDir = manifest.RuntimeDir{Mode: manifest.RuntimeDirPath, Path: ".virtie"}
-	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtie.lock")
+	cfg.Persistence.StateDir = ".virtle"
+	cfg.Paths.RuntimeDir = manifest.RuntimeDir{Mode: manifest.RuntimeDirPath, Path: ".virtle"}
+	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
 	cfg.QEMU.QMP.SocketPath = "qmp.sock"
 	cfg.QEMU.GuestAgent.SocketPath = ""
 	cfg.QEMU.SSHReady.SocketPath = ""
@@ -4110,7 +4110,7 @@ func TestBuildQEMUCommandAddsGuestAgentDevice(t *testing.T) {
 	if !containsString(commandArgs(spec), "virtio-serial-pci,id=ready-serial") {
 		t.Fatalf("expected qemu args to include ssh readiness serial device: %v", commandArgs(spec))
 	}
-	if !containsString(commandArgs(spec), "virtserialport,chardev=ready_char,name=virtie.ready") {
+	if !containsString(commandArgs(spec), "virtserialport,chardev=ready_char,name=virtle.ready") {
 		t.Fatalf("expected qemu args to include ssh readiness port: %v", commandArgs(spec))
 	}
 }
@@ -4130,7 +4130,7 @@ func TestBuildQEMUCommandOmitsSSHReadyDeviceWhenSocketEmpty(t *testing.T) {
 	if containsString(commandArgs(spec), "virtio-serial-pci,id=ready-serial") {
 		t.Fatalf("expected qemu args to omit ssh readiness serial device: %v", commandArgs(spec))
 	}
-	if containsString(commandArgs(spec), "virtserialport,chardev=ready_char,name=virtie.ready") {
+	if containsString(commandArgs(spec), "virtserialport,chardev=ready_char,name=virtle.ready") {
 		t.Fatalf("expected qemu args to omit ssh readiness port: %v", commandArgs(spec))
 	}
 }
@@ -4323,7 +4323,7 @@ func validManifest(workingDir string) *manifest.Manifest {
 		Identity: manifest.Identity{HostName: "agent-sandbox"},
 		Paths: manifest.Paths{
 			WorkingDir: workingDir,
-			LockPath:   "/tmp/virtie.lock",
+			LockPath:   "/tmp/virtle.lock",
 		},
 		SSH: manifest.SSH{
 			Argv: []string{"/bin/ssh"},
@@ -4702,8 +4702,8 @@ func startFakeSSHReadySocket(path string) error {
 		return err
 	}
 	go func() {
-		defer listener.Close()
 		conn, err := listener.Accept()
+		_ = listener.Close()
 		if err != nil {
 			return
 		}
@@ -4760,15 +4760,17 @@ func (d *fakeSSHReadyDialer) Dial(ctx context.Context, socketPath string, timeou
 	if d.record != nil {
 		d.record("ssh-ready-dial:" + socketPath)
 	}
-	if conn, err := net.Dial("unix", socketPath); err == nil {
-		_ = conn.Close()
-	}
 	if d.err != nil {
 		return nil, d.err
 	}
 	if d.block {
 		reader, _ := io.Pipe()
 		return reader, nil
+	}
+	if d.data == "" {
+		if conn, err := net.Dial("unix", socketPath); err == nil {
+			return conn, nil
+		}
 	}
 	data := d.data
 	if data == "" {

@@ -4,7 +4,7 @@
 # This names the guest and is also used to derive default lock/state names.
 # It must be configurable because multiple manifests may run from the same host
 # account, and a stable name makes logs and persisted state attributable.
-host_name = "virtie"  # Default: "virtie"
+host_name = "virtle"  # Default: "virtle"
 
 # Relative host paths need a stable root. Keeping this explicit lets generated
 # manifests point at the repository checkout while hand-written manifests can
@@ -16,7 +16,7 @@ working_dir = "."  # Default: "." (launch CWD)
 # virtle needs one host-side directory for files it owns: lock files, active
 # PID files, saved suspend state, and derived runtime sockets. Put volume images
 # under this directory too when they should move with the VM's local state.
-state_dir = ".virtie"  # Default: ".virtie"
+state_dir = ".virtle"  # Default: ".virtle"
 
 [qemu]
 # virtle launches QEMU directly instead of relying on a wrapper. The executable
@@ -73,7 +73,7 @@ type = "microvm"  # Options: microvm (default: microvm)
 
 # A stable machine id lets generated configurations preserve VM identity across
 # launches. Omit it when the backend should use its own default identity.
-id = "virtie"  # Default: no explicit machine id
+id = "virtle"  # Default: no explicit machine id
 
 # Memory sizing affects backend allocation, guest capacity, and balloon controller
 # bounds. It is required in non-trivial manifests because too small a value can
@@ -156,7 +156,7 @@ cid_range = { min = 3, max = 65535 }  # Default: Full allocatable CID range
 # Workspace paths are passed into run command templates. mount_cwd asks virtle
 # to bind the host launch CWD into the guest workspace after SSH readiness.
 guest_dir = "/home/agent/workspace"
-host_dir = ".virtie/workspace"
+host_dir = ".virtle/workspace"
 mount_cwd = true  # Default: false
 
 [[mounts]]
@@ -164,7 +164,7 @@ type = "image"
 # Image mounts attach host disk images to the guest. The source path is
 # necessary because virtle creates and validates the host file before QEMU
 # starts.
-source = ".virtie/root.img"
+source = ".virtle/root.img"
 read_only = false  # Default: attach writable
 
 # Auto-creation lets a manifest describe persistent storage without a separate
@@ -255,7 +255,7 @@ image.format = "qcow2"  # Options: raw, qcow2 (default: raw)
 # readiness; socket paths should be explicit in vars when needed.
 
 # Additional template variables
-vars = { Namespace = "org.freedesktop.*", SocketDir = ".virtie" }
+vars = { Namespace = "org.freedesktop.*", SocketDir = ".virtle" }
 
 # Template values include {{.Workspace.GuestPath}} for the guest workspace path,
 # {{.Workspace.HostPath}} for the host workspace path, {{.StateDir}}, {{.CID}},
@@ -338,7 +338,7 @@ write_back = true  # Requires source
 # command is optional because hooks can run arbitrary host code; when set, its
 # exit status should not become VM lifecycle policy.
 # Template values include {{.State}}, {{.Message}}, and {{.Env.USER}}. Hook
-# processes also receive VIRTIE_NOTIFY_* environment variables.
+# processes also receive VIRTLE_NOTIFY_* environment variables.
 exec = ["notify-send", "virtle: {{.State}}", "{{.Message}}"]
 
 # Empty means all supported states. A non-empty list limits hook execution.

@@ -13,7 +13,7 @@ import (
 
 const (
 	defaultSSHReadyTimeout = 2 * time.Minute
-	sshReadyTimeoutEnv     = "VIRTIE_SSH_READY_TIMEOUT"
+	sshReadyTimeoutEnv     = "VIRTLE_SSH_READY_TIMEOUT"
 	SSHReadyToken          = launch.SSHReadyToken
 )
 

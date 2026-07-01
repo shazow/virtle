@@ -12,7 +12,7 @@ import (
 func (m *manager) ensureSSHAutoprovisionKey(launchManifest *manifest.Manifest) (launch.SSHAutoprovisionKey, error) {
 	key, err := (sshtools.KeyStore{
 		Dir:     launchManifest.ResolvedPersistenceStateDir(),
-		Comment: "virtie-autoprovision-" + launchManifest.Identity.HostName,
+		Comment: "virtle-autoprovision-" + launchManifest.Identity.HostName,
 	}).Ensure()
 	if err != nil {
 		return launch.SSHAutoprovisionKey{}, err

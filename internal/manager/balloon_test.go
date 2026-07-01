@@ -28,7 +28,7 @@ func TestBuildQEMUCommandAppendsBalloonArgs(t *testing.T) {
 func TestManagerLaunchStartsBalloonControllerAndStopsItBeforeQuit(t *testing.T) {
 	tmpDir := t.TempDir()
 	manifest := validManifestWithBalloon(tmpDir)
-	manifest.Paths.LockPath = filepath.Join(tmpDir, "virtie.lock")
+	manifest.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
 	manifest.QEMU.Devices.Balloon.Controller = &balloon.ControllerConfig{
 		PollIntervalSeconds:   1,
 		ReclaimHoldoffSeconds: 1,
@@ -101,7 +101,7 @@ func TestManagerLaunchStartsBalloonControllerAndStopsItBeforeQuit(t *testing.T) 
 func TestManagerLaunchDoesNotAbortOnBalloonControllerFailure(t *testing.T) {
 	tmpDir := t.TempDir()
 	manifest := validManifestWithBalloon(tmpDir)
-	manifest.Paths.LockPath = filepath.Join(tmpDir, "virtie.lock")
+	manifest.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
 
 	cancelCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()

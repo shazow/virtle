@@ -11,7 +11,7 @@ func TestPlanRuntimeSocketCleanupFiles(t *testing.T) {
 			QMPSocket:        "/run/qmp.sock",
 			GuestAgentSocket: "/run/qga.sock",
 			SSHReadySocket:   "/run/ssh-ready.sock",
-			ControlSocket:    "/run/virtie.sock",
+			ControlSocket:    "/run/virtle.sock",
 		},
 		CleanupFiles: []string{"/run/virtiofs.sock"},
 	}
@@ -21,7 +21,7 @@ func TestPlanRuntimeSocketCleanupFiles(t *testing.T) {
 		"/run/qmp.sock",
 		"/run/qga.sock",
 		"/run/ssh-ready.sock",
-		"/run/virtie.sock",
+		"/run/virtle.sock",
 		"/run/virtiofs.sock",
 	}
 	if !reflect.DeepEqual(got, want) {

@@ -54,38 +54,38 @@ func TestGuestInstallDirectoryArgs(t *testing.T) {
 	}{
 		{
 			name:     "nil chown",
-			expected: []string{"-d", "/etc/virtie"},
+			expected: []string{"-d", "/etc/virtle"},
 		},
 		{
 			name:     "empty chown",
 			chown:    "",
-			expected: []string{"-d", "/etc/virtie"},
+			expected: []string{"-d", "/etc/virtle"},
 		},
 		{
 			name:     "user and group",
 			chown:    "agent:users",
-			expected: []string{"-d", "-o", "agent", "-g", "users", "/etc/virtie"},
+			expected: []string{"-d", "-o", "agent", "-g", "users", "/etc/virtle"},
 		},
 		{
 			name:     "user only",
 			chown:    "agent",
-			expected: []string{"-d", "-o", "agent", "/etc/virtie"},
+			expected: []string{"-d", "-o", "agent", "/etc/virtle"},
 		},
 		{
 			name:     "group only",
 			chown:    ":users",
-			expected: []string{"-d", "-g", "users", "/etc/virtie"},
+			expected: []string{"-d", "-g", "users", "/etc/virtle"},
 		},
 		{
 			name:     "mode",
 			mode:     "0640",
-			expected: []string{"-d", "-m", "0750", "/etc/virtie"},
+			expected: []string{"-d", "-m", "0750", "/etc/virtle"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := guestInstallDirectoryArgs("/etc/virtie", tt.chown, tt.mode); !reflect.DeepEqual(got, tt.expected) {
+			if got := guestInstallDirectoryArgs("/etc/virtle", tt.chown, tt.mode); !reflect.DeepEqual(got, tt.expected) {
 				t.Fatalf("unexpected install args: got %#v want %#v", got, tt.expected)
 			}
 		})
@@ -96,7 +96,7 @@ func TestWriteGuestFilesSkipsExistingNoOverwriteFile(t *testing.T) {
 	var events []string
 	err := WriteGuestFiles(context.Background(), []manifest.ResolvedWriteFile{
 		{
-			GuestPath: "/etc/virtie/existing",
+			GuestPath: "/etc/virtle/existing",
 			Overwrite: false,
 			Content: manifest.WriteFileContent{
 				Kind: manifest.WriteFileContentText,
@@ -123,7 +123,7 @@ func TestWriteGuestFilesSkipsExistingNoOverwriteFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("write guest files: %v", err)
 	}
-	if want := []string{"exists", "skip:/etc/virtie/existing"}; !reflect.DeepEqual(events, want) {
+	if want := []string{"exists", "skip:/etc/virtle/existing"}; !reflect.DeepEqual(events, want) {
 		t.Fatalf("events: got %#v want %#v", events, want)
 	}
 }
@@ -132,7 +132,7 @@ func TestWriteGuestFilesWritesAndAppliesMetadataInOrder(t *testing.T) {
 	var events []string
 	err := WriteGuestFiles(context.Background(), []manifest.ResolvedWriteFile{
 		{
-			GuestPath: "/etc/virtie/config",
+			GuestPath: "/etc/virtle/config",
 			Chown:     "agent:users",
 			Mode:      "0640",
 			Overwrite: true,
@@ -170,11 +170,11 @@ func TestWriteGuestFilesWritesAndAppliesMetadataInOrder(t *testing.T) {
 		t.Fatalf("write guest files: %v", err)
 	}
 	want := []string{
-		"install:/etc/virtie/config:agent:users:0640",
-		"write:/etc/virtie/config:aGVsbG8=",
-		"chown:/etc/virtie/config:agent:users",
-		"chmod:/etc/virtie/config:0640",
-		"wrote:/etc/virtie/config",
+		"install:/etc/virtle/config:agent:users:0640",
+		"write:/etc/virtle/config:aGVsbG8=",
+		"chown:/etc/virtle/config:agent:users",
+		"chmod:/etc/virtle/config:0640",
+		"wrote:/etc/virtle/config",
 	}
 	if !reflect.DeepEqual(events, want) {
 		t.Fatalf("events: got %#v want %#v", events, want)
@@ -185,7 +185,7 @@ func TestWriteGuestFilesWrapsStage(t *testing.T) {
 	writeErr := errors.New("write failed")
 	err := WriteGuestFiles(context.Background(), []manifest.ResolvedWriteFile{
 		{
-			GuestPath: "/etc/virtie/config",
+			GuestPath: "/etc/virtle/config",
 			Overwrite: true,
 			Content: manifest.WriteFileContent{
 				Kind: manifest.WriteFileContentText,
@@ -314,7 +314,7 @@ func TestWriteBackGuestFilesReadsGuestAndWritesHost(t *testing.T) {
 	var events []string
 	err := WriteBackGuestFiles(context.Background(), []manifest.ResolvedWriteFile{
 		{
-			GuestPath: "/var/lib/virtie/host",
+			GuestPath: "/var/lib/virtle/host",
 			Content: manifest.WriteFileContent{
 				Kind: manifest.WriteFileContentPath,
 				Path: hostPath,
@@ -337,9 +337,9 @@ func TestWriteBackGuestFilesReadsGuestAndWritesHost(t *testing.T) {
 		t.Fatalf("write back guest files: %v", err)
 	}
 	want := []string{
-		"read:/var/lib/virtie/host",
+		"read:/var/lib/virtle/host",
 		"write:" + hostPath + ":guest content",
-		"wrote:/var/lib/virtie/host:" + hostPath,
+		"wrote:/var/lib/virtle/host:" + hostPath,
 	}
 	if !reflect.DeepEqual(events, want) {
 		t.Fatalf("events: got %#v want %#v", events, want)
@@ -351,7 +351,7 @@ func TestWriteBackGuestFilesFailsWhenHostPathIsMissing(t *testing.T) {
 	hostPath := filepath.Join(tmpDir, "host")
 	err := WriteBackGuestFiles(context.Background(), []manifest.ResolvedWriteFile{
 		{
-			GuestPath: "/var/lib/virtie/host",
+			GuestPath: "/var/lib/virtle/host",
 			Content: manifest.WriteFileContent{
 				Kind: manifest.WriteFileContentPath,
 				Path: hostPath,
@@ -374,7 +374,7 @@ func TestWriteBackGuestFilesFailsWhenHostPathIsMissing(t *testing.T) {
 func TestWriteBackGuestFilesRejectsFilesWithoutHostPath(t *testing.T) {
 	err := WriteBackGuestFiles(context.Background(), []manifest.ResolvedWriteFile{
 		{
-			GuestPath: "/var/lib/virtie/text",
+			GuestPath: "/var/lib/virtle/text",
 			Content: manifest.WriteFileContent{
 				Kind: manifest.WriteFileContentText,
 				Text: "content",
@@ -403,7 +403,7 @@ func TestWriteBackGuestFilesWrapsHostWriteError(t *testing.T) {
 	writeErr := errors.New("disk full")
 	err := WriteBackGuestFiles(context.Background(), []manifest.ResolvedWriteFile{
 		{
-			GuestPath: "/var/lib/virtie/host",
+			GuestPath: "/var/lib/virtle/host",
 			Content: manifest.WriteFileContent{
 				Kind: manifest.WriteFileContentPath,
 				Path: hostPath,
@@ -426,10 +426,10 @@ func TestWriteBackGuestFilesWrapsStage(t *testing.T) {
 	readErr := errors.New("read failed")
 	err := WriteBackGuestFiles(context.Background(), []manifest.ResolvedWriteFile{
 		{
-			GuestPath: "/var/lib/virtie/host",
+			GuestPath: "/var/lib/virtle/host",
 			Content: manifest.WriteFileContent{
 				Kind: manifest.WriteFileContentPath,
-				Path: "/tmp/virtie-host",
+				Path: "/tmp/virtle-host",
 			},
 		},
 	}, GuestFileWriteBacker{
@@ -492,11 +492,11 @@ func TestInstallGuestFileDirectoryCreatesMissingAncestorsTopDown(t *testing.T) {
 		},
 	}
 
-	err := InstallGuestFileDirectory(context.Background(), installer, "/var/lib/virtie/config.json", "agent:users", "0640")
+	err := InstallGuestFileDirectory(context.Background(), installer, "/var/lib/virtle/config.json", "agent:users", "0640")
 	if err != nil {
 		t.Fatalf("install guest directory: %v", err)
 	}
-	if want := []string{"/var/lib/virtie", "/var/lib", "/var"}; !reflect.DeepEqual(checked, want) {
+	if want := []string{"/var/lib/virtle", "/var/lib", "/var"}; !reflect.DeepEqual(checked, want) {
 		t.Fatalf("checked dirs: got %#v want %#v", checked, want)
 	}
 	expectedInstalled := []struct {
@@ -504,7 +504,7 @@ func TestInstallGuestFileDirectoryCreatesMissingAncestorsTopDown(t *testing.T) {
 		args []string
 	}{
 		{dir: "/var/lib", args: []string{"-d", "-o", "agent", "-g", "users", "-m", "0750", "/var/lib"}},
-		{dir: "/var/lib/virtie", args: []string{"-d", "-o", "agent", "-g", "users", "-m", "0750", "/var/lib/virtie"}},
+		{dir: "/var/lib/virtle", args: []string{"-d", "-o", "agent", "-g", "users", "-m", "0750", "/var/lib/virtle"}},
 	}
 	if !reflect.DeepEqual(installed, expectedInstalled) {
 		t.Fatalf("installed dirs: got %#v want %#v", installed, expectedInstalled)
@@ -521,7 +521,7 @@ func TestInstallGuestFileDirectoryPropagatesCallbackErrors(t *testing.T) {
 			t.Fatalf("install should not be called after exists failure")
 			return nil
 		},
-	}, "/etc/virtie/config.json", "", "")
+	}, "/etc/virtle/config.json", "", "")
 	if !errors.Is(err, existsErr) {
 		t.Fatalf("exists error: got %v want %v", err, existsErr)
 	}
@@ -534,7 +534,7 @@ func TestInstallGuestFileDirectoryPropagatesCallbackErrors(t *testing.T) {
 		Install: func(context.Context, string, []string) error {
 			return installErr
 		},
-	}, "/etc/virtie/config.json", "", "")
+	}, "/etc/virtle/config.json", "", "")
 	if !errors.Is(err, installErr) {
 		t.Fatalf("install error: got %v want %v", err, installErr)
 	}
@@ -552,7 +552,7 @@ func TestWriteBackHostPathFollowsHostSymlinkWhenEnabled(t *testing.T) {
 	}
 
 	got, err := writeBackHostPath(manifest.ResolvedWriteFile{
-		GuestPath:   "/var/lib/virtie/host",
+		GuestPath:   "/var/lib/virtle/host",
 		Content:     manifest.WriteFileContent{Kind: manifest.WriteFileContentPath, Path: linkPath},
 		FollowLinks: true,
 	})

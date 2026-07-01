@@ -2,8 +2,8 @@
 
 VM manager for sandbox workflows.
 
-**Status**: Standalone migration in progress from
-[`agentspace/virtie`](https://github.com/shazow/agentspace).
+**Status**: Standalone extraction from
+[`agentspace`](https://github.com/shazow/agentspace) is in progress.
 
 `virtle` reads a manifest, starts the required host processes, launches QEMU,
 waits for guest SSH readiness, and either prints an out-of-band SSH command or
@@ -76,12 +76,10 @@ process environment is available as `.Env` on every surface.
 | `run[].exec` | `CID`, `StateDir`, `Workspace.GuestPath`, `Workspace.HostPath`, user vars, `.Env` | scalar top-level values only |
 | `notifications.exec` | `State`, `Message`, notification context values, `.Env` | `STATE`, `MESSAGE`, normalized context values |
 
-## Compatibility Notes
+## Notes
 
-- This first standalone migration keeps compatibility-sensitive runtime names
-  such as `.virtie`, `virtie.sock`, `virtie.ready`, and SSH autoprovision helper
-  labels. Those names coordinate with current `agentspace` guest integration and
-  can be renamed in a later coordinated migration.
+- Runtime defaults, sockets, readiness channels, helper labels, and notification
+  environment variables use the current project name consistently.
 - The manifest format is intentionally narrow. It carries evaluated launch
   facts while `virtle` derives the concrete host-side QEMU policy.
 - Verbose runtime logs use Go's default `log/slog` handler on stderr, with

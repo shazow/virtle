@@ -44,7 +44,7 @@ func validPlanManifest(workingDir string) *manifest.Manifest {
 		Identity: manifest.Identity{HostName: "agent-sandbox"},
 		Paths: manifest.Paths{
 			WorkingDir: workingDir,
-			LockPath:   filepath.Join(workingDir, "virtie.lock"),
+			LockPath:   filepath.Join(workingDir, "virtle.lock"),
 		},
 		SSH: manifest.SSH{
 			Argv: []string{"/bin/ssh"},

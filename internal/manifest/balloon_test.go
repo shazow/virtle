@@ -71,7 +71,7 @@ func validManifest() *Manifest {
 		Identity: Identity{HostName: "agent-sandbox"},
 		Paths: Paths{
 			WorkingDir: "/tmp/work",
-			LockPath:   "/tmp/virtie.lock",
+			LockPath:   "/tmp/virtle.lock",
 		},
 		SSH: SSH{
 			Argv: []string{"/bin/ssh"},

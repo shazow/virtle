@@ -1,0 +1,10 @@
+/result
+/dist/
+/coverage.out
+/virtle
+/virtie
+*.test
+*.prof
+.direnv/
+.envrc
+.DS_Store

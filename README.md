@@ -1,10 +1,10 @@
-# virtle
+# virtle 🐢🪐
 
-VM manager for sandbox workflows.
-
-Originally designed to be used with [`agentspace`](https://github.com/shazow/agentspace), a NixOS-based sandbox builder, but it virtle has been refined enough to act as a standalone tool.
+Virtle is a VM manager for sandbox workflows.
 
 **Status**: Beta. Used day-to-day by a few people, feedback appreciated.
+
+Background: Originally designed to be used with [`agentspace`](https://github.com/shazow/agentspace), a NixOS-based sandbox builder, but it virtle has been refined enough to act as a standalone tool.
 
 ## How does it work?
 

@@ -1,5 +1,7 @@
 # virtle 🐢🪐
 
+[![CI](https://github.com/shazow/virtle/actions/workflows/ci.yml/badge.svg)](https://github.com/shazow/virtle/actions/workflows/ci.yml)
+
 Virtle is a VM manager for sandbox workflows.
 
 **Status**: Beta. Used day-to-day by a few people, feedback appreciated.

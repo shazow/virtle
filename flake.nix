@@ -6,32 +6,41 @@
   outputs =
     { self, nixpkgs, ... }:
     let
-      system = "x86_64-linux";
-      pkgs = nixpkgs.legacyPackages.${system};
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+      ];
+      forAllSystems = nixpkgs.lib.genAttrs systems;
+      release = import ./release.nix;
     in
     {
-      packages.${system} = rec {
-        virtle = pkgs.buildGoModule {
-          pname = "virtle";
-          version = "0.1.0";
-          src = ./.;
-          vendorHash = "sha256-r9IW9NAU67IVMDkeznVqohw2mY9P3I9m+TkLFOJAdGc=";
-          subPackages = [ "." ];
-          env.CGO_ENABLED = 0;
-          meta.mainProgram = "virtle";
-        };
+      packages = forAllSystems (
+        system:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+        in
+        rec {
+          virtle = pkgs.buildGoModule {
+            pname = "virtle";
+            inherit (release) version vendorHash;
+            src = ./.;
+            subPackages = [ "." ];
+            env.CGO_ENABLED = 0;
+            meta.mainProgram = "virtle";
+          };
 
-        default = virtle;
-      };
+          default = virtle;
+        }
+      );
 
-      apps.${system} = {
+      apps = forAllSystems (system: {
         default = {
           type = "app";
           program = "${self.packages.${system}.virtle}/bin/virtle";
           meta.description = "Run virtle";
         };
-      };
+      });
 
-      formatter.${system} = pkgs.nixfmt;
+      formatter = forAllSystems (system: nixpkgs.legacyPackages.${system}.nixfmt);
     };
 }

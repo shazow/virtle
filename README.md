@@ -42,7 +42,13 @@ Other advanced features:
 - `virtle suspend`
 - `virtle rpc METHOD [JSON_ARGS]`
 - `virtle hotplug ID` (experimental)
-- `virtle hotplug --detach ID`(experimental)
+- `virtle hotplug --detach ID` (experimental)
+
+Use `virtle rpc --help` to list the RPC methods recognized by virtle. When an
+explicit `--manifest=MANIFEST` is provided, the help is populated from the running
+VM's `methods` response instead. `virtle rpc methods` returns those method names
+and descriptions as JSON. Optional capabilities are omitted when they are not
+configured or available.
 
 ### Manifest
 

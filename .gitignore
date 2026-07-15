@@ -7,3 +7,4 @@
 .direnv/
 .envrc
 .DS_Store
+/vendor/

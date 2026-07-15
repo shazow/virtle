@@ -167,7 +167,7 @@ func TestControlClientServerTypedCalls(t *testing.T) {
 	if err != nil {
 		t.Fatalf("methods: %v", err)
 	}
-	wantMethods := []string{"status", "methods", "guest-ps", "guest-exec", "guest-read", "guest-write", "suspend", "hotplug", "balloon"}
+	wantMethods := SupportedMethods()
 	if !reflect.DeepEqual(methods.Methods, wantMethods) {
 		t.Fatalf("unexpected methods: got %#v want %#v", methods.Methods, wantMethods)
 	}

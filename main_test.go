@@ -76,6 +76,50 @@ func TestOptionsDeclaresCommands(t *testing.T) {
 	}
 }
 
+func TestRPCCommandDescriptionIncludesRegisteredMethods(t *testing.T) {
+	command := newParser().Command.Find("rpc")
+	if command == nil {
+		t.Fatal("parser is missing rpc command")
+	}
+	for _, method := range control.SupportedMethods() {
+		if !strings.Contains(command.LongDescription, method.Name) {
+			t.Errorf("rpc help is missing method %q", method.Name)
+		}
+		if !strings.Contains(command.LongDescription, method.Description) {
+			t.Errorf("rpc help is missing description for %q", method.Name)
+		}
+	}
+}
+
+func TestRPCCommandHelpUsesManifestControlSocketMethods(t *testing.T) {
+	tmpDir := t.TempDir()
+	manifestPath := filepath.Join(tmpDir, "manifest.json")
+	if err := os.WriteFile(manifestPath, []byte(testManifestJSON(tmpDir)), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	cfg, err := loadManifest(manifestPath)
+	if err != nil {
+		t.Fatalf("load manifest: %v", err)
+	}
+	controlSocketPath, err := cfg.ResolvedControlSocketPath()
+	if err != nil {
+		t.Fatalf("resolve control socket: %v", err)
+	}
+	startMainTestControlServerAt(t, controlSocketPath, &mainTestControlHandler{})
+
+	output := captureStdout(t, func() {
+		if err := run([]string{"--manifest=" + manifestPath, "rpc", "--help"}); err == nil {
+			t.Fatal("rpc help succeeded without returning the help sentinel")
+		}
+	})
+	if !strings.Contains(output, "hotplug") || !strings.Contains(output, "Attach or detach a configured device.") {
+		t.Fatalf("rpc help is missing a method from the control socket: %q", output)
+	}
+	if strings.Contains(output, "balloon") || strings.Contains(output, "Query or set the memory balloon target.") {
+		t.Fatalf("rpc help includes a method unavailable on the control socket: %q", output)
+	}
+}
+
 func TestParserRejectsInvalidCommandLines(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -314,11 +358,22 @@ func TestRunRPCMethodsPrintsAvailableControlSocketMethods(t *testing.T) {
 		}
 	})
 
+	if !strings.Contains(output, `"name":"status"`) || !strings.Contains(output, `"description":"Report runtime state, connection paths, and lifecycle statistics."`) {
+		t.Fatalf("rpc methods output is missing method metadata: %q", output)
+	}
 	var got control.MethodsResponse
 	if err := json.Unmarshal([]byte(output), &got); err != nil {
 		t.Fatalf("decode rpc output %q: %v", output, err)
 	}
-	want := []string{"status", "methods", "guest-ps", "guest-exec", "guest-read", "guest-write", "hotplug"}
+	want := []control.MethodInfo{
+		{Name: "status", Description: "Report runtime state, connection paths, and lifecycle statistics."},
+		{Name: "methods", Description: "List the methods available on the running control socket."},
+		{Name: "guest-ps", Description: "List processes running in the guest."},
+		{Name: "guest-exec", Description: "Execute a process in the guest."},
+		{Name: "guest-read", Description: "Read a guest file as base64-encoded data."},
+		{Name: "guest-write", Description: "Write base64-encoded data to a guest file."},
+		{Name: "hotplug", Description: "Attach or detach a configured device."},
+	}
 	if !reflect.DeepEqual(got.Methods, want) {
 		t.Fatalf("unexpected rpc methods output: got %#v want %#v", got.Methods, want)
 	}

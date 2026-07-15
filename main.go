@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/jessevdk/go-flags"
@@ -21,6 +22,8 @@ import (
 	"github.com/shazow/virtle/internal/manifest"
 	manifestschema "github.com/shazow/virtle/internal/manifest/schema"
 )
+
+const rpcHelpTimeout = 5 * time.Second
 
 type Options struct {
 	Manifest string `long:"manifest" value-name:"MANIFEST" description:"Path to the virtle manifest"`
@@ -318,6 +321,13 @@ func main() {
 func run(args []string) error {
 	opts := &Options{}
 	parser := newParserForOptions(opts)
+	if manifestPath, ok := rpcHelpManifest(args); ok {
+		methods, err := loadRPCMethods(manifestPath)
+		if err != nil {
+			return err
+		}
+		setRPCCommandDescription(parser, methods)
+	}
 
 	if _, err := parser.ParseArgs(args); err != nil {
 		return err
@@ -355,5 +365,79 @@ func newParser() *flags.Parser {
 }
 
 func newParserForOptions(opts *Options) *flags.Parser {
-	return flags.NewParser(opts, flags.Default|flags.PassDoubleDash)
+	parser := flags.NewParser(opts, flags.Default|flags.PassDoubleDash)
+	setRPCCommandDescription(parser, control.SupportedMethods())
+	return parser
+}
+
+func setRPCCommandDescription(parser *flags.Parser, methods []control.MethodInfo) {
+	if command := parser.Command.Find("rpc"); command != nil {
+		command.LongDescription = rpcLongDescription(methods)
+	}
+}
+
+func rpcLongDescription(methods []control.MethodInfo) string {
+	const introduction = "Call a method on the running virtle control socket with optional JSON params. Supported methods depend on the runtime capabilities reported by methods."
+
+	width := 0
+	for _, method := range methods {
+		if len(method.Name) > width {
+			width = len(method.Name)
+		}
+	}
+
+	var description strings.Builder
+	description.WriteString(introduction)
+	description.WriteString("\n\nMethods:\n")
+	for _, method := range methods {
+		fmt.Fprintf(&description, "  %-*s  %s\n", width, method.Name, method.Description)
+	}
+	return strings.TrimSuffix(description.String(), "\n")
+}
+
+func rpcHelpManifest(args []string) (string, bool) {
+	var manifestPath string
+	var manifestSet bool
+	var command string
+	var help bool
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			break
+		}
+		switch {
+		case arg == "--manifest":
+			if i+1 < len(args) {
+				i++
+				manifestPath = args[i]
+				manifestSet = true
+			}
+		case strings.HasPrefix(arg, "--manifest="):
+			manifestPath = strings.TrimPrefix(arg, "--manifest=")
+			manifestSet = true
+		case command == "rpc" && (arg == "--help" || arg == "-h"):
+			help = true
+		case command == "" && !strings.HasPrefix(arg, "-"):
+			command = arg
+		}
+	}
+	return manifestPath, manifestSet && command == "rpc" && help
+}
+
+func loadRPCMethods(manifestPath string) ([]control.MethodInfo, error) {
+	manifest, err := loadManifest(manifestPath)
+	if err != nil {
+		return nil, err
+	}
+	controlSocketPath, err := manifest.ResolvedControlSocketPath()
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), rpcHelpTimeout)
+	defer cancel()
+	response, err := control.Dial(controlSocketPath).Methods(ctx, control.MethodsRequest{})
+	if err != nil {
+		return nil, fmt.Errorf("load rpc methods for help: %w", err)
+	}
+	return response.Methods, nil
 }

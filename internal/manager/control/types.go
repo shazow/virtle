@@ -141,9 +141,15 @@ type GuestWriteResponse struct {
 // MethodsRequest asks which RPC methods are available on this control socket.
 type MethodsRequest struct{}
 
+// MethodInfo describes an RPC method recognized by virtle.
+type MethodInfo struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
 // MethodsResponse reports RPC methods available on this control socket.
 type MethodsResponse struct {
-	Methods []string `json:"methods"`
+	Methods []MethodInfo `json:"methods"`
 }
 
 // ErrorCode classifies a control socket RPC failure.

@@ -33,7 +33,8 @@ type methodSpec struct {
 }
 
 type methodRegistration struct {
-	bind func(*Router, Handlers) (methodSpec, bool)
+	description string
+	bind        func(*Router, Handlers) (methodSpec, bool)
 }
 
 var (
@@ -42,56 +43,56 @@ var (
 )
 
 func init() {
-	registerDefaultMethod(rpcStatus, typedRegistration(func(handlers Handlers) func(context.Context, StatusRequest) (StatusResponse, error) {
+	registerDefaultMethod(rpcStatus, "Report runtime state, connection paths, and lifecycle statistics.", typedRegistration(func(handlers Handlers) func(context.Context, StatusRequest) (StatusResponse, error) {
 		if handlers.Core == nil {
 			return nil
 		}
 		return handlers.Core.Status
 	}))
-	registerDefaultMethod(rpcMethods, methodRegistration{
+	registerDefaultMethod(rpcMethods, "List the methods available on the running control socket.", methodRegistration{
 		bind: func(router *Router, handlers Handlers) (methodSpec, bool) {
 			return typedMethod(func(context.Context, MethodsRequest) (MethodsResponse, error) {
 				return router.methodsResponse(), nil
 			}), true
 		},
 	})
-	registerDefaultMethod(rpcGuestPS, typedRegistration(func(handlers Handlers) func(context.Context, GuestPSRequest) (GuestPSResponse, error) {
+	registerDefaultMethod(rpcGuestPS, "List processes running in the guest.", typedRegistration(func(handlers Handlers) func(context.Context, GuestPSRequest) (GuestPSResponse, error) {
 		if handlers.Guest == nil {
 			return nil
 		}
 		return handlers.Guest.GuestPS
 	}))
-	registerDefaultMethod(rpcGuestExec, typedRegistration(func(handlers Handlers) func(context.Context, GuestExecRequest) (GuestExecResponse, error) {
+	registerDefaultMethod(rpcGuestExec, "Execute a process in the guest.", typedRegistration(func(handlers Handlers) func(context.Context, GuestExecRequest) (GuestExecResponse, error) {
 		if handlers.Guest == nil {
 			return nil
 		}
 		return handlers.Guest.GuestExec
 	}))
-	registerDefaultMethod(rpcGuestRead, typedRegistration(func(handlers Handlers) func(context.Context, GuestReadRequest) (GuestReadResponse, error) {
+	registerDefaultMethod(rpcGuestRead, "Read a guest file as base64-encoded data.", typedRegistration(func(handlers Handlers) func(context.Context, GuestReadRequest) (GuestReadResponse, error) {
 		if handlers.Guest == nil {
 			return nil
 		}
 		return handlers.Guest.GuestRead
 	}))
-	registerDefaultMethod(rpcGuestWrite, typedRegistration(func(handlers Handlers) func(context.Context, GuestWriteRequest) (GuestWriteResponse, error) {
+	registerDefaultMethod(rpcGuestWrite, "Write base64-encoded data to a guest file.", typedRegistration(func(handlers Handlers) func(context.Context, GuestWriteRequest) (GuestWriteResponse, error) {
 		if handlers.Guest == nil {
 			return nil
 		}
 		return handlers.Guest.GuestWrite
 	}))
-	registerDefaultMethod(rpcSuspend, typedRegistration(func(handlers Handlers) func(context.Context, SuspendRequest) (SuspendResponse, error) {
+	registerDefaultMethod(rpcSuspend, "Save VM state and stop the runtime.", typedRegistration(func(handlers Handlers) func(context.Context, SuspendRequest) (SuspendResponse, error) {
 		if handlers.Suspend == nil {
 			return nil
 		}
 		return handlers.Suspend.Suspend
 	}))
-	registerDefaultMethod(rpcHotplug, typedRegistration(func(handlers Handlers) func(context.Context, HotplugRequest) (HotplugResponse, error) {
+	registerDefaultMethod(rpcHotplug, "Attach or detach a configured device.", typedRegistration(func(handlers Handlers) func(context.Context, HotplugRequest) (HotplugResponse, error) {
 		if handlers.Hotplug == nil {
 			return nil
 		}
 		return handlers.Hotplug.Hotplug
 	}))
-	registerDefaultMethod(rpcBalloon, typedRegistration(func(handlers Handlers) func(context.Context, BalloonRequest) (BalloonResponse, error) {
+	registerDefaultMethod(rpcBalloon, "Query or set the memory balloon target.", typedRegistration(func(handlers Handlers) func(context.Context, BalloonRequest) (BalloonResponse, error) {
 		if handlers.Balloon == nil {
 			return nil
 		}
@@ -99,9 +100,12 @@ func init() {
 	}))
 }
 
-func registerDefaultMethod(name rpcMethod, method methodRegistration) {
+func registerDefaultMethod(name rpcMethod, description string, method methodRegistration) {
 	if name == "" {
 		panic("control method name is required")
+	}
+	if description == "" {
+		panic(fmt.Sprintf("control method %q description is required", name))
 	}
 	if method.bind == nil {
 		panic(fmt.Sprintf("control method %q bind function is required", name))
@@ -109,8 +113,21 @@ func registerDefaultMethod(name rpcMethod, method methodRegistration) {
 	if _, exists := defaultMethods[name]; exists {
 		panic(fmt.Sprintf("control method %q registered twice", name))
 	}
+	method.description = description
 	defaultMethods[name] = method
 	defaultMethodOrder = append(defaultMethodOrder, name)
+}
+
+// SupportedMethods returns all RPC methods recognized by virtle in display order.
+func SupportedMethods() []MethodInfo {
+	methods := make([]MethodInfo, 0, len(defaultMethodOrder))
+	for _, name := range defaultMethodOrder {
+		methods = append(methods, MethodInfo{
+			Name:        string(name),
+			Description: defaultMethods[name].description,
+		})
+	}
+	return methods
 }
 
 func typedRegistration[Req any, Resp any](
@@ -173,10 +190,13 @@ func (r *Router) handle(ctx context.Context, req requestEnvelope) responseEnvelo
 }
 
 func (r *Router) methodsResponse() MethodsResponse {
-	methods := make([]string, 0, len(r.methods))
-	for _, method := range defaultMethodOrder {
-		if _, ok := r.methods[method]; ok {
-			methods = append(methods, string(method))
+	methods := make([]MethodInfo, 0, len(r.methods))
+	for _, name := range defaultMethodOrder {
+		if _, ok := r.methods[name]; ok {
+			methods = append(methods, MethodInfo{
+				Name:        string(name),
+				Description: defaultMethods[name].description,
+			})
 		}
 	}
 	return MethodsResponse{Methods: methods}

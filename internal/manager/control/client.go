@@ -46,6 +46,13 @@ func (c *Client) Balloon(ctx context.Context, req BalloonRequest) (BalloonRespon
 	return callTyped[BalloonRequest, BalloonResponse](c, ctx, rpcBalloon, req)
 }
 
+// QMP forwards an arbitrary request to QEMU and returns its complete response.
+func (c *Client) QMP(ctx context.Context, req QMPRequest) (json.RawMessage, error) {
+	var resp json.RawMessage
+	err := c.call(ctx, rpcQMP, req.Message, &resp)
+	return resp, err
+}
+
 // GuestPS sends a guest process list request.
 func (c *Client) GuestPS(ctx context.Context, req GuestPSRequest) (GuestPSResponse, error) {
 	return callTyped[GuestPSRequest, GuestPSResponse](c, ctx, rpcGuestPS, req)

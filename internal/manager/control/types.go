@@ -93,6 +93,11 @@ type BalloonResponse struct {
 	TargetBytes int64 `json:"targetBytes,omitempty"`
 }
 
+// QMPRequest asks the runtime to forward an arbitrary request to QEMU.
+type QMPRequest struct {
+	Message json.RawMessage `json:"message"`
+}
+
 // GuestPSRequest asks for the guest process list.
 type GuestPSRequest struct{}
 
@@ -185,6 +190,7 @@ const (
 	rpcSuspend    rpcMethod = "suspend"
 	rpcHotplug    rpcMethod = "hotplug"
 	rpcBalloon    rpcMethod = "balloon"
+	rpcQMP        rpcMethod = "qmp"
 	rpcGuestPS    rpcMethod = "guest-ps"
 	rpcGuestExec  rpcMethod = "guest-exec"
 	rpcGuestRead  rpcMethod = "guest-read"
@@ -231,6 +237,11 @@ type RuntimeBalloon interface {
 	Balloon(context.Context, BalloonRequest) (BalloonResponse, error)
 }
 
+// RuntimeQMP is implemented by runtimes that can forward arbitrary QMP requests.
+type RuntimeQMP interface {
+	RunQMP(context.Context, QMPRequest) (json.RawMessage, error)
+}
+
 // Handlers groups the runtime capabilities used by a control router.
 type Handlers struct {
 	Core    RuntimeCore
@@ -238,4 +249,5 @@ type Handlers struct {
 	Suspend RuntimeSuspend
 	Hotplug RuntimeHotplug
 	Balloon RuntimeBalloon
+	QMP     RuntimeQMP
 }

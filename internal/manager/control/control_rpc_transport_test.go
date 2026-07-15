@@ -55,6 +55,8 @@ type fakeControlHandler struct {
 	suspendCalls int
 	hotplugReq   HotplugRequest
 	balloonReq   BalloonRequest
+	qmpReq       QMPRequest
+	qmpResp      json.RawMessage
 }
 
 func (h *fakeControlHandler) Suspend(context.Context, SuspendRequest) (SuspendResponse, error) {
@@ -72,6 +74,11 @@ func (h *fakeControlHandler) Balloon(ctx context.Context, req BalloonRequest) (B
 	return BalloonResponse{ActualBytes: 512, TargetBytes: req.TargetBytes}, nil
 }
 
+func (h *fakeControlHandler) RunQMP(ctx context.Context, req QMPRequest) (json.RawMessage, error) {
+	h.qmpReq = req
+	return h.qmpResp, nil
+}
+
 func TestControlClientServerTypedCalls(t *testing.T) {
 	handler := &fakeControlHandler{
 		fakeControlCore: fakeControlCore{
@@ -82,6 +89,7 @@ func TestControlClientServerTypedCalls(t *testing.T) {
 			readResp:  GuestReadResponse{Path: "/tmp/message", DataBase64: "aGVsbG8="},
 			writeResp: GuestWriteResponse{Path: "/tmp/message"},
 		},
+		qmpResp: json.RawMessage(`{"return":{"status":"running"},"id":"request-1"}`),
 	}
 	path := startTestControlServer(t, handler)
 	client := Dial(path)
@@ -163,11 +171,20 @@ func TestControlClientServerTypedCalls(t *testing.T) {
 		t.Fatalf("unexpected balloon response=%#v req=%#v", balloon, handler.balloonReq)
 	}
 
+	qmpMessage := json.RawMessage(`{"execute":"query-status","id":"request-1"}`)
+	qmpResponse, err := client.QMP(context.Background(), QMPRequest{Message: qmpMessage})
+	if err != nil {
+		t.Fatalf("qmp: %v", err)
+	}
+	if string(handler.qmpReq.Message) != string(qmpMessage) || string(qmpResponse) != string(handler.qmpResp) {
+		t.Fatalf("unexpected qmp response=%s req=%s", qmpResponse, handler.qmpReq.Message)
+	}
+
 	methods, err := client.Methods(context.Background(), MethodsRequest{})
 	if err != nil {
 		t.Fatalf("methods: %v", err)
 	}
-	wantMethods := []string{"status", "methods", "guest-ps", "guest-exec", "guest-read", "guest-write", "suspend", "hotplug", "balloon"}
+	wantMethods := []string{"status", "methods", "guest-ps", "guest-exec", "guest-read", "guest-write", "suspend", "hotplug", "balloon", "qmp"}
 	if !reflect.DeepEqual(methods.Methods, wantMethods) {
 		t.Fatalf("unexpected methods: got %#v want %#v", methods.Methods, wantMethods)
 	}
@@ -318,6 +335,9 @@ func startTestControlServer(t *testing.T, runtime any) string {
 	}
 	if balloon, ok := runtime.(RuntimeBalloon); ok {
 		handlers.Balloon = balloon
+	}
+	if qmp, ok := runtime.(RuntimeQMP); ok {
+		handlers.QMP = qmp
 	}
 	router, err := NewRouter(handlers)
 	if err != nil {

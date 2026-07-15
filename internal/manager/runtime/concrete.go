@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"sync/atomic"
@@ -71,6 +72,7 @@ func (r *Core) StartControl(ctx context.Context, handlers control.Handlers) (*co
 	handlers.Core = r
 	handlers.Suspend = r
 	handlers.Balloon = r
+	handlers.QMP = r
 	router, err := control.NewRouter(handlers)
 	if err != nil {
 		return nil, err
@@ -127,6 +129,20 @@ func (r *Core) Balloon(ctx context.Context, req control.BalloonRequest) (control
 		return control.BalloonResponse{}, control.FailedPrecondition(err)
 	}
 	return resp, err
+}
+
+func (r *Core) RunQMP(ctx context.Context, req control.QMPRequest) (json.RawMessage, error) {
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if len(req.Message) == 0 || !json.Valid(req.Message) {
+		return nil, &control.RPCError{Code: control.ErrInvalidParams, Message: "qmp message must be valid JSON"}
+	}
+	runner, ok := r.qmp.(qmpclient.MessageRunner)
+	if !ok {
+		return nil, control.FailedPrecondition(qmpclient.ErrMessageRunnerUnsupported)
+	}
+	return runner.RunMessage(r.qmpTimeout, req.Message)
 }
 
 func (r *Core) isSavedSuspendExit(err error) bool {

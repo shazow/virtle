@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,6 +25,43 @@ func TestQMPClientQuit(t *testing.T) {
 
 	assertHandshakeCommand(t, commands)
 	assertQMPCommand(t, commands, "quit")
+}
+
+func TestQMPClientRunMessageReturnsCompleteQMPResponse(t *testing.T) {
+	client, commands, cleanup := newTestQMPClient(t, func(message map[string]any) map[string]any {
+		return map[string]any{"return": map[string]any{"status": "running"}, "id": "user-1"}
+	})
+	defer cleanup()
+
+	response, err := client.RunMessage(time.Second, json.RawMessage(`{"execute":"query-status","id":"user-1"}`))
+	if err != nil {
+		t.Fatalf("run message: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(response, &got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got["id"] != "user-1" {
+		t.Fatalf("unexpected response: %#v", got)
+	}
+
+	assertHandshakeCommand(t, commands)
+	assertQMPCommand(t, commands, "query-status")
+}
+
+func TestQMPClientRunMessagePreservesQMPErrorResponse(t *testing.T) {
+	client, _, cleanup := newTestQMPClient(t, func(message map[string]any) map[string]any {
+		return map[string]any{"error": map[string]any{"class": "CommandNotFound", "desc": "unknown command"}}
+	})
+	defer cleanup()
+
+	response, err := client.RunMessage(time.Second, json.RawMessage(`{"execute":"missing"}`))
+	if err != nil {
+		t.Fatalf("run message: %v", err)
+	}
+	if !strings.Contains(string(response), `"class":"CommandNotFound"`) {
+		t.Fatalf("unexpected response: %s", response)
+	}
 }
 
 func TestQMPClientWithRawRunsGenericQMPCommand(t *testing.T) {

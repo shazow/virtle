@@ -41,6 +41,7 @@ Launch a VM:
 Other advanced features:
 - `virtle suspend`
 - `virtle rpc METHOD [JSON_ARGS]`
+- `virtle rpc qmp JSON_MESSAGE` - Forward one request through the launch-owned QMP connection.
 - `virtle hotplug ID` (experimental)
 - `virtle hotplug --detach ID`(experimental)
 

@@ -3824,6 +3824,43 @@ func TestLaunchRuntimeRegistersHotplugAtControlPeriphery(t *testing.T) {
 	}
 }
 
+func TestLaunchRuntimeMultiplexesQMPAtControlPeriphery(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := validManifest(tmpDir)
+	cfg.Persistence.StateDir = ".virtle"
+	cfg.Paths.RuntimeDir = manifest.RuntimeDir{Mode: manifest.RuntimeDirPath, Path: ".virtle"}
+
+	qmp := &fakeQMPClient{messageResponse: json.RawMessage(`{"return":{"status":"running"},"id":"request-1"}`)}
+	manager := &manager{
+		locker:            &fileLocker{},
+		runner:            &launchRunner{},
+		qmpDialer:         &fakeQMPDialer{client: qmp},
+		socketWaiter:      &fakeSocketWaiter{},
+		logger:            slog.New(slog.DiscardHandler),
+		qmpConnectTimeout: time.Second,
+		qmpRetryDelay:     time.Millisecond,
+	}
+	plan, err := manager.planLaunch(launch.Spec{Manifest: cfg, Options: LaunchOptions{Resume: ResumeModeNo, SSH: false}})
+	if err != nil {
+		t.Fatalf("plan launch: %v", err)
+	}
+
+	running, err := manager.startWithPlan(context.Background(), plan)
+	if err != nil {
+		t.Fatalf("start runtime: %v", err)
+	}
+	defer running.Close()
+
+	message := json.RawMessage(`{"execute":"query-status","id":"request-1"}`)
+	response, err := control.Dial(plan.Paths.ControlSocket).QMP(context.Background(), control.QMPRequest{Message: message})
+	if err != nil {
+		t.Fatalf("control qmp: %v", err)
+	}
+	if string(response) != string(qmp.messageResponse) || len(qmp.messages) != 1 || string(qmp.messages[0]) != string(message) {
+		t.Fatalf("unexpected qmp response=%s messages=%q", response, qmp.messages)
+	}
+}
+
 func TestLaunchRuntimeRegistersGuestRPCsAtControlPeriphery(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
@@ -5030,6 +5067,8 @@ type fakeQMPClient struct {
 	queryStatusCalls         int
 	disconnectCalls          int
 	rawCommands              []string
+	messages                 []json.RawMessage
+	messageResponse          json.RawMessage
 	deviceDelWaits           []string
 	status                   string
 	migrationStatus          string
@@ -5058,6 +5097,13 @@ func (c *fakeQMPClient) RunRaw(timeout time.Duration, command string) error {
 	defer c.mu.Unlock()
 	c.rawCommands = append(c.rawCommands, command)
 	return nil
+}
+
+func (c *fakeQMPClient) RunMessage(timeout time.Duration, message json.RawMessage) (json.RawMessage, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.messages = append(c.messages, append(json.RawMessage(nil), message...))
+	return append(json.RawMessage(nil), c.messageResponse...), nil
 }
 
 func (c *fakeQMPClient) DeviceDelAndWait(timeout time.Duration, id string) error {

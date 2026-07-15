@@ -1,6 +1,7 @@
 package qmpclient
 
 import (
+	"encoding/json"
 	"sync"
 	"time"
 
@@ -33,6 +34,16 @@ func (c *serializedClient) RunRaw(timeout time.Duration, command string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.client.RunRaw(timeout, command)
+}
+
+func (c *serializedClient) RunMessage(timeout time.Duration, message json.RawMessage) (json.RawMessage, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	runner, ok := c.client.(MessageRunner)
+	if !ok {
+		return nil, ErrMessageRunnerUnsupported
+	}
+	return runner.RunMessage(timeout, message)
 }
 
 func (c *serializedClient) DeviceDelAndWait(timeout time.Duration, id string) error {

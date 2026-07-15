@@ -20,10 +20,18 @@ const (
 	defaultQMPMigrationTimeout = 30 * time.Second
 )
 
+// ErrMessageRunnerUnsupported means a QMP client cannot forward arbitrary messages.
+var ErrMessageRunnerUnsupported = errors.New("qmp message runner is not supported")
+
 // RawRunner runs raw QMP monitor commands.
 type RawRunner interface {
 	WithRaw(timeout time.Duration, fn func(*rawQMP.Monitor) error) error
 	RunRaw(timeout time.Duration, command string) error
+}
+
+// MessageRunner sends an arbitrary QMP request and returns QEMU's complete response.
+type MessageRunner interface {
+	RunMessage(timeout time.Duration, message json.RawMessage) (json.RawMessage, error)
 }
 
 // DeviceController removes QEMU devices and waits for completion.
@@ -144,6 +152,22 @@ func (c *socketMonitorClient) RunRaw(timeout time.Duration, command string) erro
 		return fmt.Errorf("qmp command timed out after %s", timeout)
 	}
 	return err
+}
+
+func (c *socketMonitorClient) RunMessage(timeout time.Duration, message json.RawMessage) (json.RawMessage, error) {
+	var response json.RawMessage
+	err := c.withTimeout(timeout, func() error {
+		if !json.Valid(message) {
+			return fmt.Errorf("invalid qmp json")
+		}
+		var err error
+		response, err = c.monitor.runMessage(message)
+		return err
+	})
+	if isTimeoutError(err) {
+		return nil, fmt.Errorf("qmp command timed out after %s", timeout)
+	}
+	return response, err
 }
 
 func (c *socketMonitorClient) DeviceDelAndWait(timeout time.Duration, id string) error {
@@ -351,6 +375,14 @@ func (m *deadlineSocketMonitor) Disconnect() error {
 }
 
 func (m *deadlineSocketMonitor) Run(command []byte) ([]byte, error) {
+	return m.run(command, true)
+}
+
+func (m *deadlineSocketMonitor) runMessage(command []byte) ([]byte, error) {
+	return m.run(command, false)
+}
+
+func (m *deadlineSocketMonitor) run(command []byte, rejectQMPError bool) ([]byte, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -361,7 +393,7 @@ func (m *deadlineSocketMonitor) Run(command []byte) ([]byte, error) {
 		}
 
 		var err error
-		response, err = m.readResponseLocked()
+		response, err = m.readMessageLocked(rejectQMPError)
 		return err
 	})
 	if err != nil {
@@ -396,6 +428,10 @@ func (m *deadlineSocketMonitor) withDeadline(fn func() error) error {
 }
 
 func (m *deadlineSocketMonitor) readResponseLocked() ([]byte, error) {
+	return m.readMessageLocked(true)
+}
+
+func (m *deadlineSocketMonitor) readMessageLocked(rejectQMPError bool) ([]byte, error) {
 	for {
 		var message json.RawMessage
 		if err := m.decoder.Decode(&message); err != nil {
@@ -415,7 +451,7 @@ func (m *deadlineSocketMonitor) readResponseLocked() ([]byte, error) {
 		if envelope.Event != "" {
 			continue
 		}
-		if envelope.Error != nil && envelope.Error.Desc != "" {
+		if rejectQMPError && envelope.Error != nil && envelope.Error.Desc != "" {
 			return nil, errors.New(envelope.Error.Desc)
 		}
 		return message, nil

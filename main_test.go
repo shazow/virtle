@@ -218,6 +218,38 @@ func TestParserAcceptsSharedOptionsBeforeOrAfterSubcommand(t *testing.T) {
 	}
 }
 
+func TestRunRPCQMPPrintsCompleteQEMUResponse(t *testing.T) {
+	tmpDir := t.TempDir()
+	manifestPath := filepath.Join(tmpDir, "manifest.json")
+	if err := os.WriteFile(manifestPath, []byte(testManifestJSON(tmpDir)), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	cfg, err := loadManifest(manifestPath)
+	if err != nil {
+		t.Fatalf("load manifest: %v", err)
+	}
+	controlSocketPath, err := cfg.ResolvedControlSocketPath()
+	if err != nil {
+		t.Fatalf("resolve control socket: %v", err)
+	}
+	handler := &mainTestControlHandler{qmpResp: json.RawMessage(`{"return":{"status":"running"},"id":"request-1"}`)}
+	startMainTestControlServerAt(t, controlSocketPath, handler)
+
+	message := `{"execute":"query-status","id":"request-1"}`
+	output := captureStdout(t, func() {
+		if err := run([]string{"--manifest=" + manifestPath, "rpc", "qmp", message}); err != nil {
+			t.Fatalf("rpc qmp: %v", err)
+		}
+	})
+
+	if string(handler.qmpReq.Message) != message {
+		t.Fatalf("unexpected qmp request: %s", handler.qmpReq.Message)
+	}
+	if strings.TrimSpace(output) != string(handler.qmpResp) {
+		t.Fatalf("unexpected qmp output: %s", output)
+	}
+}
+
 func TestRunRPCStatusPrintsControlSocketResponse(t *testing.T) {
 	tmpDir := t.TempDir()
 	manifestPath := filepath.Join(tmpDir, "manifest.json")
@@ -318,7 +350,7 @@ func TestRunRPCMethodsPrintsAvailableControlSocketMethods(t *testing.T) {
 	if err := json.Unmarshal([]byte(output), &got); err != nil {
 		t.Fatalf("decode rpc output %q: %v", output, err)
 	}
-	want := []string{"status", "methods", "guest-ps", "guest-exec", "guest-read", "guest-write", "hotplug"}
+	want := []string{"status", "methods", "guest-ps", "guest-exec", "guest-read", "guest-write", "hotplug", "qmp"}
 	if !reflect.DeepEqual(got.Methods, want) {
 		t.Fatalf("unexpected rpc methods output: got %#v want %#v", got.Methods, want)
 	}
@@ -478,6 +510,8 @@ func (h *mainTestControlCore) Status(context.Context, control.StatusRequest) (co
 type mainTestControlHandler struct {
 	mainTestControlCore
 	hotplugReq control.HotplugRequest
+	qmpReq     control.QMPRequest
+	qmpResp    json.RawMessage
 }
 
 func (h *mainTestControlHandler) GuestPS(context.Context, control.GuestPSRequest) (control.GuestPSResponse, error) {
@@ -501,6 +535,11 @@ func (h *mainTestControlHandler) Hotplug(ctx context.Context, req control.Hotplu
 	return control.HotplugResponse{ID: req.ID, Detach: req.Detach}, nil
 }
 
+func (h *mainTestControlHandler) RunQMP(ctx context.Context, req control.QMPRequest) (json.RawMessage, error) {
+	h.qmpReq = req
+	return h.qmpResp, nil
+}
+
 func startMainTestControlServerAt(t *testing.T, path string, runtime control.RuntimeCore) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -512,6 +551,9 @@ func startMainTestControlServerAt(t *testing.T, path string, runtime control.Run
 	}
 	if hotplug, ok := runtime.(control.RuntimeHotplug); ok {
 		handlers.Hotplug = hotplug
+	}
+	if qmp, ok := runtime.(control.RuntimeQMP); ok {
+		handlers.QMP = qmp
 	}
 	router, err := control.NewRouter(handlers)
 	if err != nil {

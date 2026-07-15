@@ -97,6 +97,18 @@ func init() {
 		}
 		return handlers.Balloon.Balloon
 	}))
+	registerDefaultMethod(rpcQMP, methodRegistration{
+		bind: func(_ *Router, handlers Handlers) (methodSpec, bool) {
+			if handlers.QMP == nil {
+				return methodSpec{}, false
+			}
+			return methodSpec{
+				handle: func(ctx context.Context, params json.RawMessage) (any, error) {
+					return handlers.QMP.RunQMP(ctx, QMPRequest{Message: params})
+				},
+			}, true
+		},
+	})
 }
 
 func registerDefaultMethod(name rpcMethod, method methodRegistration) {

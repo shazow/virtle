@@ -197,6 +197,7 @@ func (d Document) resolveQEMU(host HostInput, hostName string, workingDir string
 		Console: QEMUConsole{
 			StdioChardev:  serialMode != KernelSerialOff,
 			SerialConsole: serialMode != KernelSerialOff,
+			Interactive:   serialMode == KernelSerialConsole,
 		},
 		Knobs: QEMUKnobs{
 			NoDefaults:     true,

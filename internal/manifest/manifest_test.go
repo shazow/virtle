@@ -142,6 +142,7 @@ func TestKernelSerialModesResolveToQEMUConsole(t *testing.T) {
 		name                 string
 		serial               string
 		wantSerial           bool
+		wantInteractive      bool
 		wantResolutionErrMsg string
 	}{
 		{
@@ -153,9 +154,10 @@ func TestKernelSerialModesResolveToQEMUConsole(t *testing.T) {
 			wantSerial: true,
 		},
 		{
-			name:       "console",
-			serial:     KernelSerialConsole,
-			wantSerial: true,
+			name:            "console",
+			serial:          KernelSerialConsole,
+			wantSerial:      true,
+			wantInteractive: true,
 		},
 		{
 			name:                 "invalid",
@@ -191,6 +193,9 @@ func TestKernelSerialModesResolveToQEMUConsole(t *testing.T) {
 			}
 			if got := qemu.Console.SerialConsole; got != tt.wantSerial {
 				t.Fatalf("unexpected serial console: got %v want %v", got, tt.wantSerial)
+			}
+			if got := qemu.Console.Interactive; got != tt.wantInteractive {
+				t.Fatalf("unexpected interactive console: got %v want %v", got, tt.wantInteractive)
 			}
 			hasKernelConsole := strings.Contains(qemu.Kernel.Params, "console=ttyS0")
 			if hasKernelConsole != tt.wantSerial {

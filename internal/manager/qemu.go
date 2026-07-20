@@ -27,7 +27,11 @@ func buildQEMUCommand(manifest *manifest.Manifest, cid int, incoming bool) (*exe
 
 	cmd := executor.Command(qemu.BinaryPath, args, nil)
 	cmd.Dir = manifest.Paths.WorkingDir
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if qemu.Console.Interactive {
+		cmd.Stdin = os.Stdin
+	} else {
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	}
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	return cmd, nil
@@ -71,7 +75,9 @@ func buildQEMUArgs(qemu manifest.QEMU, cid int, incoming bool) ([]string, error)
 	args = append(args, "-initrd", qemu.Kernel.InitrdPath)
 
 	if qemu.Console.StdioChardev {
-		args = append(args, "-chardev", "stdio,id=stdio,signal=off")
+		// mux=on enables QEMU's Ctrl-A escape commands, including Ctrl-A x to quit.
+		// See https://www.qemu.org/docs/master/system/mux-chardev.html.
+		args = append(args, "-chardev", "stdio,id=stdio,mux=on,signal=off")
 	}
 
 	rngTransport, err := resolveQEMUTransport(qemu.Devices.RNG.Transport)

@@ -4049,20 +4049,34 @@ func TestBuildQEMUCommandUsesRuntimeCPUCountWhenOmitted(t *testing.T) {
 
 func TestBuildQEMUCommandAddsSerialConsoleArgsOnlyWhenEnabled(t *testing.T) {
 	tests := []struct {
-		name            string
-		console         manifest.QEMUConsole
-		wantConsoleArgs bool
+		name             string
+		console          manifest.QEMUConsole
+		wantConsoleArgs  bool
+		wantStdin        bool
+		wantProcessGroup bool
 	}{
 		{
-			name: "disabled",
+			name:             "disabled",
+			wantProcessGroup: true,
 		},
 		{
-			name: "enabled",
+			name: "print only",
 			console: manifest.QEMUConsole{
 				StdioChardev:  true,
 				SerialConsole: true,
 			},
+			wantConsoleArgs:  true,
+			wantProcessGroup: true,
+		},
+		{
+			name: "interactive",
+			console: manifest.QEMUConsole{
+				StdioChardev:  true,
+				SerialConsole: true,
+				Interactive:   true,
+			},
 			wantConsoleArgs: true,
+			wantStdin:       true,
 		},
 	}
 
@@ -4075,11 +4089,17 @@ func TestBuildQEMUCommandAddsSerialConsoleArgsOnlyWhenEnabled(t *testing.T) {
 			if err != nil {
 				t.Fatalf("build qemu command: %v", err)
 			}
-			if got := containsString(commandArgs(spec), "stdio,id=stdio,signal=off"); got != tt.wantConsoleArgs {
+			if got := containsString(commandArgs(spec), "stdio,id=stdio,mux=on,signal=off"); got != tt.wantConsoleArgs {
 				t.Fatalf("unexpected stdio chardev presence: got %v want %v args=%v", got, tt.wantConsoleArgs, commandArgs(spec))
 			}
 			if got := containsString(commandArgs(spec), "chardev:stdio"); got != tt.wantConsoleArgs {
 				t.Fatalf("unexpected serial console presence: got %v want %v args=%v", got, tt.wantConsoleArgs, commandArgs(spec))
+			}
+			if got := spec.Stdin == os.Stdin; got != tt.wantStdin {
+				t.Fatalf("unexpected stdin attachment: got %v want %v", got, tt.wantStdin)
+			}
+			if got := commandProcessGroup(spec); got != tt.wantProcessGroup {
+				t.Fatalf("unexpected process group: got %v want %v", got, tt.wantProcessGroup)
 			}
 		})
 	}

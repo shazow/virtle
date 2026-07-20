@@ -70,6 +70,7 @@ func (c CPUCount) QEMUValue() int {
 type QEMUConsole struct {
 	StdioChardev  bool `json:"stdioChardev,omitempty"`
 	SerialConsole bool `json:"serialConsole,omitempty"`
+	Interactive   bool `json:"interactive,omitempty"`
 }
 
 type QEMUKnobs struct {

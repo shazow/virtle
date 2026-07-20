@@ -106,8 +106,9 @@ initrd_path = "/run/booted-system/initrd"
 params = []  # Default: virtle adds required runtime params only
 
 # Serial controls QEMU serial wiring and kernel console params. "print" streams
-# kernel and init output without implying an interactive guest login prompt;
-# "console" is for full serial-console guest configurations.
+# kernel/init output only; host stdin is not connected, so QEMU mux keys such
+# as Ctrl-A x are unavailable. "console" also connects host stdin for
+# interactive serial-console use; the guest must provide its own getty/login.
 serial = "off"  # Options: off, print, console (default: off)
 
 [graphics]

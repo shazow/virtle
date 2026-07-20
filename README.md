@@ -1,3 +1,5 @@
+<p align="center"><img width="362" height="207" alt="Virtle" src="https://github.com/user-attachments/assets/a447ffc8-f01a-48c4-832c-a04c93b8284e" /></p>
+
 # virtle 🐢🪐
 
 Virtle is a VM manager for sandbox workflows.

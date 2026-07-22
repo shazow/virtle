@@ -1,4 +1,6 @@
-<p align="center"><img width="362" height="207" alt="Virtle" src="https://github.com/user-attachments/assets/a447ffc8-f01a-48c4-832c-a04c93b8284e" /></p>
+<p align="center">
+  <img width="420" height="260" alt="image" src="https://github.com/user-attachments/assets/400ba12a-6b77-4e60-b530-28183d6cacc1" />
+</p>
 
 # virtle 🐢🪐
 

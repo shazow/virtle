@@ -2,6 +2,8 @@
 
 Here's how to boot a custom VM image with virtle.
 
+For a fully declarative image, see the [NixOS guide](nixos/README.md).
+
 First, we'll need a VM image with qemu-guest-agent (QGA) and an SSH server.
 Virtle uses QGA to coordinate the guest remotely for things like
 auto-provisioning SSH client keys.

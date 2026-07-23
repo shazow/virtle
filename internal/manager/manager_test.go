@@ -3661,9 +3661,10 @@ func TestAllocateCIDReturnsHostCheckError(t *testing.T) {
 }
 
 func TestBuildQEMUCommandUsesTypedConfigAndRuntimeCID(t *testing.T) {
-	manifest := validManifest("/tmp/work")
+	cfg := validManifest("/tmp/work")
+	cfg.QEMU.Console = manifest.QEMUConsole{}
 
-	spec, err := buildQEMUCommand(manifest, 42, false)
+	spec, err := buildQEMUCommand(cfg, 42, false)
 	if err != nil {
 		t.Fatalf("build qemu command: %v", err)
 	}
@@ -4053,6 +4054,12 @@ func TestBuildQEMUCommandAddsSerialConsoleArgsOnlyWhenEnabled(t *testing.T) {
 			}
 			if got := containsString(commandArgs(spec), "chardev:stdio"); got != tt.wantConsoleArgs {
 				t.Fatalf("unexpected serial console presence: got %v want %v args=%v", got, tt.wantConsoleArgs, commandArgs(spec))
+			}
+			if got := spec.Stdin == os.Stdin; got != tt.wantConsoleArgs {
+				t.Fatalf("unexpected stdin passthrough: got %v want %v", got, tt.wantConsoleArgs)
+			}
+			if got, want := commandProcessGroup(spec), !tt.wantConsoleArgs; got != want {
+				t.Fatalf("unexpected process group isolation: got %v want %v", got, want)
 			}
 		})
 	}

@@ -1161,15 +1161,22 @@ func TestManagerLaunchStartsSSHOnceAfterReadiness(t *testing.T) {
 	}, []string{})
 }
 
-func TestManagerLaunchWarnsAfterFiveSSHRetryFailures(t *testing.T) {
+func TestManagerLaunchPacesSSHRetriesAndWarnsAfterFiveFailures(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
 	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
 	cfg.Volumes[0].AutoCreate = false
+	cfg.SSH.RetryDelay = 10 * time.Millisecond
 
+	var sshStarts []time.Time
 	runner := &launchRunner{
 		transientSSHFailures: 5,
 		finishInteractiveSSH: true,
+		onStart: func(name string, _ *exec.Cmd) {
+			if name == "ssh" {
+				sshStarts = append(sshStarts, time.Now())
+			}
+		},
 	}
 	qmpClient := &fakeQMPClient{
 		onQuit: func() {
@@ -1197,6 +1204,11 @@ func TestManagerLaunchWarnsAfterFiveSSHRetryFailures(t *testing.T) {
 	}
 	if got, want := len(runner.sshArgs()), 6; got != want {
 		t.Fatalf("unexpected ssh starts: got %d want %d", got, want)
+	}
+	for i := 1; i < len(sshStarts); i++ {
+		if got, want := sshStarts[i].Sub(sshStarts[i-1]), cfg.SSH.RetryDelay; got < want {
+			t.Fatalf("ssh retry %d delay: got %s want at least %s", i, got, want)
+		}
 	}
 	logs := logOutput.String()
 	if !strings.Contains(logs, "ssh exec failed 5 times") {

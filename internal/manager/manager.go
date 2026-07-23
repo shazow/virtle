@@ -423,9 +423,8 @@ func (m *manager) waitForVM(ctx context.Context, qemu *executor.Process, lifecyc
 }
 
 func (m *manager) waitForProcess(ctx context.Context, stage string, process *executor.Process, delay time.Duration, lifecycle *launch.Lifecycle, suspendHandler suspendHandler, guestAgentSocketPath string, watchers executor.Group) error {
-	return launch.WaitForLifecycleProcess(ctx, launch.LifecycleProcessWait{
+	wait := launch.LifecycleProcessWait{
 		Stage:     stage,
-		Process:   process,
 		Delay:     delay,
 		Lifecycle: lifecycle,
 		Watchers:  watchers,
@@ -436,7 +435,12 @@ func (m *manager) waitForProcess(ctx context.Context, stage string, process *exe
 		Info: func(ctx context.Context) {
 			m.printGuestInfo(ctx, guestAgentSocketPath, watchers)
 		},
-	})
+	}
+	// Keep the interface nil for delay-only waits; a typed nil Process reports done.
+	if process != nil {
+		wait.Process = process
+	}
+	return launch.WaitForLifecycleProcess(ctx, wait)
 }
 
 func (m *manager) waitForLifecycleEvent(ctx context.Context, stage string, delay time.Duration, lifecycle *launch.Lifecycle, suspendHandler suspendHandler, guestAgentSocketPath string, watchers executor.Group) error {

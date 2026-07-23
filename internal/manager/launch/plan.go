@@ -9,8 +9,8 @@ func BuildPlan(spec Spec, resumeState *SuspendState, notifier NotificationSink) 
 	if err := manifest.Validate(); err != nil {
 		return nil, err
 	}
-	if options.SSH && len(remoteCommand) > 0 && len(manifest.SSH.Argv) == 0 {
-		return nil, fmt.Errorf("remote command arguments require manifest.ssh.exec")
+	if options.SSH && len(manifest.SSH.Argv) == 0 {
+		return nil, fmt.Errorf("--ssh requires a non-empty manifest.ssh.exec")
 	}
 	virtioFSSocketPaths, err := manifest.ResolvedVirtioFSSocketPaths()
 	if err != nil {

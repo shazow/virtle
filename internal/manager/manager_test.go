@@ -1041,7 +1041,7 @@ func TestWaitForRunningLaunchSavedSuspendSkipsCloseWriteBack(t *testing.T) {
 	}
 }
 
-func TestManagerLaunchWithSSHAndEmptyExecSkipsAutoconnect(t *testing.T) {
+func TestManagerLaunchRejectsSSHWithoutExec(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
 	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
@@ -1051,41 +1051,14 @@ func TestManagerLaunchWithSSHAndEmptyExecSkipsAutoconnect(t *testing.T) {
 	cfg.SSH.Argv = nil
 
 	runner := &launchRunner{}
-	qmpClient := &fakeQMPClient{}
-	var logOutput bytes.Buffer
-	manager := &manager{
-		locker:            &fileLocker{},
-		runner:            runner,
-		socketWaiter:      &fakeSocketWaiter{callback: func(paths []string) error { return nil }},
-		qmpDialer:         &fakeQMPDialer{client: qmpClient},
-		logger:            slog.New(slog.NewTextHandler(&logOutput, nil)),
-		logWriter:         &logOutput,
-		shutdownDelay:     10 * time.Millisecond,
-		qmpRetryDelay:     0,
-		qmpConnectTimeout: time.Millisecond,
-		qmpQuitTimeout:    time.Millisecond,
-	}
+	manager := &manager{runner: runner}
 
-	exitReadyQEMU := make(chan struct{})
-	go func() {
-		defer close(exitReadyQEMU)
-		time.Sleep(10 * time.Millisecond)
-		runner.exitQEMU(nil)
-	}()
-
-	if err := manager.launchWithOptions(context.Background(), cfg, nil, LaunchOptions{Resume: ResumeModeNo, SSH: true}); err != nil {
-		t.Fatalf("launch with ssh and empty exec: %v", err)
+	err := manager.launchWithOptions(context.Background(), cfg, nil, LaunchOptions{Resume: ResumeModeNo, SSH: true})
+	if err == nil || !strings.Contains(err.Error(), "--ssh requires a non-empty manifest.ssh.exec") {
+		t.Fatalf("expected missing ssh exec error, got %v", err)
 	}
-	<-exitReadyQEMU
-
-	if got, want := runner.startedNames(), []string{"virtiofsd-workspace", "qemu-system-x86_64"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("unexpected start order: got %v want %v", got, want)
-	}
-	if got := len(runner.sshArgs()); got != 0 {
-		t.Fatalf("expected no ssh starts, got %d", got)
-	}
-	if strings.Contains(logOutput.String(), "connect with:") {
-		t.Fatalf("expected no ssh hint without ssh argv, got %q", logOutput.String())
+	if len(runner.startedNames()) != 0 {
+		t.Fatalf("expected failure before starting processes, got starts %v", runner.startedNames())
 	}
 }
 
@@ -1119,7 +1092,7 @@ func TestManagerLaunchRejectsRemoteCommandWithoutSSHExec(t *testing.T) {
 	}
 
 	err := manager.launchWithOptions(context.Background(), cfg, []string{"echo", "hi"}, LaunchOptions{Resume: ResumeModeNo, SSH: true})
-	if err == nil || !strings.Contains(err.Error(), "remote command arguments require manifest.ssh.exec") {
+	if err == nil || !strings.Contains(err.Error(), "--ssh requires a non-empty manifest.ssh.exec") {
 		t.Fatalf("expected missing ssh argv error, got %v", err)
 	}
 	if len(runner.startedNames()) != 0 {

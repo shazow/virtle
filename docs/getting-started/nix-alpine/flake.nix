@@ -56,8 +56,8 @@
         networks = []
 
         [machine]
-        memory = 128
-        vcpu = 1
+        memory = 512
+        vcpu = 8
 
         [kernel]
         path = "${image}/vmlinuz"

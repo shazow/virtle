@@ -27,7 +27,11 @@ func buildQEMUCommand(manifest *manifest.Manifest, cid int, incoming bool) (*exe
 
 	cmd := executor.Command(qemu.BinaryPath, args, nil)
 	cmd.Dir = manifest.Paths.WorkingDir
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// A stdio console must stay in the foreground process group to read the terminal.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: !qemu.Console.StdioChardev}
+	if qemu.Console.StdioChardev {
+		cmd.Stdin = os.Stdin
+	}
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	return cmd, nil

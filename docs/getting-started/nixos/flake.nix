@@ -53,7 +53,14 @@
                 setNixPath = false;
               };
 
-              services.openssh.enable = true;
+              services.openssh = {
+                enable = true;
+                settings = {
+                  KbdInteractiveAuthentication = false;
+                  PasswordAuthentication = false;
+                  PermitRootLogin = "prohibit-password";
+                };
+              };
 
               services.qemuGuest.enable = true;
               systemd.services.qemu-guest-agent.path = with pkgs; [

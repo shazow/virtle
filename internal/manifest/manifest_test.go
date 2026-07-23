@@ -814,7 +814,7 @@ func TestDocumentSSHReadySocketDefaultAndEnable(t *testing.T) {
 	}
 }
 
-func TestDocumentSSHExecDefaultsToEmpty(t *testing.T) {
+func TestDocumentSSHExecDefaultsToSSH(t *testing.T) {
 	document := validDocument()
 	document.SSH.Exec = nil
 
@@ -822,8 +822,21 @@ func TestDocumentSSHExecDefaultsToEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve manifest with omitted ssh exec: %v", err)
 	}
+	if got, want := manifest.SSH.Argv, []string{"ssh"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("ssh exec = %#v, want %#v", got, want)
+	}
+}
+
+func TestDocumentSSHExecPreservesExplicitEmpty(t *testing.T) {
+	document := validDocument()
+	document.SSH.Exec = []string{}
+
+	manifest, err := document.Manifest()
+	if err != nil {
+		t.Fatalf("resolve manifest with explicitly empty ssh exec: %v", err)
+	}
 	if len(manifest.SSH.Argv) != 0 {
-		t.Fatalf("expected omitted ssh exec to resolve to empty argv, got %#v", manifest.SSH.Argv)
+		t.Fatalf("expected explicitly empty ssh exec to stay empty, got %#v", manifest.SSH.Argv)
 	}
 }
 

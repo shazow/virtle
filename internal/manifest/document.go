@@ -17,6 +17,7 @@ const (
 	defaultMemorySize  = units.MiB(1024)
 	defaultQMP         = "qmp.sock"
 	defaultGuestAgent  = "qga.sock"
+	defaultSSHCommand  = "ssh"
 	defaultSSHUser     = "agent"
 	defaultNetworkID   = "microvm1"
 	defaultNetworkMAC  = "02:02:00:00:00:01"

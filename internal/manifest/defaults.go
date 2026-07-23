@@ -36,6 +36,7 @@ func DefaultDocument() Document {
 			},
 		},
 		SSH: SSHInput{
+			Exec:       []string{defaultSSHCommand},
 			User:       defaultSSHUser,
 			RetryDelay: &retryDelay,
 		},

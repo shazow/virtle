@@ -468,7 +468,6 @@ func NewAuthorizedKeysInstallPlan(user string, authorizedKey string) AuthorizedK
 		TempKeyText:        authorizedKey + "\n",
 		TempKeyMode:        "0600",
 		AppendScript: `set -eu
-PATH=/run/current-system/sw/bin:/bin
 auth=$1
 keyfile=$2
 touch "$auth"

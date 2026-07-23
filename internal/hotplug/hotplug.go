@@ -316,14 +316,14 @@ func (r Runner) attachGuest(ctx context.Context, device Device) error {
 	if device.Kind != KindVirtioFS || device.VirtioFS.Target == "" {
 		return nil
 	}
-	return r.Guest.Run(ctx, []string{"/run/current-system/sw/bin/mount", "-t", "virtiofs", device.ID, device.VirtioFS.Target})
+	return r.Guest.Run(ctx, []string{"mount", "-t", "virtiofs", device.ID, device.VirtioFS.Target})
 }
 
 func (r Runner) detachGuest(ctx context.Context, device Device) error {
 	if device.Kind != KindVirtioFS || device.VirtioFS.Target == "" {
 		return nil
 	}
-	return r.Guest.Run(ctx, []string{"/run/current-system/sw/bin/umount", device.VirtioFS.Target})
+	return r.Guest.Run(ctx, []string{"umount", device.VirtioFS.Target})
 }
 
 func (r Runner) rollbackHost(proc *executor.Process) {

@@ -1,5 +1,5 @@
 <p align="center">
-  <img width="420" height="260" alt="Virtle the Space Turtle" src="https://github.com/user-attachments/assets/400ba12a-6b77-4e60-b530-28183d6cacc1" />
+  <img height="260" alt="Virtle the Space Turtle" src="https://github.com/user-attachments/assets/400ba12a-6b77-4e60-b530-28183d6cacc1" />
 </p>
 
 # virtle 🐢🪐

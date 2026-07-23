@@ -53,14 +53,7 @@
                 setNixPath = false;
               };
 
-              services.openssh = {
-                enable = true;
-                settings = {
-                  KbdInteractiveAuthentication = false;
-                  PasswordAuthentication = false;
-                  PermitRootLogin = "prohibit-password";
-                };
-              };
+              services.openssh.enable = true;
 
               services.qemuGuest.enable = true;
               systemd.services.qemu-guest-agent.path = with pkgs; [
@@ -101,7 +94,6 @@
       manifest = pkgs.writeText "manifest.toml" ''
         [machine]
         memory = 1024
-        vcpu = 1
 
         [kernel]
         path = "${kernel}"

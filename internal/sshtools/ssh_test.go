@@ -194,6 +194,9 @@ func TestAuthorizedKeysInstallPlan(t *testing.T) {
 	if !strings.Contains(plan.AppendScript, "grep -qxF") {
 		t.Fatalf("append plan missing idempotent grep: %q", plan.AppendScript)
 	}
+	if strings.Contains(plan.AppendScript, "PATH=") {
+		t.Fatalf("append plan overrides the guest environment PATH: %q", plan.AppendScript)
+	}
 	command := plan.AppendCommand("/bin/sh")
 	if got, want := command.Path, "/bin/sh"; got != want {
 		t.Fatalf("unexpected append command path: got %q want %q", got, want)

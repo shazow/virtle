@@ -102,12 +102,12 @@ func (m *manager) readGuestFile(client qga.Client, guestPath string) ([]byte, er
 }
 
 const (
-	guestChmodPath   = "/run/current-system/sw/bin/chmod"
-	guestChownPath   = "/run/current-system/sw/bin/chown"
-	guestInstallPath = "/run/current-system/sw/bin/install"
-	guestMountPath   = "/run/current-system/sw/bin/mount"
-	guestPSPath      = "/run/current-system/sw/bin/ps"
-	guestTestPath    = "/run/current-system/sw/bin/test"
+	guestChmodPath   = "chmod"
+	guestChownPath   = "chown"
+	guestInstallPath = "install"
+	guestMountPath   = "mount"
+	guestPSPath      = "ps"
+	guestTestPath    = "test"
 )
 
 func (m *manager) mountWorkspaceCWD(ctx context.Context, client qga.Client, launchManifest *manifest.Manifest) error {

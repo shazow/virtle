@@ -1377,7 +1377,7 @@ func TestManagerLaunchPrintsGuestInfoOnSIGUSR1(t *testing.T) {
 		t.Fatalf("unexpected guest exec count: got %d want %d", got, want)
 	}
 	exec := guestAgent.execs[0]
-	if exec.path != guestPSPath || !reflect.DeepEqual(exec.args, []string{"-eo", "user=,comm="}) || !exec.captureOutput {
+	if exec.path != "ps" || !reflect.DeepEqual(exec.args, []string{"-eo", "user=,comm="}) || !exec.captureOutput {
 		t.Fatalf("unexpected ps exec: %#v", exec)
 	}
 	logs := logOutput.String()
@@ -1460,12 +1460,12 @@ func TestManagerMountsWorkspaceCWD(t *testing.T) {
 
 	want := []guestExecCall{
 		{
-			path:          guestInstallPath,
+			path:          "install",
 			args:          []string{"-d", "/home/agent/workspace", "/home/agent/workspace/agentspace"},
 			captureOutput: true,
 		},
 		{
-			path:          guestMountPath,
+			path:          "mount",
 			args:          []string{"--bind", "/mnt/cwd", "/home/agent/workspace/agentspace"},
 			captureOutput: true,
 		},
@@ -1894,7 +1894,7 @@ func TestManagerLaunchAutoprovisionsSSHKeyAfterAuthFailure(t *testing.T) {
 	if got := guestAgent.writes["/run/virtle-autoprovision-authorized-key.pub"]; got == "" {
 		t.Fatalf("expected temporary public key write, got writes %#v", guestAgent.writes)
 	}
-	if !containsGuestExec(guestAgent.execs, launch.GuestShellPath, "/home/agent/.ssh/authorized_keys") {
+	if !containsGuestExec(guestAgent.execs, "sh", "/home/agent/.ssh/authorized_keys") {
 		t.Fatalf("expected authorized_keys append command, got %#v", guestAgent.execs)
 	}
 }

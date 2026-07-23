@@ -45,7 +45,7 @@ func TestInstallSSHAuthorizedKeySequencesGuestInstall(t *testing.T) {
 		"chmod:/home/agent/.ssh:0700",
 		"write:/run/virtle-autoprovision-authorized-key.pub:c3NoLWVkMjU1MTkgYWJjCg==",
 		"chmod:/run/virtle-autoprovision-authorized-key.pub:0600",
-		"run:append authorized_keys:" + GuestShellPath + ":",
+		"run:append authorized_keys:sh:",
 		"chown:/home/agent/.ssh/authorized_keys:agent:users",
 		"chmod:/home/agent/.ssh/authorized_keys:0600",
 	}

@@ -100,7 +100,7 @@ func TestVirtioFSAttachSuccessWritesState(t *testing.T) {
 	if !strings.Contains(strings.Join(qmp.commands, "\n"), `"execute":"chardev-add"`) {
 		t.Fatalf("expected chardev-add, got %#v", qmp.commands)
 	}
-	if got, want := guest.commands, [][]string{{"/run/current-system/sw/bin/mount", "-t", "virtiofs", "cache", "/mnt/cache"}}; !reflect.DeepEqual(got, want) {
+	if got, want := guest.commands, [][]string{{"mount", "-t", "virtiofs", "cache", "/mnt/cache"}}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("guest commands: got %#v want %#v", got, want)
 	}
 	state, err := ReadState(filepath.Join(tmpDir, "state", "hotplug", "cache.json"))
@@ -149,7 +149,7 @@ func TestVirtioFSAttachGuestFailureRollsBackQMPAndHost(t *testing.T) {
 
 func TestVirtioFSDetachWaitsForDeviceDeletedBeforeChardevRemove(t *testing.T) {
 	tmpDir := t.TempDir()
-	runner, _, qmp, _ := testRunner(tmpDir, testVirtioFSDevice(tmpDir))
+	runner, _, qmp, guest := testRunner(tmpDir, testVirtioFSDevice(tmpDir))
 	statePath := filepath.Join(tmpDir, "state", "hotplug", "cache.json")
 	if err := WriteState(statePath, State{ID: "cache", Kind: KindVirtioFS, Bus: "pcie.hotplug.0", PID: 42}); err != nil {
 		t.Fatalf("write state: %v", err)
@@ -160,6 +160,9 @@ func TestVirtioFSDetachWaitsForDeviceDeletedBeforeChardevRemove(t *testing.T) {
 	}
 	if got, want := qmp.events, []string{"device_del:dev-cache", "run:chardev-remove"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("events: got %#v want %#v", got, want)
+	}
+	if got, want := guest.commands, [][]string{{"umount", "/mnt/cache"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("guest commands: got %#v want %#v", got, want)
 	}
 }
 

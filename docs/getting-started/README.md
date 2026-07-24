@@ -2,8 +2,9 @@
 
 Here's how to boot a custom VM image with virtle.
 
-For fully declarative examples, see the [NixOS guide](nixos/README.md) and the
-[console-only Alpine guide](nix-alpine/README.md).
+For fully declarative examples, see the [NixOS guide](nixos/README.md), the
+[tiny NixOS console guide](nixos-tiny/README.md), and the [console-only
+Alpine guide](nix-alpine/README.md).
 
 Feel free to create the VM image any way you like. Here's an example:
 

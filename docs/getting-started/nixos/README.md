@@ -1,9 +1,12 @@
-# Getting started with NixOS
+# NixOS VM
 
 The accompanying [flake.nix](flake.nix) builds a small NixOS disk image,
 kernel, initrd, and virtle manifest. The guest includes public-key-only
 OpenSSH, QEMU Guest Agent, and the virtio drivers required by virtle's
 `microvm` machine.
+
+It's simpler and more stand-alone version of what
+[agentspace](https://github.com/shazow/agentspace) does.
 
 Save `flake.nix` in a new directory, then build the image and launch into the
 guest shell:

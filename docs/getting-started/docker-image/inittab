@@ -1,0 +1,7 @@
+# Skip OpenRC, start QGA directly, and launch a root shell on the serial console.
+::sysinit:/bin/mount -t tmpfs -o mode=0755 tmpfs /run
+::respawn:/usr/bin/qemu-ga -m virtio-serial -p /dev/virtio-ports/org.qemu.guest_agent.0 -r
+ttyS0::respawn:/sbin/getty -n -l /bin/sh -L 115200 ttyS0 dumb
+
+::ctrlaltdel:/sbin/reboot
+::shutdown:/bin/umount -a -r

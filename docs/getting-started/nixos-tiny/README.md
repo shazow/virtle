@@ -1,7 +1,12 @@
-# Getting started with minimal NixOS
+# Getting started with tiny NixOS
 
 This example explores how close a genuine NixOS stage-2 system can get to the
-Alpine console example. The accompanying [flake.nix](flake.nix) builds a direct
+Alpine console example.
+
+The flake is a fair bit larger and more complex, but that's that's what it
+takes to turn off a bunch of things. There's room for more reduction!
+
+The accompanying [flake.nix](flake.nix) builds a direct
 boot kernel, initrd, and compressed root image with no bootloader, networking,
 SSH, QEMU Guest Agent, Nix, Bash, or Perl.
 

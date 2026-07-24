@@ -39,13 +39,82 @@
         finalImageTag = "3.24.1";
       };
 
+      fetchAlpinePackage =
+        {
+          hash,
+          name,
+          repo ? "main",
+        }:
+        pkgs.fetchurl {
+          url = "https://dl-cdn.alpinelinux.org/alpine/v3.24/${repo}/x86_64/${name}";
+          inherit hash;
+        };
+
+      qgaPackages = [
+        (fetchAlpinePackage {
+          name = "qemu-guest-agent-11.0.1-r0.apk";
+          repo = "community";
+          hash = "sha256-wTYxknrjVFapYs0egU/8KJYTXPDJFNX3LGJ1tyNkPe4=";
+        })
+        (fetchAlpinePackage {
+          name = "glib-2.88.1-r1.apk";
+          hash = "sha256-LzIgO5d4m8mpLlfi2biesuaVG2lTS6CCpoPG5JAxy10=";
+        })
+        (fetchAlpinePackage {
+          name = "numactl-2.0.19-r0.apk";
+          hash = "sha256-SnhnChbZrnN3kG4ghL50MBl9S0wkh31lcS3R1Fl7Wds=";
+        })
+        (fetchAlpinePackage {
+          name = "liburing-2.14-r0.apk";
+          hash = "sha256-d7Fwt03Q0to+70pgz3USG69t47MI+LPbiAjU5pdgJ3I=";
+        })
+        (fetchAlpinePackage {
+          name = "libffi-3.5.2-r1.apk";
+          hash = "sha256-baGhkxOkDFbKx1b7EeLE1SZ4MeHCL8gyPyTJQ8lNpuA=";
+        })
+        (fetchAlpinePackage {
+          name = "libintl-1.0-r0.apk";
+          hash = "sha256-ywORnLpWJLXodZ0E87MZE7AlhTVZiLkUvDHeR0b/XvY=";
+        })
+        (fetchAlpinePackage {
+          name = "libmount-2.42.1-r0.apk";
+          hash = "sha256-/G/QbBJEuAT8BxbUl4xKl4OtKkYbMeG0lJLU38v/sCs=";
+        })
+        (fetchAlpinePackage {
+          name = "pcre2-10.47-r1.apk";
+          hash = "sha256-4r4nBGvJM/9nFuXG4I4wH8DMPdso2x21UQBXhGI48nY=";
+        })
+        (fetchAlpinePackage {
+          name = "libblkid-2.42.1-r0.apk";
+          hash = "sha256-xaXaiqUYGWthOtRlRTW+X+IgAyU1NahOIm/OBV/pHho=";
+        })
+        (fetchAlpinePackage {
+          name = "libeconf-0.8.3-r0.apk";
+          hash = "sha256-KnkceVeWH4MM8xsE81+BSmOvz2M7rckFJCX/HPL2Q4A=";
+        })
+      ];
+
+      qgaRoot =
+        pkgs.runCommand "virtle-alpine-qga-root"
+          {
+            nativeBuildInputs = [ pkgs.libarchive ];
+          }
+          ''
+            mkdir "$out"
+            for package in ${pkgs.lib.escapeShellArgs qgaPackages}; do
+              bsdtar --extract --file "$package" --directory "$out"
+            done
+            rm -f "$out"/.PKGINFO "$out"/.SIGN.*
+          '';
+
       layeredImage = pkgs.dockerTools.buildLayeredImage {
         name = "virtle-alpine-rootfs";
         tag = "3.24.1";
         fromImage = alpine;
         architecture = "amd64";
+        contents = [ qgaRoot ];
         extraCommands = ''
-          mkdir -p etc
+          mkdir -p etc run
           cp ${./inittab} etc/inittab
         '';
       };
@@ -102,6 +171,10 @@
         source = "${rootImage}/root.squashfs"
         read_only = true
         image.format = "raw"
+
+        [[write_files]]
+        guest_path = "/run/virtle-ready"
+        text = "QEMU Guest Agent is ready\n"
       '';
 
       runVirtle = pkgs.writeShellApplication {

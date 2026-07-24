@@ -1,116 +1,94 @@
-# Boot an Alpine Docker image
+# Adapt a Docker image for virtle
 
-A Docker image contains a userspace filesystem, but it does not contain
-everything needed to boot a virtual machine. This example starts with the
-official `alpine:3.24.1` image, adds Alpine's virtual-machine kernel and
-initramfs, exports the container filesystem, and converts the export into an
-ext4 disk that virtle can boot directly.
+A Docker image already contains most of the userspace needed for a development
+VM. To boot it with virtle, add the pieces normally supplied by a container
+runtime: a kernel and initramfs, an init process, and explicit VM
+configuration.
 
-The resulting guest is intentionally small: it has no network devices, SSH,
-QEMU Guest Agent, or OpenRC services. It mounts its root filesystem read-only
-and opens a root shell on the serial console.
+This example adapts the official `alpine:3.24.1` image. It boots read-only,
+starts QEMU Guest Agent (QGA), and opens a root shell on the serial console.
+Use it as a template for an existing development image.
 
-## Prerequisites
+## Try the example
 
-Install:
-
-- Podman
-- `virt-make-fs` from libguestfs
-- QEMU with KVM support
-- virtle
-
-On NixOS or another system with Nix installed, enter a shell containing all of
-these commands:
+The script requires Podman, `virt-make-fs`, and QEMU. It assumes `virtle` is
+already available. With Nix, the remaining tools are:
 
 ```sh
-nix-shell --impure -p \
-  podman guestfs-tools qemu \
-  '((builtins.getFlake "github:shazow/virtle").packages.${builtins.currentSystem}.default)'
+nix-shell -p podman file guestfs-tools qemu
 ```
 
-The example targets an x86_64 Linux host. The container build is fixed to
-`linux/amd64` so that the exported root filesystem, kernel, and QEMU guest all
-use the same architecture.
-
-## Build and boot
-
-Run the example from this directory:
+Run:
 
 ```sh
 ./run.sh
 ```
 
-The script performs these steps:
-
-1. Build the accompanying [Dockerfile](Dockerfile), which installs
-   `linux-virt` and configures a serial root shell.
-2. Create a stopped container and copy its kernel and initramfs into a
-   temporary working directory.
-3. Export the merged container filesystem with Podman.
-4. Use `virt-make-fs` to put the exported filesystem into a partitionless,
-   raw ext4 image.
-5. Validate [manifest.toml](manifest.toml) and launch the guest.
-
-At the `~ #` prompt, inspect the Alpine filesystem or run:
+At the guest prompt, confirm that virtle reached QGA and then shut down:
 
 ```sh
+cat /run/virtle-ready
 poweroff -f
 ```
 
-The script removes the temporary container and generated VM artifacts when it
-exits. It keeps the built container image so subsequent runs can reuse the
-Podman cache. Podman runs rootless by default. The included
-[policy.json](policy.json) permits pulling unsigned images; the Alpine base
-image is still pinned by its content digest.
+The script builds the image, exports its merged filesystem, converts that
+archive to a raw ext4 image, and launches it with
+[manifest.toml](manifest.toml). Temporary containers and VM files are removed
+on exit; the Podman image cache is retained.
 
-## Boot timing
+## Adapt your image
 
-On an AMD Ryzen 9 7900 host using KVM, three cached Podman runs reached the
-serial root prompt in 1.177, 1.141, and 1.142 seconds after virtle logged
-`starting qemu`: a median of 1.142 seconds. The median complete cached run,
-including the container build, export, ext4 conversion, and shutdown, took
-12.19 seconds. A cold run that also pulled the base image and installed
-`linux-virt` took 24.39 seconds.
+Start with the accompanying [Dockerfile](Dockerfile), but replace `FROM` with
+your image and digest. Then adapt these three guest-specific pieces:
 
-These timings use the manifest's eight virtual CPUs and 512 MiB of memory.
-They measure the first `~ #` prompt as boot completion and will vary with the
-host and container cache.
+1. Install a kernel, initramfs, and QGA appropriate for the distribution.
+2. Arrange for the guest's init system to start QGA on
+   `/dev/virtio-ports/org.qemu.guest_agent.0` and provide a serial console.
+   This Alpine example uses the minimal [inittab](inittab) instead of OpenRC.
+3. Update [manifest.toml](manifest.toml) with the exported disk, filesystem
+   type, kernel parameters, memory, CPUs, networks, and any virtle-managed
+   files or mounts.
 
-## What does not cross the boundary
+The `[[write_files]]` marker in the manifest is deliberate: it makes virtle
+wait for QGA readiness and includes the guest-agent stage in launch
+instrumentation. It is written under a `/run` tmpfs so the root disk can remain
+read-only.
 
-Exporting a container captures its merged filesystem. Container image metadata
-such as `CMD`, `ENTRYPOINT`, environment variables, declared volumes, and
-exposed ports is not part of that archive. Once QEMU boots the filesystem,
-the Linux kernel starts `/sbin/init`; for this minimal example, BusyBox init
-reads the supplied [inittab](inittab) and starts the serial shell.
+The example targets `linux/amd64`. Keep the image, kernel, initramfs, and QEMU
+guest architecture aligned. Also ensure that the initramfs contains the
+drivers needed to discover the virtio disk and mount its filesystem.
 
-The virtle manifest replaces the remaining container-runtime configuration:
-it selects the kernel and initramfs, attaches the exported filesystem as
-`/dev/vda`, supplies kernel parameters, and connects the serial console.
+## Translate container configuration
 
-## Nix flake prototype
+`podman export` captures the merged filesystem, not the image's runtime
+metadata. Translate the parts your development environment relies on:
 
-The accompanying [flake.nix](flake.nix) explores the same conversion without a
-container engine:
+- `ENTRYPOINT` and `CMD` become an init service, serial shell, or virtle run
+  command.
+- Environment variables and the working directory must be configured inside
+  the guest or by its init system.
+- Declared volumes and bind mounts become virtle mounts.
+- Published ports and container networks become guest networking or vsock
+  services.
+- Resource limits become the manifest's machine settings.
+
+This boundary is useful: the image remains the source of the development
+userspace, while the manifest describes how that userspace runs as a VM.
+
+## Nix flake variant
+
+[flake.nix](flake.nix) demonstrates the same conversion without Podman:
 
 ```sh
 nix run
 ```
 
-This version uses `dockerTools.pullImage` to fetch the same digest-pinned
-official image, `dockerTools.buildLayeredImage` to add the serial `inittab`,
-and `dockerTools.exportImage` to flatten its layers into a root filesystem
-archive. It then packs the root filesystem as a read-only SquashFS image. The
-official netboot initramfs already includes SquashFS support, so this avoids
-adding a second filesystem driver and makes the immutable nature of the
-prototype explicit.
+It uses `dockerTools` to fetch and flatten the digest-pinned Alpine image, adds
+the pinned Alpine QGA package closure, and creates a read-only SquashFS root.
+The kernel and initramfs are separate pinned netboot inputs, illustrating that
+they do not need to live inside the container rootfs.
 
-`buildLayeredImage` cannot run the base image's `apk` command while constructing
-an added layer. Instead, the flake pins Alpine's matching official netboot
-kernel and initramfs as separate inputs. This keeps the build pure and makes an
-important direct-boot property explicit: the QEMU kernel and initramfs do not
-need to live inside the root filesystem they boot.
-
-The flake does not require Docker, but Nix must have the `kvm` system feature
-and access to `/dev/kvm`, because `dockerTools.exportImage` uses a small build
-VM to flatten the image.
+This variant is pure but more specialized: because `buildLayeredImage` cannot
+run the image's `apk`, the QGA APK dependency closure is listed explicitly.
+Nix must also have the `kvm` system feature and access to `/dev/kvm` for
+`dockerTools.exportImage`.

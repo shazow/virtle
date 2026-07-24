@@ -1,5 +1,5 @@
 FROM docker.io/library/alpine:3.24.1@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
 
-RUN apk add --no-cache linux-virt
+RUN apk add --no-cache linux-virt qemu-guest-agent
 
 COPY inittab /etc/inittab

@@ -19,3 +19,7 @@ type = "image"
 source = "root.raw"
 read_only = true
 image.format = "raw"
+
+[[write_files]]
+guest_path = "/run/virtle-ready"
+text = "QEMU Guest Agent is ready\n"

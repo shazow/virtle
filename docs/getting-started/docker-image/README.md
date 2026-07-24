@@ -14,12 +14,21 @@ and opens a root shell on the serial console.
 
 Install:
 
-- Docker with access to a running daemon
+- Podman
 - `virt-make-fs` from libguestfs
 - QEMU with KVM support
 - virtle
 
-The example targets an x86_64 Linux host. The Docker build is fixed to
+On NixOS or another system with Nix installed, enter a shell containing all of
+these commands:
+
+```sh
+nix-shell --impure -p \
+  podman guestfs-tools qemu \
+  '((builtins.getFlake "github:shazow/virtle").packages.${builtins.currentSystem}.default)'
+```
+
+The example targets an x86_64 Linux host. The container build is fixed to
 `linux/amd64` so that the exported root filesystem, kernel, and QEMU guest all
 use the same architecture.
 
@@ -37,7 +46,7 @@ The script performs these steps:
    `linux-virt` and configures a serial root shell.
 2. Create a stopped container and copy its kernel and initramfs into a
    temporary working directory.
-3. Export the merged container filesystem with `docker export`.
+3. Export the merged container filesystem with Podman.
 4. Use `virt-make-fs` to put the exported filesystem into a partitionless,
    raw ext4 image.
 5. Validate [manifest.toml](manifest.toml) and launch the guest.
@@ -49,16 +58,31 @@ poweroff -f
 ```
 
 The script removes the temporary container and generated VM artifacts when it
-exits. It keeps the built Docker image so subsequent runs can reuse Docker's
-cache.
+exits. It keeps the built container image so subsequent runs can reuse the
+Podman cache. Podman runs rootless by default. The included
+[policy.json](policy.json) permits pulling unsigned images; the Alpine base
+image is still pinned by its content digest.
+
+## Boot timing
+
+On an AMD Ryzen 9 7900 host using KVM, three cached Podman runs reached the
+serial root prompt in 1.177, 1.141, and 1.142 seconds after virtle logged
+`starting qemu`: a median of 1.142 seconds. The median complete cached run,
+including the container build, export, ext4 conversion, and shutdown, took
+12.19 seconds. A cold run that also pulled the base image and installed
+`linux-virt` took 24.39 seconds.
+
+These timings use the manifest's eight virtual CPUs and 512 MiB of memory.
+They measure the first `~ #` prompt as boot completion and will vary with the
+host and container cache.
 
 ## What does not cross the boundary
 
-`docker export` exports a container's merged filesystem. Docker image metadata
+Exporting a container captures its merged filesystem. Container image metadata
 such as `CMD`, `ENTRYPOINT`, environment variables, declared volumes, and
-exposed ports is not part of that archive. Once QEMU boots the filesystem, the
-Linux kernel starts `/sbin/init`; for this minimal example, BusyBox init reads
-the supplied [inittab](inittab) and starts the serial shell.
+exposed ports is not part of that archive. Once QEMU boots the filesystem,
+the Linux kernel starts `/sbin/init`; for this minimal example, BusyBox init
+reads the supplied [inittab](inittab) and starts the serial shell.
 
 The virtle manifest replaces the remaining container-runtime configuration:
 it selects the kernel and initramfs, attaches the exported filesystem as
@@ -67,7 +91,7 @@ it selects the kernel and initramfs, attaches the exported filesystem as
 ## Nix flake prototype
 
 The accompanying [flake.nix](flake.nix) explores the same conversion without a
-Docker daemon:
+container engine:
 
 ```sh
 nix run

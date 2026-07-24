@@ -27,7 +27,7 @@ Run:
 At the guest prompt, confirm that virtle reached QGA and then shut down:
 
 ```sh
-cat /run/virtle-ready
+cat /run/virtle-was-here
 poweroff -f
 ```
 

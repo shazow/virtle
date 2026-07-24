@@ -173,8 +173,8 @@
         image.format = "raw"
 
         [[write_files]]
-        guest_path = "/run/virtle-ready"
-        text = "QEMU Guest Agent is ready\n"
+        guest_path = "/run/virtle-was-here"
+        text = "🐢🪐\n"
       '';
 
       runVirtle = pkgs.writeShellApplication {

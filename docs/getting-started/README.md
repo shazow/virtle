@@ -57,7 +57,9 @@ virtle launch -v
 
 Ubuntu's serial login prompt confirms that the kernel and image booted
 successfully. The cloud image has no password login configured; press
-<kbd>Ctrl-C</kbd> to stop the VM.
+<kbd>Ctrl-A</kbd>, then <kbd>x</kbd>, to force-exit QEMU. This has the same
+disk-consistency implications as powering off the VM. To send a literal
+<kbd>Ctrl-A</kbd> to the guest, press <kbd>Ctrl-A</kbd> twice.
 
 ## Add SSH key provisioning
 

@@ -194,10 +194,7 @@ func (d Document) resolveQEMU(host HostInput, hostName string, workingDir string
 		SMP: QEMUSMP{
 			CPUs: cpus,
 		},
-		Console: QEMUConsole{
-			StdioChardev:  serialMode != KernelSerialOff,
-			SerialConsole: serialMode != KernelSerialOff,
-		},
+		Console: QEMUConsole(serialMode),
 		Knobs: QEMUKnobs{
 			NoDefaults:     true,
 			NoUserConfig:   true,

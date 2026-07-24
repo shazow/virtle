@@ -3674,7 +3674,7 @@ func TestAllocateCIDReturnsHostCheckError(t *testing.T) {
 
 func TestBuildQEMUCommandUsesTypedConfigAndRuntimeCID(t *testing.T) {
 	cfg := validManifest("/tmp/work")
-	cfg.QEMU.Console = manifest.QEMUConsole{}
+	cfg.QEMU.Console = manifest.QEMUConsoleOff
 
 	spec, err := buildQEMUCommand(cfg, 42, false)
 	if err != nil {
@@ -4037,18 +4037,22 @@ func TestBuildQEMUCommandAddsSerialConsoleArgsOnlyWhenEnabled(t *testing.T) {
 	tests := []struct {
 		name            string
 		console         manifest.QEMUConsole
-		wantConsoleArgs bool
+		wantChardev     string
+		wantInteractive bool
 	}{
 		{
 			name: "disabled",
 		},
 		{
-			name: "enabled",
-			console: manifest.QEMUConsole{
-				StdioChardev:  true,
-				SerialConsole: true,
-			},
-			wantConsoleArgs: true,
+			name:        "print",
+			console:     manifest.QEMUConsolePrint,
+			wantChardev: "stdio,id=stdio,signal=off",
+		},
+		{
+			name:            "console",
+			console:         manifest.QEMUConsoleInteractive,
+			wantChardev:     "stdio,id=stdio,mux=on,signal=off",
+			wantInteractive: true,
 		},
 	}
 
@@ -4061,16 +4065,22 @@ func TestBuildQEMUCommandAddsSerialConsoleArgsOnlyWhenEnabled(t *testing.T) {
 			if err != nil {
 				t.Fatalf("build qemu command: %v", err)
 			}
-			if got := containsString(commandArgs(spec), "stdio,id=stdio,signal=off"); got != tt.wantConsoleArgs {
-				t.Fatalf("unexpected stdio chardev presence: got %v want %v args=%v", got, tt.wantConsoleArgs, commandArgs(spec))
+			for _, chardev := range []string{
+				"stdio,id=stdio,signal=off",
+				"stdio,id=stdio,mux=on,signal=off",
+			} {
+				if got, want := containsString(commandArgs(spec), chardev), chardev == tt.wantChardev; got != want {
+					t.Fatalf("unexpected stdio chardev %q presence: got %v want %v args=%v", chardev, got, want, commandArgs(spec))
+				}
 			}
-			if got := containsString(commandArgs(spec), "chardev:stdio"); got != tt.wantConsoleArgs {
-				t.Fatalf("unexpected serial console presence: got %v want %v args=%v", got, tt.wantConsoleArgs, commandArgs(spec))
+			wantConsoleArgs := tt.wantChardev != ""
+			if got := containsString(commandArgs(spec), "chardev:stdio"); got != wantConsoleArgs {
+				t.Fatalf("unexpected serial console presence: got %v want %v args=%v", got, wantConsoleArgs, commandArgs(spec))
 			}
-			if got := spec.Stdin == os.Stdin; got != tt.wantConsoleArgs {
-				t.Fatalf("unexpected stdin passthrough: got %v want %v", got, tt.wantConsoleArgs)
+			if got := spec.Stdin == os.Stdin; got != tt.wantInteractive {
+				t.Fatalf("unexpected stdin passthrough: got %v want %v", got, tt.wantInteractive)
 			}
-			if got, want := commandProcessGroup(spec), !tt.wantConsoleArgs; got != want {
+			if got, want := commandProcessGroup(spec), !tt.wantInteractive; got != want {
 				t.Fatalf("unexpected process group isolation: got %v want %v", got, want)
 			}
 		})
@@ -4345,9 +4355,7 @@ func validManifest(workingDir string) *manifest.Manifest {
 			SMP: manifest.QEMUSMP{
 				CPUs: manifest.ExplicitCPUs(2),
 			},
-			Console: manifest.QEMUConsole{
-				StdioChardev: true,
-			},
+			Console: manifest.QEMUConsolePrint,
 			Knobs: manifest.QEMUKnobs{
 				NoDefaults:   true,
 				NoUserConfig: true,

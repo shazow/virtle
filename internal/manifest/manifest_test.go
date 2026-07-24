@@ -141,21 +141,22 @@ func TestKernelSerialModesResolveToQEMUConsole(t *testing.T) {
 	tests := []struct {
 		name                 string
 		serial               string
-		wantSerial           bool
+		wantConsole          QEMUConsole
 		wantResolutionErrMsg string
 	}{
 		{
-			name: "default off",
+			name:        "default off",
+			wantConsole: QEMUConsoleOff,
 		},
 		{
-			name:       "print",
-			serial:     KernelSerialPrint,
-			wantSerial: true,
+			name:        "print",
+			serial:      KernelSerialPrint,
+			wantConsole: QEMUConsolePrint,
 		},
 		{
-			name:       "console",
-			serial:     KernelSerialConsole,
-			wantSerial: true,
+			name:        "console",
+			serial:      KernelSerialConsole,
+			wantConsole: QEMUConsoleInteractive,
 		},
 		{
 			name:                 "invalid",
@@ -186,15 +187,12 @@ func TestKernelSerialModesResolveToQEMUConsole(t *testing.T) {
 			}
 
 			qemu := loaded.QEMU
-			if got := qemu.Console.StdioChardev; got != tt.wantSerial {
-				t.Fatalf("unexpected stdio chardev: got %v want %v", got, tt.wantSerial)
-			}
-			if got := qemu.Console.SerialConsole; got != tt.wantSerial {
-				t.Fatalf("unexpected serial console: got %v want %v", got, tt.wantSerial)
+			if got := qemu.Console; got != tt.wantConsole {
+				t.Fatalf("unexpected console mode: got %q want %q", got, tt.wantConsole)
 			}
 			hasKernelConsole := strings.Contains(qemu.Kernel.Params, "console=ttyS0")
-			if hasKernelConsole != tt.wantSerial {
-				t.Fatalf("unexpected kernel params: got %q want console=%v", qemu.Kernel.Params, tt.wantSerial)
+			if hasKernelConsole != tt.wantConsole.Enabled() {
+				t.Fatalf("unexpected kernel params: got %q want console=%v", qemu.Kernel.Params, tt.wantConsole.Enabled())
 			}
 		})
 	}

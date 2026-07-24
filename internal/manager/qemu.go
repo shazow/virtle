@@ -27,9 +27,9 @@ func buildQEMUCommand(manifest *manifest.Manifest, cid int, incoming bool) (*exe
 
 	cmd := executor.Command(qemu.BinaryPath, args, nil)
 	cmd.Dir = manifest.Paths.WorkingDir
-	// A stdio console must stay in the foreground process group to read the terminal.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: !qemu.Console.StdioChardev}
-	if qemu.Console.StdioChardev {
+	// An interactive console must stay in the foreground process group to read the terminal.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: !qemu.Console.Interactive()}
+	if qemu.Console.Interactive() {
 		cmd.Stdin = os.Stdin
 	}
 	cmd.Stdout = os.Stderr
@@ -74,8 +74,12 @@ func buildQEMUArgs(qemu manifest.QEMU, cid int, incoming bool) ([]string, error)
 	args = append(args, "-kernel", qemu.Kernel.Path)
 	args = append(args, "-initrd", qemu.Kernel.InitrdPath)
 
-	if qemu.Console.StdioChardev {
-		args = append(args, "-chardev", "stdio,id=stdio,signal=off")
+	if qemu.Console.Enabled() {
+		chardev := "stdio,id=stdio,signal=off"
+		if qemu.Console.Interactive() {
+			chardev = "stdio,id=stdio,mux=on,signal=off"
+		}
+		args = append(args, "-chardev", chardev)
 	}
 
 	rngTransport, err := resolveQEMUTransport(qemu.Devices.RNG.Transport)
@@ -91,7 +95,7 @@ func buildQEMUArgs(qemu manifest.QEMU, cid int, incoming bool) ([]string, error)
 		args = append(args, "-smbios", fmt.Sprintf("type=1,uuid=%s", qemu.MachineID))
 	}
 
-	if qemu.Console.SerialConsole {
+	if qemu.Console.Enabled() {
 		args = append(args, "-serial", "chardev:stdio")
 	}
 	if qemu.CPU.EnableKVM {

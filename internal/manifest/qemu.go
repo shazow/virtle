@@ -67,9 +67,20 @@ func (c CPUCount) QEMUValue() int {
 	return 0
 }
 
-type QEMUConsole struct {
-	StdioChardev  bool `json:"stdioChardev,omitempty"`
-	SerialConsole bool `json:"serialConsole,omitempty"`
+type QEMUConsole string
+
+const (
+	QEMUConsoleOff         QEMUConsole = KernelSerialOff
+	QEMUConsolePrint       QEMUConsole = KernelSerialPrint
+	QEMUConsoleInteractive QEMUConsole = KernelSerialConsole
+)
+
+func (c QEMUConsole) Enabled() bool {
+	return c == QEMUConsolePrint || c == QEMUConsoleInteractive
+}
+
+func (c QEMUConsole) Interactive() bool {
+	return c == QEMUConsoleInteractive
 }
 
 type QEMUKnobs struct {

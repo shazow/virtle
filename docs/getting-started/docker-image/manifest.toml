@@ -1,0 +1,21 @@
+networks = []
+
+[machine]
+memory = 512
+vcpu = 8
+
+[kernel]
+path = "vmlinuz"
+initrd_path = "initramfs"
+serial = "console"
+params = [
+  "root=/dev/vda",
+  "ro",
+  "rootfstype=ext4",
+]
+
+[[mounts]]
+type = "image"
+source = "root.raw"
+read_only = true
+image.format = "raw"

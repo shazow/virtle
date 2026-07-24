@@ -1,0 +1,5 @@
+# Skip OpenRC and launch a root shell on virtle's serial console.
+ttyS0::respawn:/sbin/getty -n -l /bin/sh -L 115200 ttyS0 dumb
+
+::ctrlaltdel:/sbin/reboot
+::shutdown:/bin/umount -a -r

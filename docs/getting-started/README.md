@@ -1,16 +1,13 @@
 # Getting started
 
-Here's how to boot a custom VM image with virtle.
+If you're a nix user, check out these declarative flake examples, see:
+- [NixOS with SSH provisioning](nixos/README.md) (similar to what [agentspace](https://github.com/shazow/agentspace) does)
+- [Alpine VM](nix-alpine/README.md) (boots super fast, under 400ms)
+- [Protytype: Tiny NixOS](nixos-tiny/README.md) (messy flake trying to replicate some of Alpine's tiny VM properties, for fun!)
 
-For fully declarative examples, see the [NixOS guide](nixos/README.md), the
-[tiny NixOS console guide](nixos-tiny/README.md), and the [console-only
-Alpine guide](nix-alpine/README.md).
-
-Feel free to create the VM image any way you like. Here's an example:
+To try virtle, we need a VM that QEMU can boot. Feel free to create the VM image any way you like. Here's an example:
 
 ```sh
-mkdir virtle-ubuntu && cd virtle-ubuntu
-
 base=https://cloud-images.ubuntu.com/minimal/releases/resolute/release
 image=ubuntu-26.04-minimal-cloudimg-amd64.img
 
@@ -47,6 +44,8 @@ type = "image"
 source = "root.qcow2"
 image.format = "qcow2"
 ```
+
+See [examples/manifest-full.toml](https://github.com/shazow/virtle/blob/main/examples/manifest-full.toml) for all the options available.
 
 Validate the manifest and boot the VM:
 

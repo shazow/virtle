@@ -4,9 +4,7 @@ If you're a nix user, check out these declarative flake examples, see:
 - [NixOS with SSH provisioning](nixos/README.md) (similar to what [agentspace](https://github.com/shazow/agentspace) does)
 - [Alpine VM](nix-alpine/README.md) (boots super fast, under 400ms)
 - [Protytype: Tiny NixOS](nixos-tiny/README.md) (messy flake trying to replicate some of Alpine's tiny VM properties, for fun!)
-
-To see how a container root filesystem becomes a VM disk, try the
-[Docker image example](docker-image/README.md).
+- [Migrate any Docker image to a VM](docker-image/README.md) (we use the Alpine base image again, but we modify it!)
 
 To try virtle, we need a VM that QEMU can boot. Feel free to create the VM image any way you like. Here's an example:
 

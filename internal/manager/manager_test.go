@@ -266,7 +266,7 @@ func TestManagerPlanUsesDefaultConfig(t *testing.T) {
 	}
 }
 
-func TestManagerLaunchSequenceAndTeardownOrder(t *testing.T) {
+func TestManagerLaunchSIGTERMSequenceAndTeardownOrder(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
 	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
@@ -315,10 +315,10 @@ func TestManagerLaunchSequenceAndTeardownOrder(t *testing.T) {
 		t.Fatalf("write external path: %v", err)
 	}
 
-	cancelCtx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	runner := &launchRunner{cancel: cancel}
+	signalCh := make(chan os.Signal, 1)
+	runner := &launchRunner{cancel: func() {
+		signalCh <- syscall.SIGTERM
+	}}
 	qmpClient := &fakeQMPClient{
 		onQuit: func() {
 			runner.exitQEMU(nil)
@@ -348,9 +348,10 @@ func TestManagerLaunchSequenceAndTeardownOrder(t *testing.T) {
 		qmpRetryDelay:     0,
 		qmpConnectTimeout: time.Millisecond,
 		qmpQuitTimeout:    time.Millisecond,
+		signals:           signalCh,
 	}
 
-	err := manager.launch(cancelCtx, cfg, nil)
+	err := manager.launch(context.Background(), cfg, nil)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context cancellation, got %v", err)
 	}

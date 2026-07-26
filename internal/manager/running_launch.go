@@ -12,6 +12,7 @@ import (
 var errRuntimeNotStarted = errors.New("runtime is not started")
 
 type runningLaunch struct {
+	ctx            context.Context
 	runtime        *runtimepkg.Core
 	plan           *launch.Plan
 	stats          *launch.Stats
@@ -32,8 +33,12 @@ func (m *manager) waitForRunningLaunch(ctx context.Context, running *runningLaun
 	if running == nil {
 		return &launch.StageError{Stage: "runtime wait", Err: errRuntimeNotStarted}
 	}
+	waitCtx := ctx
+	if running.ctx != nil {
+		waitCtx = running.ctx
+	}
 	waitPlan := launch.PlanForWaitMode(running.plan, mode)
-	err := m.waitForLaunchForeground(ctx, waitPlan, running.stats, running.qmp, running.lifecycle, running.suspendHandler, running.processes)
+	err := m.waitForLaunchForeground(waitCtx, waitPlan, running.stats, running.qmp, running.lifecycle, running.suspendHandler, running.processes)
 	if err != nil && launch.IsSavedSuspendExit(err) && running.runtime != nil {
 		running.runtime.MarkSavedSuspend()
 	}

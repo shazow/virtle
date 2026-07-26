@@ -155,6 +155,7 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 		SavedSuspendExit: launch.IsSavedSuspendExit,
 	})
 	started = &runningLaunch{
+		ctx:            launchCtx,
 		runtime:        runtime,
 		plan:           plan,
 		stats:          stats,

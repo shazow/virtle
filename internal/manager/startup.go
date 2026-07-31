@@ -116,7 +116,6 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 	if qmp == nil {
 		return nil, launch.WrapFixedStage("vm startup")(errors.New("qmp client is required"))
 	}
-	qmp = qmpclient.Serialized(qmp)
 	stats.Timer(launch.TimerQMPReady, time.Now())
 	qemu.SetShutdown(func() error {
 		return qmp.Quit(m.effectiveQMPQuitTimeout())

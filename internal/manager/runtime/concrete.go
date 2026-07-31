@@ -41,7 +41,7 @@ func New(config RuntimeConfig) *Core {
 		paths:            config.Paths,
 		cid:              config.CID,
 		stats:            config.Stats,
-		qmp:              qmpclient.Serialized(config.QMP),
+		qmp:              config.QMP,
 		suspendRequests:  config.SuspendRequests,
 		qmpTimeout:       config.QMPTimeout,
 		logger:           config.Logger,

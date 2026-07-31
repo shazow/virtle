@@ -154,18 +154,6 @@ func ControlStats(stats *Stats) control.RuntimeStats {
 	return resp
 }
 
-func (s *Stats) time(event TimerEvent) time.Time {
-	return s.snapshot().time(event)
-}
-
-func (s *Stats) count(event TimerEvent) int {
-	return s.snapshot().count(event)
-}
-
-func (s *Stats) sshReady() time.Time {
-	return s.snapshot().sshReady()
-}
-
 func (s *Stats) snapshot() statsSnapshot {
 	if s == nil {
 		return statsSnapshot{}

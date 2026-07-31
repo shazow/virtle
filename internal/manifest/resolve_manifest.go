@@ -235,10 +235,6 @@ func (d Document) resolveQEMU(host HostInput, hostName string, workingDir string
 		MachineID:       stringValue(d.Machine.ID),
 		PassthroughArgs: qemuPassthroughArgs(d.QEMU, qemuExec),
 	}
-	if d.Machine.Type != "" && d.Machine.Type == machineType {
-		// The public schema intentionally keeps machine identity separate
-		// from SMBIOS identity for now.
-	}
 	return qemu, nil
 }
 

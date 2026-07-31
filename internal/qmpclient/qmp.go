@@ -13,13 +13,6 @@ import (
 	rawQMP "github.com/digitalocean/go-qemu/qmp/raw"
 )
 
-const (
-	defaultQMPRetryDelay       = 200 * time.Millisecond
-	defaultQMPConnectTimeout   = 500 * time.Millisecond
-	defaultQMPQuitTimeout      = 500 * time.Millisecond
-	defaultQMPMigrationTimeout = 30 * time.Second
-)
-
 // RawRunner runs raw QMP monitor commands.
 type RawRunner interface {
 	WithRaw(timeout time.Duration, fn func(*rawQMP.Monitor) error) error

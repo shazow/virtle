@@ -3,6 +3,7 @@ package manifest
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -75,7 +76,7 @@ func decodeJSON(data []byte, doc *Document) error {
 		return fmt.Errorf("decode manifest: %w", err)
 	}
 	if err := decoder.Decode(&struct{}{}); err != nil {
-		if err.Error() == "EOF" {
+		if errors.Is(err, io.EOF) {
 			return nil
 		}
 		return fmt.Errorf("decode manifest: %w", err)

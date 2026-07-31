@@ -28,7 +28,7 @@ func ReadToken(reader io.Reader, expected string) error {
 			if token != "" && !strings.HasPrefix(expected, token) {
 				return fmt.Errorf("unexpected readiness token %q", TruncateToken(token))
 			}
-			if data.Len() > tokenLimit && !strings.HasPrefix(expected, token) {
+			if data.Len() > tokenLimit {
 				return fmt.Errorf("unexpected readiness token %q", TruncateToken(token))
 			}
 		}

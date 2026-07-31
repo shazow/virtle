@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -385,13 +386,17 @@ func TestResolveManifestPathRequiresExplicitOrDefaultManifest(t *testing.T) {
 	}
 }
 
-func TestLoadLaunchManifestPersistsAbsoluteWorkingDir(t *testing.T) {
+func TestLoadLaunchManifestResolvesWorkingDirAgainstProcessCWD(t *testing.T) {
 	tmpDir := t.TempDir()
 	manifestPath := filepath.Join(tmpDir, "manifest.json")
-	if err := os.WriteFile(manifestPath, []byte(testManifestJSON(".")), 0o644); err != nil {
+	original := []byte(testManifestJSON("."))
+	if err := os.WriteFile(manifestPath, original, 0o644); err != nil {
 		t.Fatalf("write manifest: %v", err)
 	}
 
+	// A relative working_dir follows the process working directory, so the
+	// same manifest run from elsewhere takes that directory's relative paths.
+	otherDir := t.TempDir()
 	oldDir, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("get cwd: %v", err)
@@ -401,30 +406,64 @@ func TestLoadLaunchManifestPersistsAbsoluteWorkingDir(t *testing.T) {
 			t.Fatalf("restore cwd: %v", err)
 		}
 	}()
-	if err := os.Chdir(tmpDir); err != nil {
+	if err := os.Chdir(otherDir); err != nil {
 		t.Fatalf("chdir: %v", err)
 	}
+	wantDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get cwd after chdir: %v", err)
+	}
 
-	manifest, err := loadLaunchManifest("manifest.json", slog.New(slog.DiscardHandler))
+	loaded, err := loadLaunchManifest(manifestPath, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatalf("load launch manifest: %v", err)
 	}
-	if manifest.Paths.WorkingDir != tmpDir {
-		t.Fatalf("unexpected working dir: got %q want %q", manifest.Paths.WorkingDir, tmpDir)
+	if loaded.Paths.WorkingDir != wantDir {
+		t.Fatalf("unexpected working dir: got %q want %q", loaded.Paths.WorkingDir, wantDir)
+	}
+	if loaded.Paths.WorkingDir == tmpDir {
+		t.Fatalf("working dir must not anchor to the manifest directory %q", tmpDir)
 	}
 
+	// Loading must never write to the manifest, whatever the working dir.
 	data, err := os.ReadFile(manifestPath)
 	if err != nil {
-		t.Fatalf("read updated manifest: %v", err)
+		t.Fatalf("read manifest: %v", err)
 	}
-	var document struct {
-		WorkingDir string `json:"working_dir"`
+	if !bytes.Equal(data, original) {
+		t.Fatalf("manifest file was modified by loading it")
 	}
-	if err := json.Unmarshal(data, &document); err != nil {
-		t.Fatalf("decode updated manifest: %v", err)
+}
+
+func TestLoadManifestLeavesReadOnlyManifestIntact(t *testing.T) {
+	tmpDir := t.TempDir()
+	manifestPath := filepath.Join(tmpDir, "manifest.json")
+	original := []byte(testManifestJSON("."))
+	if err := os.WriteFile(manifestPath, original, 0o400); err != nil {
+		t.Fatalf("write manifest: %v", err)
 	}
-	if document.WorkingDir != tmpDir {
-		t.Fatalf("unexpected persisted working dir: got %q want %q", document.WorkingDir, tmpDir)
+
+	// Every loader path must cope with a manifest the user made read-only.
+	if _, err := loadManifest(manifestPath); err != nil {
+		t.Fatalf("load manifest: %v", err)
+	}
+	if _, err := loadLaunchManifest(manifestPath, slog.New(slog.DiscardHandler)); err != nil {
+		t.Fatalf("load launch manifest: %v", err)
+	}
+
+	info, err := os.Stat(manifestPath)
+	if err != nil {
+		t.Fatalf("stat manifest: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o400 {
+		t.Fatalf("manifest permissions changed: got %o want 400", got)
+	}
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	if !bytes.Equal(data, original) {
+		t.Fatalf("manifest file was modified by loading it")
 	}
 }
 

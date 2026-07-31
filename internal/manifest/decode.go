@@ -42,33 +42,6 @@ func DecodeDocumentBytes(data []byte, name string) (Document, error) {
 	return doc, nil
 }
 
-func UpdateWorkingDirBytes(data []byte, name string, workingDir string) ([]byte, error) {
-	var doc Document
-	isTOML := manifestLooksTOML(data, name)
-	var err error
-	if isTOML {
-		err = decodeTOML(data, &doc)
-	} else {
-		err = decodeJSON(data, &doc)
-	}
-	if err != nil {
-		return nil, err
-	}
-	doc.WorkingDir = workingDir
-	if isTOML {
-		var out bytes.Buffer
-		if err := toml.NewEncoder(&out).Encode(doc); err != nil {
-			return nil, fmt.Errorf("encode manifest: %w", err)
-		}
-		return out.Bytes(), nil
-	}
-	updated, err := json.MarshalIndent(doc, "", "  ")
-	if err != nil {
-		return nil, fmt.Errorf("encode manifest: %w", err)
-	}
-	return append(updated, '\n'), nil
-}
-
 func decodeJSON(data []byte, doc *Document) error {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()

@@ -18,6 +18,11 @@ var (
 
 const bytesPerMiB int64 = 1024 * 1024
 
+// maxConsecutiveFailures bounds how many consecutive cycle failures (QMP
+// transport errors, stale or missing guest stats) the controller tolerates
+// before giving up. Transient hiccups must not permanently disable ballooning.
+const maxConsecutiveFailures = 5
+
 type notifier interface {
 	Notify(ctx context.Context, state string, message string, values map[string]string)
 }
@@ -52,6 +57,9 @@ type controller struct {
 	QMPTimeout time.Duration
 	Now        func() time.Time
 	Notifier   notifier
+	// PollInterval overrides Config.PollIntervalSeconds for the host-side
+	// sampling ticker; tests use it for sub-second cycles.
+	PollInterval time.Duration
 }
 
 type controllerState struct {
@@ -81,9 +89,10 @@ func (c *controller) Run(ctx context.Context) error {
 		return err
 	}
 
-	ticker := time.NewTicker(time.Duration(c.Config.PollIntervalSeconds) * time.Second)
+	ticker := time.NewTicker(c.pollInterval())
 	defer ticker.Stop()
 
+	failures := 0
 	for {
 		select {
 		case <-ctx.Done():
@@ -91,25 +100,38 @@ func (c *controller) Run(ctx context.Context) error {
 		case <-ticker.C:
 		}
 
-		actual, stats, err := c.readSample(qomPath)
-		if err != nil {
-			return err
-		}
-
-		target, apply, err := evaluate(c.Config, &state, now(), actual.ActualBytes, stats)
-		if err != nil {
-			return err
-		}
-		if !apply {
+		if err := c.tick(ctx, qomPath, &state, now); err != nil {
+			failures++
+			if failures >= maxConsecutiveFailures {
+				return fmt.Errorf("%d consecutive failures: %w", failures, err)
+			}
+			c.Logger.Warn("balloon controller cycle failed; retrying", "err", err, "consecutive_failures", failures)
 			continue
 		}
-
-		if err := c.Session.SetBalloonLogicalSize(c.QMPTimeout, target); err != nil {
-			return err
-		}
-		c.notifyResize(ctx, actual.ActualBytes, target)
-		c.Logger.Info("balloon controller set guest memory", "target_mib", target/bytesPerMiB)
+		failures = 0
 	}
+}
+
+func (c *controller) tick(ctx context.Context, qomPath string, state *controllerState, now func() time.Time) error {
+	actual, stats, err := c.readSample(qomPath)
+	if err != nil {
+		return err
+	}
+
+	target, apply, err := evaluate(c.Config, state, now(), actual.ActualBytes, stats)
+	if err != nil {
+		return err
+	}
+	if !apply {
+		return nil
+	}
+
+	if err := c.Session.SetBalloonLogicalSize(c.QMPTimeout, target); err != nil {
+		return err
+	}
+	c.notifyResize(ctx, actual.ActualBytes, target)
+	c.Logger.Info("balloon controller set guest memory", "target_mib", target/bytesPerMiB)
+	return nil
 }
 
 func (c *controller) notifyResize(ctx context.Context, actualBytes int64, targetBytes int64) {
@@ -134,7 +156,7 @@ func balloonResizeMessage(actualBytes int64, targetBytes int64) string {
 func formatMemorySize(bytes int64) string {
 	mib := bytes / bytesPerMiB
 	if mib%1024 == 0 {
-		return fmt.Sprintf("%dGB", mib/1024)
+		return fmt.Sprintf("%dGiB", mib/1024)
 	}
 	return fmt.Sprintf("%dMiB", mib)
 }
@@ -213,6 +235,13 @@ func (c *controller) readSample(qomPath string) (info, guestStatsSample, error) 
 		HasAvailableMemory:   ok,
 		LastUpdate:           stats.LastUpdate,
 	}, nil
+}
+
+func (c *controller) pollInterval() time.Duration {
+	if c.PollInterval > 0 {
+		return c.PollInterval
+	}
+	return time.Duration(c.Config.PollIntervalSeconds) * time.Second
 }
 
 func (c *controller) nowFunc() func() time.Time {

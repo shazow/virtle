@@ -920,8 +920,10 @@ func resolveBalloon(facts *BalloonInput, transport string) *balloon.Device {
 		return nil
 	}
 	device := &balloon.Device{
+		ID:                "balloon0",
+		Transport:         transport,
 		DeflateOnOOM:      facts.DeflateOnOOM,
-		FreePageReporting: facts.FreePageReporting,
+		FreePageReporting: boolValueDefault(facts.FreePageReporting, true),
 	}
 	if facts.Controller != nil {
 		device.Controller = &balloon.ControllerConfig{
@@ -934,20 +936,7 @@ func resolveBalloon(facts *BalloonInput, transport string) *balloon.Device {
 			ReclaimHoldoffSeconds: facts.Controller.ReclaimHoldoffSeconds,
 		}
 	}
-	if device == nil {
-		return nil
-	}
-	copy := *device
-	if copy.ID == "" {
-		copy.ID = "balloon0"
-	}
-	if copy.Transport == "" {
-		copy.Transport = transport
-	}
-	if !copy.FreePageReporting {
-		copy.FreePageReporting = true
-	}
-	return &copy
+	return device
 }
 
 func resolveWriteFiles(files []WriteFileInput) WriteFiles {

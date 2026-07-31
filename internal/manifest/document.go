@@ -236,9 +236,10 @@ type PortEndpoint struct {
 }
 
 type BalloonInput struct {
-	Enabled           bool                    `json:"enabled,omitempty" toml:"enabled" jsonschema:"description=Enable the virtio memory balloon device."`
-	DeflateOnOOM      bool                    `json:"deflate_on_oom,omitempty" toml:"deflate_on_oom" jsonschema:"description=Allow the guest to deflate the balloon under out-of-memory pressure."`
-	FreePageReporting bool                    `json:"free_page_reporting,omitempty" toml:"free_page_reporting" jsonschema:"description=Enable free page reporting for the balloon device."`
+	Enabled      bool `json:"enabled,omitempty" toml:"enabled" jsonschema:"description=Enable the virtio memory balloon device."`
+	DeflateOnOOM bool `json:"deflate_on_oom,omitempty" toml:"deflate_on_oom" jsonschema:"description=Allow the guest to deflate the balloon under out-of-memory pressure."`
+	// Pointer preserves omitted vs explicitly false input until resolution.
+	FreePageReporting *bool                   `json:"free_page_reporting,omitempty" toml:"free_page_reporting" jsonschema:"description=Enable free page reporting for the balloon device; defaults to enabled."`
 	Controller        *BalloonControllerInput `json:"controller,omitempty" toml:"controller" jsonschema:"description=Optional host-side balloon controller thresholds and polling settings."`
 }
 

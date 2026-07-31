@@ -211,7 +211,7 @@ func (m *manager) waitForLaunchForeground(
 			if m.logger != nil {
 				m.logger.Info("ssh command hint template failed", "err", err)
 			}
-		} else if hint := sshtools.CommandHint(sshtools.Config{Exec: argv, User: plan.Manifest.SSH.User}, plan.CID); hint != "" {
+		} else if hint := (sshtools.Config{Exec: argv, User: plan.Manifest.SSH.User}).Hint(plan.CID); hint != "" {
 			fmt.Fprintf(m.outputWriter(), "connect with: %s\n", hint)
 		}
 	}

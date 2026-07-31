@@ -101,7 +101,7 @@ func TestBuildSSHCommandRendersManifestExecTemplates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build ssh command hint: %v", err)
 	}
-	if got, want := hint, "/bin/ssh -S control-10 -o 'HostName=agent@vsock/10' agent@vsock/10"; got != want {
+	if got, want := hint, "/bin/ssh -S control-10 -o HostName=agent@vsock/10 agent@vsock/10"; got != want {
 		t.Fatalf("unexpected rendered ssh hint: got %q want %q", got, want)
 	}
 }

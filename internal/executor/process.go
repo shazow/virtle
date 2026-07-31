@@ -90,12 +90,18 @@ func (p *Process) PollExit() (bool, error) {
 }
 
 // SetShutdown installs a graceful shutdown callback tried before SIGTERM.
+// It must be called before Stop may run concurrently; the field is not
+// synchronized.
 func (p *Process) SetShutdown(shutdown func() error) {
 	if p == nil {
 		return
 	}
 	p.shutdown = shutdown
 }
+
+// minKillWait bounds how long Stop waits for a SIGKILLed process to be
+// reaped before giving up on it.
+const minKillWait = time.Second
 
 // Stop gracefully stops the process, escalating to Kill after delay.
 func (p *Process) Stop(delay time.Duration) error {
@@ -131,7 +137,21 @@ func (p *Process) Stop(delay time.Duration) error {
 		}
 		return fmt.Errorf("kill %s: %w", p.Name(), err)
 	}
-	_ = p.Wait()
+	// Bound the post-kill wait: a process wedged in uninterruptible sleep must
+	// not hang teardown forever. The background Wait goroutine still reaps it
+	// whenever it eventually exits. A floor keeps zero or tiny delays from
+	// racing the asynchronous reaper of a process that did die from SIGKILL.
+	killWait := delay
+	if killWait < minKillWait {
+		killWait = minKillWait
+	}
+	if !p.waitForExit(killWait) {
+		err := fmt.Errorf("kill %s: process did not exit", p.Name())
+		if shutdownErr != nil {
+			return errors.Join(shutdownErr, err)
+		}
+		return err
+	}
 	return shutdownErr
 }
 

@@ -106,3 +106,26 @@ func TestSignalProcessGroupIgnoresNonPositivePID(t *testing.T) {
 		}
 	}
 }
+
+func TestStopBoundsPostKillWait(t *testing.T) {
+	// A process that ignores SIGTERM and SIGKILL (e.g. wedged in
+	// uninterruptible sleep) must not hang Stop forever.
+	fake := &executortest.Process{OverrideName: "wedged", IgnoreSignals: true, IgnoreKill: true}
+	process := executor.Wrap(fake)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- process.Stop(10 * time.Millisecond)
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "process did not exit") {
+			t.Fatalf("expected bounded-wait error, got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop did not return for an unkillable process")
+	}
+
+	fake.Complete(nil)
+}

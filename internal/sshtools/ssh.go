@@ -147,11 +147,13 @@ func ClassifyFailure(err error, stderr string) Failure {
 	if message == "" {
 		return FailureNone
 	}
+	// Only match phrases that state a definitive authentication failure. The
+	// bare method list "publickey,password" also appears in ordinary verbose
+	// negotiation output, so it must not be treated as an auth failure.
 	for _, authMessage := range []string{
 		"permission denied (publickey",
 		"permission denied, please try again",
 		"no more authentication methods to try",
-		"publickey,password",
 	} {
 		if strings.Contains(message, authMessage) {
 			return FailureAuthentication
@@ -317,7 +319,7 @@ type KeyStore struct {
 }
 
 func (s KeyStore) Ensure() (Key, error) {
-	if err := os.MkdirAll(s.Dir, 0o755); err != nil {
+	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
 		return Key{}, fmt.Errorf("create ssh key directory %q: %w", s.Dir, err)
 	}
 

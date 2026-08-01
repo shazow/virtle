@@ -48,7 +48,7 @@
         },
         "free_page_reporting": {
           "type": "boolean",
-          "description": "Enable free page reporting for the balloon device."
+          "description": "Enable free page reporting for the balloon device; defaults to enabled."
         },
         "controller": {
           "$ref": "#/$defs/BalloonControllerInput",

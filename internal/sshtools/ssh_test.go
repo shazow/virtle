@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-func TestBuildArgsAndHint(t *testing.T) {
+func TestNewCommandAndHint(t *testing.T) {
 	cfg := Config{Exec: []string{"/bin/ssh", "-q"}, User: "agent"}
 	command, err := NewCommand(cfg, 10, []string{"bash", "-lc", "echo hi"})
 	if err != nil {
@@ -20,19 +20,14 @@ func TestBuildArgsAndHint(t *testing.T) {
 	if command.Path != "/bin/ssh" {
 		t.Fatalf("unexpected command path %q", command.Path)
 	}
-	if got, want := command.String(), "/bin/ssh -tt -q agent@vsock/10 'bash -lc '\\''echo hi'\\'''"; got != want {
+	if got, want := command.String(), "/bin/ssh -tt -q agent@vsock/10 'bash -lc '\\''echo hi'\\'"; got != want {
 		t.Fatalf("unexpected command string: got %q want %q", got, want)
 	}
-
-	path, args := BuildArgs(cfg, 10, []string{"bash", "-lc", "echo hi"})
-	if path != "/bin/ssh" {
-		t.Fatalf("unexpected path %q", path)
-	}
 	wantArgs := []string{"-tt", "-q", "agent@vsock/10", "bash -lc 'echo hi'"}
-	if !reflect.DeepEqual(args, wantArgs) {
-		t.Fatalf("unexpected args: got %v want %v", args, wantArgs)
+	if !reflect.DeepEqual(command.Args, wantArgs) {
+		t.Fatalf("unexpected args: got %v want %v", command.Args, wantArgs)
 	}
-	if got, want := CommandHint(cfg, 10), "/bin/ssh -q agent@vsock/10"; got != want {
+	if got, want := cfg.Hint(10), "/bin/ssh -q agent@vsock/10"; got != want {
 		t.Fatalf("unexpected hint: got %q want %q", got, want)
 	}
 	if got, want := cfg.Destination(10), "agent@vsock/10"; got != want {
@@ -44,28 +39,22 @@ func TestNewCommandRejectsEmptyExec(t *testing.T) {
 	if _, err := NewCommand(Config{User: "agent"}, 10, nil); err == nil {
 		t.Fatalf("expected empty exec error")
 	}
-	path, args := BuildArgs(Config{User: "agent"}, 10, nil)
-	if path != "" || args != nil {
-		t.Fatalf("expected empty BuildArgs result, got path=%q args=%v", path, args)
-	}
 }
 
-func TestBuildArgsQuotesTildeRemoteArguments(t *testing.T) {
+func TestNewCommandQuotesTildeRemoteArguments(t *testing.T) {
 	cfg := Config{Exec: []string{"/bin/ssh"}, User: "agent"}
-	_, args := BuildArgs(cfg, 10, []string{"printf", "%s\n", "~", "~/file", "~user/file"})
+	command, err := NewCommand(cfg, 10, []string{"printf", "%s\n", "~", "~/file", "~user/file"})
+	if err != nil {
+		t.Fatalf("NewCommand: %v", err)
+	}
 	want := "printf '%s\n' \\~ \\~/file \\~user/file"
-	if got := args[len(args)-1]; got != want {
+	if got := command.Args[len(command.Args)-1]; got != want {
 		t.Fatalf("unexpected quoted remote command: got %q want %q", got, want)
 	}
 }
 
 func TestWithIdentity(t *testing.T) {
-	got := WithIdentity([]string{"/bin/ssh"}, "/tmp/id")
 	want := []string{"/bin/ssh", "-i", "/tmp/id", "-o", "IdentitiesOnly=yes"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("unexpected argv: got %v want %v", got, want)
-	}
-
 	cfg := Config{Exec: []string{"/bin/ssh"}, User: "agent"}.WithIdentity("/tmp/id")
 	if !reflect.DeepEqual(cfg.Exec, want) {
 		t.Fatalf("unexpected config argv: got %v want %v", cfg.Exec, want)

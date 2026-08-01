@@ -301,11 +301,6 @@ func templateUsesBareWorkspace(node parse.Node) bool {
 	return false
 }
 
-func pathEscapesBase(path string) bool {
-	cleaned := filepath.Clean(path)
-	return cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator))
-}
-
 func (m *Manifest) SSHRetryDelay(fallback time.Duration) time.Duration {
 	if m == nil {
 		return fallback

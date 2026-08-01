@@ -253,15 +253,6 @@ func (m *Manifest) ResolvedRuns(cid int) ([]ResolvedRun, error) {
 	return runs, nil
 }
 
-func (m *Manifest) HotplugBus(id string) (string, error) {
-	for i, hotplug := range m.Hotplug {
-		if hotplug.ID == id {
-			return fmt.Sprintf("pcie.hotplug.%d", i), nil
-		}
-	}
-	return "", fmt.Errorf("manifest.hotplug id %q not found", id)
-}
-
 func (m *Manifest) ResolvedNotifications() Notifications {
 	resolved := Notifications{
 		States: append([]string(nil), m.Notifications.States...),

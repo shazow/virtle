@@ -158,3 +158,25 @@ func validManifest() *Manifest {
 		CleanupFiles: []string{"fs.sock"},
 	}
 }
+
+func TestResolveBalloonFreePageReporting(t *testing.T) {
+	disabled := false
+	device := resolveBalloon(&BalloonInput{Enabled: true, FreePageReporting: &disabled}, "pci")
+	if device == nil {
+		t.Fatalf("expected balloon device")
+	}
+	if device.FreePageReporting {
+		t.Fatalf("expected free_page_reporting=false to be honored")
+	}
+
+	device = resolveBalloon(&BalloonInput{Enabled: true}, "pci")
+	if device == nil {
+		t.Fatalf("expected balloon device")
+	}
+	if !device.FreePageReporting {
+		t.Fatalf("expected free page reporting to default to enabled")
+	}
+	if device.ID != "balloon0" || device.Transport != "pci" {
+		t.Fatalf("unexpected device identity: %+v", device)
+	}
+}

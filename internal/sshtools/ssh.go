@@ -51,32 +51,13 @@ func NewCommand(cfg Config, cid int, remoteCommand []string) (Command, error) {
 	return command, nil
 }
 
-func BuildArgs(cfg Config, cid int, remoteCommand []string) (path string, args []string) {
-	command, err := NewCommand(cfg, cid, remoteCommand)
-	if err != nil {
-		return "", nil
-	}
-	return command.Path, command.Args
-}
-
-func CommandHint(cfg Config, cid int) string {
-	return cfg.Hint(cid)
-}
-
 func (cfg Config) WithIdentity(identityFile string) Config {
+	exec := append([]string(nil), cfg.Exec...)
+	exec = append(exec, "-i", identityFile, "-o", "IdentitiesOnly=yes")
 	return Config{
-		Exec: AddIdentity(cfg.Exec, identityFile),
+		Exec: exec,
 		User: cfg.User,
 	}
-}
-
-func WithIdentity(argv []string, identityFile string) []string {
-	return AddIdentity(argv, identityFile)
-}
-
-func AddIdentity(argv []string, identityFile string) []string {
-	withIdentity := append([]string(nil), argv...)
-	return append(withIdentity, "-i", identityFile, "-o", "IdentitiesOnly=yes")
 }
 
 func (cfg Config) Destination(cid int) string {
@@ -108,22 +89,10 @@ func (c Command) String() string {
 	return shellDisplayJoin(c.Argv()...)
 }
 
+// shellDisplayJoin quotes args for display with the same library used when
+// encoding the remote command, so hints stay safe to copy-paste into a shell.
 func shellDisplayJoin(args ...string) string {
-	quoted := make([]string, 0, len(args))
-	for _, arg := range args {
-		quoted = append(quoted, shellDisplayQuote(arg))
-	}
-	return strings.Join(quoted, " ")
-}
-
-func shellDisplayQuote(arg string) string {
-	if arg == "" {
-		return "''"
-	}
-	if strings.ContainsAny(arg, " \t\n'\"\\$&|;()<>*?[#~=%!") {
-		return "'" + strings.ReplaceAll(arg, "'", "'\\''") + "'"
-	}
-	return arg
+	return shellquote.Join(args...)
 }
 
 type Failure int
@@ -147,11 +116,13 @@ func ClassifyFailure(err error, stderr string) Failure {
 	if message == "" {
 		return FailureNone
 	}
+	// Only match phrases that state a definitive authentication failure. The
+	// bare method list "publickey,password" also appears in ordinary verbose
+	// negotiation output, so it must not be treated as an auth failure.
 	for _, authMessage := range []string{
 		"permission denied (publickey",
 		"permission denied, please try again",
 		"no more authentication methods to try",
-		"publickey,password",
 	} {
 		if strings.Contains(message, authMessage) {
 			return FailureAuthentication
@@ -317,7 +288,7 @@ type KeyStore struct {
 }
 
 func (s KeyStore) Ensure() (Key, error) {
-	if err := os.MkdirAll(s.Dir, 0o755); err != nil {
+	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
 		return Key{}, fmt.Errorf("create ssh key directory %q: %w", s.Dir, err)
 	}
 

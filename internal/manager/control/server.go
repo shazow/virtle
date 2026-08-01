@@ -44,24 +44,6 @@ func Listen(path string) (net.Listener, error) {
 }
 
 // Serve handles control requests from l until the listener closes.
-func Serve(l net.Listener, h *Router) error {
-	server, err := NewServer(h)
-	if err != nil {
-		return err
-	}
-	return server.Serve(l)
-}
-
-// ListenAndServe opens path and serves control requests for h.
-func ListenAndServe(path string, h *Router) error {
-	listener, err := Listen(path)
-	if err != nil {
-		return err
-	}
-	return Serve(listener, h)
-}
-
-// Serve handles control requests from l until the listener closes.
 func (s *Server) Serve(l net.Listener) error {
 	if s.handler == nil {
 		return fmt.Errorf("control handler is required")

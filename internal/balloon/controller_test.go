@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 )
@@ -298,11 +299,109 @@ func TestControllerNotifiesAfterSuccessfulResize(t *testing.T) {
 	if call.state != "balloon:resize" {
 		t.Fatalf("unexpected notification state: got %q", call.state)
 	}
-	if call.message != "Growing guest memory to 6GB" {
+	if call.message != "Growing guest memory to 6GiB" {
 		t.Fatalf("unexpected notification message: got %q", call.message)
 	}
 	if call.values["target_mib"] != "6144" || call.values["delta_mib"] != "2048" {
 		t.Fatalf("unexpected notification values: %#v", call.values)
+	}
+}
+
+func TestControllerSurvivesTransientFailures(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	now := time.Now()
+	session := &fakeSession{
+		queryBalloonInfo:      info{ActualBytes: 4 * 1024 * bytesPerMiB},
+		readBalloonStatsFails: maxConsecutiveFailures - 1,
+		readBalloonStats: stats{
+			Stats: map[string]int64{
+				"stat-available-memory": 64 * bytesPerMiB,
+			},
+			LastUpdate: now,
+		},
+		listQOMProperties: map[string][]objectPropertyInfo{
+			"/machine/peripheral/balloon0": {
+				{Name: "guest-stats", Type: "dict"},
+				{Name: "guest-stats-polling-interval", Type: "int"},
+			},
+		},
+	}
+	controller := &controller{
+		Session:      session,
+		Logger:       slog.New(slog.DiscardHandler),
+		DeviceID:     "balloon0",
+		QMPTimeout:   time.Second,
+		PollInterval: 10 * time.Millisecond,
+		Config: ControllerConfig{
+			MinActual:             1024,
+			MaxActual:             8192,
+			GrowBelowAvailable:    128,
+			ReclaimAboveAvailable: 4096,
+			Step:                  2048,
+			PollIntervalSeconds:   1,
+			ReclaimHoldoffSeconds: 1,
+		},
+		Now: func() time.Time { return now },
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- controller.Run(ctx)
+	}()
+	time.Sleep(200 * time.Millisecond)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("run controller: %v", err)
+	}
+
+	if len(session.setBalloonLogicalSizes) == 0 {
+		t.Fatalf("expected controller to recover from transient failures and resize")
+	}
+}
+
+func TestControllerStopsAfterConsecutiveFailures(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	session := &fakeSession{
+		readBalloonStatsErr: errors.New("qmp connection lost"),
+		listQOMProperties: map[string][]objectPropertyInfo{
+			"/machine/peripheral/balloon0": {
+				{Name: "guest-stats", Type: "dict"},
+				{Name: "guest-stats-polling-interval", Type: "int"},
+			},
+		},
+	}
+	controller := &controller{
+		Session:      session,
+		Logger:       slog.New(slog.DiscardHandler),
+		DeviceID:     "balloon0",
+		QMPTimeout:   time.Second,
+		PollInterval: 10 * time.Millisecond,
+		Config: ControllerConfig{
+			MinActual:             1024,
+			MaxActual:             8192,
+			GrowBelowAvailable:    128,
+			ReclaimAboveAvailable: 4096,
+			Step:                  2048,
+			PollIntervalSeconds:   1,
+			ReclaimHoldoffSeconds: 1,
+		},
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- controller.Run(ctx)
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "consecutive failures") {
+			t.Fatalf("expected consecutive failures error, got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("controller did not give up after consecutive failures")
 	}
 }
 
@@ -371,6 +470,7 @@ type fakeSession struct {
 	enableBalloonStatsErr  error
 	readBalloonStats       stats
 	readBalloonStatsErr    error
+	readBalloonStatsFails  int
 	listQOMProperties      map[string][]objectPropertyInfo
 	listQOMPropertiesErr   map[string]error
 }
@@ -410,6 +510,10 @@ func (f *fakeNotifier) Notify(ctx context.Context, state string, message string,
 }
 
 func (f *fakeSession) ReadBalloonStats(timeout time.Duration, qomPath string) (stats, error) {
+	if f.readBalloonStatsFails > 0 {
+		f.readBalloonStatsFails--
+		return stats{}, errors.New("transient qmp failure")
+	}
 	if f.readBalloonStatsErr != nil {
 		return stats{}, f.readBalloonStatsErr
 	}

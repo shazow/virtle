@@ -33,6 +33,7 @@ func TestReadToken(t *testing.T) {
 		{name: "eof", reader: strings.NewReader("SSH-"), wantErr: `unexpected readiness token "SSH-"`},
 		{name: "invalid", reader: strings.NewReader("NOT_READY\n"), wantErr: `unexpected readiness token "NOT_READY"`},
 		{name: "long", reader: strings.NewReader(strings.Repeat("x", 80)), wantErr: strings.Repeat("x", 32)},
+		{name: "whitespace flood", reader: repeatReader{b: ' '}, wantErr: `unexpected readiness token ""`},
 		{name: "read error", reader: errorReader{}, wantErr: "read readiness token: boom"},
 	}
 
@@ -50,6 +51,17 @@ func TestReadToken(t *testing.T) {
 			}
 		})
 	}
+}
+
+// repeatReader yields b forever without EOF; ReadToken must fail once its
+// buffer limit is exceeded rather than accumulate indefinitely.
+type repeatReader struct{ b byte }
+
+func (r repeatReader) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = r.b
+	}
+	return len(p), nil
 }
 
 type errorReader struct{}

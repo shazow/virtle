@@ -59,7 +59,7 @@ func ControllerTask(qmpTimeout time.Duration, session MonitorSession, device *De
 	return func(ctx context.Context) error {
 		err := controller.Run(ctx)
 		if err != nil && !errors.Is(err, context.Canceled) {
-			controller.Logger.Info("balloon controller disabled", "err", err)
+			controller.Logger.Warn("balloon controller stopped", "err", err)
 		}
 		return nil
 	}

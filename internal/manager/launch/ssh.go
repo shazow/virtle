@@ -51,5 +51,5 @@ func buildSSHCommandHint(launchManifest *manifest.Manifest, cid int) (string, er
 	if err != nil {
 		return "", err
 	}
-	return sshtools.CommandHint(sshtools.Config{Exec: argv, User: launchManifest.SSH.User}, cid), nil
+	return sshtools.Config{Exec: argv, User: launchManifest.SSH.User}.Hint(cid), nil
 }

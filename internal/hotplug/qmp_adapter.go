@@ -18,20 +18,39 @@ func (a QMPDeviceAdapter) AttachDevice(ctx context.Context, device Device, bus s
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	successful := 0
-	for _, command := range attachCommands(device, bus) {
-		if err := ctx.Err(); err != nil {
-			a.rollbackAttach(ctx, device, successful)
-			return nil, err
+	plan := planFor(device, bus)
+	started := false
+	rollback := func() {
+		if !started {
+			return
 		}
-		if err := a.Client.RunRaw(a.Timeout, command); err != nil {
-			a.rollbackAttach(ctx, device, successful)
-			return nil, err
+		for _, command := range plan.release {
+			_ = a.Client.RunRaw(a.Timeout, command)
 		}
-		successful++
 	}
+	for _, command := range plan.backend {
+		if err := ctx.Err(); err != nil {
+			rollback()
+			return nil, err
+		}
+		started = true
+		if err := a.Client.RunRaw(a.Timeout, command); err != nil {
+			rollback()
+			return nil, err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		rollback()
+		return nil, err
+	}
+	if err := a.Client.RunRaw(a.Timeout, plan.deviceAdd); err != nil {
+		rollback()
+		return nil, err
+	}
+	// Fully attached: undoing now needs a device_del round trip first, which
+	// DetachDevice does before running the same backend release.
 	return func(ctx context.Context) {
-		a.rollbackAttach(ctx, device, successful)
+		_ = a.DetachDevice(context.WithoutCancel(ctx), device)
 	}, nil
 }
 
@@ -43,24 +62,10 @@ func (a QMPDeviceAdapter) DetachDevice(ctx context.Context, device Device) error
 	if err := a.Client.DeviceDelAndWait(a.Timeout, deviceID); err != nil {
 		return err
 	}
-	for _, command := range detachPostDeviceDelCommands(device) {
+	for _, command := range planFor(device, "").release {
 		if err := a.Client.RunRaw(a.Timeout, command); err != nil {
 			return err
 		}
 	}
 	return nil
-}
-
-func (a QMPDeviceAdapter) rollbackAttach(ctx context.Context, device Device, successful int) {
-	if successful == 0 {
-		return
-	}
-	cleanupCtx := context.WithoutCancel(ctx)
-	if successful == len(attachCommands(device, "")) {
-		_ = a.DetachDevice(cleanupCtx, device)
-		return
-	}
-	for _, command := range rollbackAttachCommands(device, successful) {
-		_ = a.Client.RunRaw(a.Timeout, command)
-	}
 }

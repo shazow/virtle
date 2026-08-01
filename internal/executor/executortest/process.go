@@ -39,6 +39,7 @@ type Process struct {
 	SignalErr     error
 	KillErr       error
 	IgnoreSignals bool
+	IgnoreKill    bool
 
 	OnSignal func(os.Signal)
 	OnKill   func()
@@ -116,7 +117,8 @@ func (p *Process) Signal(sig os.Signal) error {
 	return nil
 }
 
-// Kill records a kill event, invokes OnKill, and completes p.
+// Kill records a kill event, invokes OnKill, and completes p unless
+// IgnoreKill is set.
 func (p *Process) Kill() error {
 	if p == nil {
 		return nil
@@ -128,7 +130,9 @@ func (p *Process) Kill() error {
 	if p.KillErr != nil {
 		return p.KillErr
 	}
-	p.complete(p.WaitErr)
+	if !p.IgnoreKill {
+		p.complete(p.WaitErr)
+	}
 	return nil
 }
 

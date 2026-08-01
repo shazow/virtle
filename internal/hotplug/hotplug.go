@@ -13,9 +13,8 @@ import (
 )
 
 type hotplugDevice interface {
-	Attach() error
-	Detach() error
-	ID() string
+	Attach(ctx context.Context) error
+	Detach(ctx context.Context) error
 }
 
 type Runner struct {
@@ -48,52 +47,50 @@ type GuestRunner interface {
 }
 
 func (r Runner) Attach(ctx context.Context, id string) error {
-	registry, err := r.hotplugRegistry(ctx)
+	hotplug, err := r.find(id)
 	if err != nil {
 		return err
 	}
-	hotplug, err := registry.lookup(id)
-	if err != nil {
-		return err
-	}
-	return hotplug.Attach()
+	return hotplug.Attach(ctx)
 }
 
 func (r Runner) Detach(ctx context.Context, id string) error {
-	registry, err := r.hotplugRegistry(ctx)
+	hotplug, err := r.find(id)
 	if err != nil {
 		return err
 	}
-	hotplug, err := registry.lookup(id)
-	if err != nil {
-		return err
-	}
-	return hotplug.Detach()
+	return hotplug.Detach(ctx)
 }
 
-type hotplugRegistry map[string]hotplugDevice
+// BusName is the PCIe root port a hotplug device with the given manifest
+// index attaches to. It must match the pcie-root-port IDs created at QEMU
+// boot (see buildQEMUArgs in internal/manager).
+func BusName(index int) string {
+	return fmt.Sprintf("pcie.hotplug.%d", index)
+}
 
-func (r Runner) hotplugRegistry(ctx context.Context) (hotplugRegistry, error) {
-	registry := make(hotplugRegistry, len(r.Devices))
+// find resolves only the requested device, so unrelated malformed manifest
+// entries do not block an attach or detach of a valid one.
+func (r Runner) find(id string) (hotplugDevice, error) {
+	found := -1
 	for i, device := range r.Devices {
-		hotplug, err := r.hotplug(ctx, device, i)
-		if err != nil {
-			return nil, err
+		if device.ID != id {
+			continue
 		}
-		if err := registry.add(hotplug); err != nil {
-			return nil, err
+		if found >= 0 {
+			return nil, fmt.Errorf("manifest.hotplug id %q is duplicated", id)
 		}
+		found = i
 	}
-	return registry, nil
-}
-
-func (r Runner) hotplug(ctx context.Context, device Device, index int) (hotplugDevice, error) {
+	if found < 0 {
+		return nil, fmt.Errorf("manifest.hotplug id %q not found", id)
+	}
+	device := r.Devices[found]
 	base := hotplugBase{
-		ctx:    ctx,
 		runner: &r,
 		id:     device.ID,
 		kind:   device.Kind,
-		bus:    fmt.Sprintf("pcie.hotplug.%d", index),
+		bus:    BusName(found),
 	}
 	switch device.Kind {
 	case KindVirtioFS:
@@ -107,36 +104,14 @@ func (r Runner) hotplug(ctx context.Context, device Device, index int) (hotplugD
 	}
 }
 
-func (r hotplugRegistry) add(hotplug hotplugDevice) error {
-	id := hotplug.ID()
-	if _, ok := r[id]; ok {
-		return fmt.Errorf("manifest.hotplug id %q is duplicated", id)
-	}
-	r[id] = hotplug
-	return nil
-}
-
-func (r hotplugRegistry) lookup(id string) (hotplugDevice, error) {
-	hotplug, ok := r[id]
-	if !ok {
-		return nil, fmt.Errorf("manifest.hotplug id %q not found", id)
-	}
-	return hotplug, nil
-}
-
 type hotplugBase struct {
-	ctx    context.Context
 	runner *Runner
 	id     string
 	kind   Kind
 	bus    string
 }
 
-func (h hotplugBase) ID() string {
-	return h.id
-}
-
-func (h hotplugBase) attach(device Device, attachHost func() (*executor.Process, error), detachHost func(*executor.Process)) error {
+func (h hotplugBase) attach(ctx context.Context, device Device, attachHost func(context.Context) (*executor.Process, error), detachHost func(*executor.Process)) error {
 	if detachHost == nil {
 		detachHost = func(*executor.Process) {}
 	}
@@ -152,7 +127,7 @@ func (h hotplugBase) attach(device Device, attachHost func() (*executor.Process,
 
 	var proc *executor.Process
 	if attachHost != nil {
-		proc, err = attachHost()
+		proc, err = attachHost(ctx)
 		if err != nil {
 			return err
 		}
@@ -162,7 +137,7 @@ func (h hotplugBase) attach(device Device, attachHost func() (*executor.Process,
 	if proc != nil {
 		state.PID = proc.PID()
 	}
-	rollbackQMP, err := h.runner.QMP.AttachDevice(h.ctx, device, h.bus)
+	rollbackQMP, err := h.runner.QMP.AttachDevice(ctx, device, h.bus)
 	if err != nil {
 		detachHost(proc)
 		return err
@@ -170,21 +145,21 @@ func (h hotplugBase) attach(device Device, attachHost func() (*executor.Process,
 	if rollbackQMP == nil {
 		rollbackQMP = func(context.Context) {}
 	}
-	if err := h.runner.attachGuest(h.ctx, device); err != nil {
-		rollbackQMP(h.ctx)
+	if err := h.runner.attachGuest(ctx, device); err != nil {
+		rollbackQMP(ctx)
 		detachHost(proc)
 		return err
 	}
 	if err := WriteState(statePath, state); err != nil {
-		_ = h.runner.detachGuest(h.ctx, device)
-		rollbackQMP(h.ctx)
+		_ = h.runner.detachGuest(ctx, device)
+		rollbackQMP(ctx)
 		detachHost(proc)
 		return err
 	}
 	return nil
 }
 
-func (h hotplugBase) detach(device Device, cleanup func(State) error) error {
+func (h hotplugBase) detach(ctx context.Context, device Device, cleanup func(State) error) error {
 	statePath, err := StatePath(h.runner.StateDir, h.id)
 	if err != nil {
 		return err
@@ -201,12 +176,12 @@ func (h hotplugBase) detach(device Device, cleanup func(State) error) error {
 	}
 
 	guestUnmounted := device.Kind == KindVirtioFS && device.VirtioFS.Target != ""
-	if err := h.runner.detachGuest(h.ctx, device); err != nil {
+	if err := h.runner.detachGuest(ctx, device); err != nil {
 		return err
 	}
-	cleanupCtx := h.ctx
+	cleanupCtx := ctx
 	if guestUnmounted {
-		cleanupCtx = context.WithoutCancel(h.ctx)
+		cleanupCtx = context.WithoutCancel(ctx)
 	}
 	if err := h.runner.QMP.DetachDevice(cleanupCtx, device); err != nil {
 		return err
@@ -227,12 +202,12 @@ type hotplugVirtioFS struct {
 	VirtioFS
 }
 
-func (h hotplugVirtioFS) Attach() error {
-	return h.attach(h.device(), h.attachHost, h.detachHost)
+func (h hotplugVirtioFS) Attach(ctx context.Context) error {
+	return h.attach(ctx, h.device(), h.attachHost, h.detachHost)
 }
 
-func (h hotplugVirtioFS) Detach() error {
-	return h.detach(h.device(), func(state State) error {
+func (h hotplugVirtioFS) Detach(ctx context.Context) error {
+	return h.detach(ctx, h.device(), func(state State) error {
 		if state.PID > 0 {
 			if err := h.runner.terminatePID(state.PID); err != nil {
 				return err
@@ -249,8 +224,8 @@ func (h hotplugVirtioFS) device() Device {
 	return Device{Kind: KindVirtioFS, ID: h.id, VirtioFS: h.VirtioFS}
 }
 
-func (h hotplugVirtioFS) attachHost() (*executor.Process, error) {
-	return h.runner.attachVirtioFSHost(h.ctx, h.device())
+func (h hotplugVirtioFS) attachHost(ctx context.Context) (*executor.Process, error) {
+	return h.runner.attachVirtioFSHost(ctx, h.device())
 }
 
 func (h hotplugVirtioFS) detachHost(proc *executor.Process) {
@@ -262,12 +237,12 @@ type hotplugNet struct {
 	Net
 }
 
-func (h hotplugNet) Attach() error {
-	return h.attach(h.device(), nil, nil)
+func (h hotplugNet) Attach(ctx context.Context) error {
+	return h.attach(ctx, h.device(), nil, nil)
 }
 
-func (h hotplugNet) Detach() error {
-	return h.detach(h.device(), nil)
+func (h hotplugNet) Detach(ctx context.Context) error {
+	return h.detach(ctx, h.device(), nil)
 }
 
 func (h hotplugNet) device() Device {
@@ -279,12 +254,12 @@ type hotplugBlock struct {
 	Block
 }
 
-func (h hotplugBlock) Attach() error {
-	return h.attach(h.device(), nil, nil)
+func (h hotplugBlock) Attach(ctx context.Context) error {
+	return h.attach(ctx, h.device(), nil, nil)
 }
 
-func (h hotplugBlock) Detach() error {
-	return h.detach(h.device(), nil)
+func (h hotplugBlock) Detach(ctx context.Context) error {
+	return h.detach(ctx, h.device(), nil)
 }
 
 func (h hotplugBlock) device() Device {
@@ -339,74 +314,65 @@ func (r Runner) terminatePID(pid int) error {
 	return executor.SignalProcessGroup(pid, syscall.SIGTERM)
 }
 
-func attachCommands(device Device, bus string) []string {
+// devicePlan spells out the QMP commands for one device kind. Every sequence
+// is written out per kind; nothing is derived from the attach commands.
+type devicePlan struct {
+	// backend commands run in order before deviceAdd.
+	backend []string
+	// deviceAdd makes the device visible to the guest.
+	deviceAdd string
+	// release tears down this device's backends. It runs both to roll back a
+	// partial attach and, during detach, after device_del has been confirmed.
+	// Those are one sequence rather than two because QEMU is in the same
+	// state at both points: no guest-visible device, backends still present.
+	// A frontend outlives nothing here - device_del never releases a chardev,
+	// netdev, or blockdev node, so the backends always need explicit removal
+	// whether or not a frontend ever existed.
+	release []string
+}
+
+func planFor(device Device, bus string) devicePlan {
 	switch device.Kind {
 	case KindVirtioFS:
-		return virtioFSAttachCommands(device, bus)
+		return virtioFSPlan(device, bus)
 	case KindNet:
-		return netAttachCommands(device, bus)
+		return netPlan(device, bus)
 	case KindBlock:
-		return blockAttachCommands(device, bus)
+		return blockPlan(device, bus)
 	default:
-		return nil
+		return devicePlan{}
 	}
 }
 
-func detachPostDeviceDelCommands(device Device) []string {
-	switch device.Kind {
-	case KindVirtioFS:
-		return []string{qmpCommand("chardev-remove", map[string]any{"id": charID(device.ID)})}
-	case KindNet:
-		return []string{qmpCommand("netdev_del", map[string]any{"id": netdevID(device.ID)})}
-	case KindBlock:
-		return []string{qmpCommand("blockdev-del", map[string]any{"node-name": blockNodeID(device.ID)})}
-	default:
-		return nil
-	}
-}
-
-func rollbackAttachCommands(device Device, successful int) []string {
-	if successful < 1 {
-		return nil
-	}
-	switch device.Kind {
-	case KindVirtioFS:
-		return []string{qmpCommand("chardev-remove", map[string]any{"id": charID(device.ID)})}
-	case KindNet:
-		return []string{qmpCommand("netdev_del", map[string]any{"id": netdevID(device.ID)})}
-	case KindBlock:
-		return []string{qmpCommand("blockdev-del", map[string]any{"node-name": blockNodeID(device.ID)})}
-	default:
-		return nil
-	}
-}
-
-func virtioFSAttachCommands(device Device, bus string) []string {
+func virtioFSPlan(device Device, bus string) devicePlan {
 	id := device.ID
-	return []string{
-		qmpCommand("chardev-add", map[string]any{
-			"id": charID(id),
-			"backend": map[string]any{
-				"type": "socket",
-				"data": map[string]any{
-					"addr":   map[string]any{"type": "unix", "data": map[string]any{"path": device.VirtioFS.SocketPath}},
-					"server": false,
-				},
+	chardevAdd := qmpCommand("chardev-add", map[string]any{
+		"id": charID(id),
+		"backend": map[string]any{
+			"type": "socket",
+			"data": map[string]any{
+				"addr":   map[string]any{"type": "unix", "data": map[string]any{"path": device.VirtioFS.SocketPath}},
+				"server": false,
 			},
-		}),
-		qmpCommand("device_add", map[string]any{
+		},
+	})
+	chardevRemove := qmpCommand("chardev-remove", map[string]any{"id": charID(id)})
+	return devicePlan{
+		backend: []string{chardevAdd},
+		deviceAdd: qmpCommand("device_add", map[string]any{
 			"driver":  "vhost-user-fs-pci",
 			"id":      qemuDeviceID(id),
 			"chardev": charID(id),
 			"tag":     id,
 			"bus":     bus,
 		}),
+		release: []string{chardevRemove},
 	}
 }
 
-// netAttachCommands only attaches the QEMU side. Full networking support also
-// needs guest-side link naming, DHCP or static address policy, and route setup.
-func netAttachCommands(device Device, bus string) []string {
+// netPlan only attaches the QEMU side. Full networking support also needs
+// guest-side link naming, DHCP or static address policy, and route setup.
+func netPlan(device Device, bus string) devicePlan {
 	id := device.ID
 	netdev := map[string]any{"id": netdevID(id), "type": "user"}
 	if len(device.Net.Forward) > 0 {
@@ -416,21 +382,23 @@ func netAttachCommands(device Device, bus string) []string {
 		}
 		netdev["hostfwd"] = hostfwd
 	}
-	return []string{
-		qmpCommand("netdev_add", netdev),
-		qmpCommand("device_add", map[string]any{
+	netdevDel := qmpCommand("netdev_del", map[string]any{"id": netdevID(id)})
+	return devicePlan{
+		backend: []string{qmpCommand("netdev_add", netdev)},
+		deviceAdd: qmpCommand("device_add", map[string]any{
 			"driver": "virtio-net-pci",
 			"id":     qemuDeviceID(id),
 			"netdev": netdevID(id),
 			"mac":    device.Net.MAC,
 			"bus":    bus,
 		}),
+		release: []string{netdevDel},
 	}
 }
 
-// blockAttachCommands only attaches the QEMU block device. Full storage support
-// also needs guest-side discovery, partition/filesystem policy, and mount setup.
-func blockAttachCommands(device Device, bus string) []string {
+// blockPlan only attaches the QEMU block device. Full storage support also
+// needs guest-side discovery, partition/filesystem policy, and mount setup.
+func blockPlan(device Device, bus string) devicePlan {
 	id := device.ID
 	blockdev := map[string]any{
 		"node-name": blockNodeID(id),
@@ -450,9 +418,11 @@ func blockAttachCommands(device Device, bus string) []string {
 	if device.Block.Serial != "" {
 		deviceAdd["serial"] = device.Block.Serial
 	}
-	return []string{
-		qmpCommand("blockdev-add", blockdev),
-		qmpCommand("device_add", deviceAdd),
+	blockdevDel := qmpCommand("blockdev-del", map[string]any{"node-name": blockNodeID(id)})
+	return devicePlan{
+		backend:   []string{qmpCommand("blockdev-add", blockdev)},
+		deviceAdd: qmpCommand("device_add", deviceAdd),
+		release:   []string{blockdevDel},
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -193,10 +194,48 @@ func runRPC(options *Options) error {
 }
 
 func loadLaunchManifest(path string, logger *slog.Logger) (*manifest.Manifest, error) {
-	doc, resolvedPath, data, err := loadManifestDocumentData(path)
+	doc, resolvedPath, err := loadManifestDocument(path)
 	if err != nil {
 		return nil, err
 	}
+	loaded, err := doc.ManifestWithOptions(manifest.ResolveOptions{Logger: logger})
+	if err != nil {
+		return nil, fmt.Errorf("load manifest %q: %w", resolvedPath, err)
+	}
+	return loaded, nil
+}
+
+func loadManifest(path string) (*manifest.Manifest, error) {
+	doc, resolvedPath, err := loadManifestDocument(path)
+	if err != nil {
+		return nil, err
+	}
+	loaded, err := doc.Manifest()
+	if err != nil {
+		return nil, fmt.Errorf("load manifest %q: %w", resolvedPath, err)
+	}
+	return loaded, nil
+}
+
+func loadManifestDocument(path string) (manifest.Document, string, error) {
+	resolvedPath, err := resolveManifestPath(path)
+	if err != nil {
+		return manifest.Document{}, "", fmt.Errorf("resolve manifest path %q: %w", path, err)
+	}
+
+	data, err := readManifestFile(resolvedPath)
+	if err != nil {
+		return manifest.Document{}, "", fmt.Errorf("open manifest %q: %w", resolvedPath, err)
+	}
+	doc, err := manifest.DecodeDocumentBytes(data, resolvedPath)
+	if err != nil {
+		return manifest.Document{}, "", fmt.Errorf("load manifest %q: %w", resolvedPath, err)
+	}
+
+	// A relative working_dir, including the "." default, resolves against the
+	// process working directory, so running virtle from different directories
+	// takes different relative paths into effect. This is resolved in memory
+	// only; the manifest file is never written back.
 	workingDir := doc.WorkingDir
 	if workingDir == "" {
 		workingDir = "."
@@ -204,50 +243,27 @@ func loadLaunchManifest(path string, logger *slog.Logger) (*manifest.Manifest, e
 	if !filepath.IsAbs(workingDir) {
 		resolvedWorkingDir, err := filepath.Abs(workingDir)
 		if err != nil {
-			return nil, fmt.Errorf("resolve manifest working directory %q: %w", workingDir, err)
+			return manifest.Document{}, "", fmt.Errorf("resolve manifest working directory %q: %w", workingDir, err)
 		}
-		doc.WorkingDir = resolvedWorkingDir
-		if err := writeManifestWorkingDir(resolvedPath, data, resolvedWorkingDir); err != nil {
-			return nil, err
-		}
+		workingDir = resolvedWorkingDir
 	}
+	doc.WorkingDir = workingDir
 
-	return doc.ManifestWithOptions(manifest.ResolveOptions{Logger: logger})
+	return doc, resolvedPath, nil
 }
 
-func loadManifest(path string) (*manifest.Manifest, error) {
-	manifest, _, _, err := loadManifestData(path)
-	return manifest, err
-}
-
-func loadManifestData(path string) (*manifest.Manifest, string, []byte, error) {
-	doc, resolvedPath, data, err := loadManifestDocumentData(path)
+// readManifestFile opens the manifest strictly read-only. virtle treats the
+// manifest as an input it must never modify, so the descriptor carries no
+// write intent even transiently.
+func readManifestFile(path string) ([]byte, error) {
+	file, err := os.OpenFile(path, os.O_RDONLY, 0)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, err
 	}
-	manifest, err := doc.Manifest()
-	if err != nil {
-		return nil, "", nil, fmt.Errorf("load manifest %q: %w", resolvedPath, err)
-	}
-	return manifest, resolvedPath, data, nil
-}
-
-func loadManifestDocumentData(path string) (manifest.Document, string, []byte, error) {
-	resolvedPath, err := resolveManifestPath(path)
-	if err != nil {
-		return manifest.Document{}, "", nil, fmt.Errorf("resolve manifest path %q: %w", path, err)
-	}
-
-	data, err := os.ReadFile(resolvedPath)
-	if err != nil {
-		return manifest.Document{}, "", nil, fmt.Errorf("open manifest %q: %w", resolvedPath, err)
-	}
-	doc, err := manifest.DecodeDocumentBytes(data, resolvedPath)
-	if err != nil {
-		return manifest.Document{}, "", nil, fmt.Errorf("load manifest %q: %w", resolvedPath, err)
-	}
-
-	return doc, resolvedPath, data, nil
+	defer func() {
+		_ = file.Close()
+	}()
+	return io.ReadAll(file)
 }
 
 func resolveManifestPath(path string) (string, error) {
@@ -270,37 +286,6 @@ func resolveManifestPath(path string) (string, error) {
 	}
 
 	return "", fmt.Errorf("no manifest path provided and no default manifest found; checked %s", strings.Join(checked, ", "))
-}
-
-func writeManifestWorkingDir(path string, data []byte, workingDir string) error {
-	updated, err := manifest.UpdateWorkingDirBytes(data, path, workingDir)
-	if err != nil {
-		return fmt.Errorf("update manifest %q working dir: %w", path, err)
-	}
-
-	temp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return fmt.Errorf("create temporary manifest %q: %w", path, err)
-	}
-	tempPath := temp.Name()
-	defer func() {
-		_ = os.Remove(tempPath)
-	}()
-
-	if _, err := temp.Write(updated); err != nil {
-		_ = temp.Close()
-		return fmt.Errorf("write temporary manifest %q: %w", tempPath, err)
-	}
-	if err := temp.Close(); err != nil {
-		return fmt.Errorf("close temporary manifest %q: %w", tempPath, err)
-	}
-	if err := os.Chmod(tempPath, 0o644); err != nil {
-		return fmt.Errorf("chmod temporary manifest %q: %w", tempPath, err)
-	}
-	if err := os.Rename(tempPath, path); err != nil {
-		return fmt.Errorf("replace manifest %q: %w", path, err)
-	}
-	return nil
 }
 
 func main() {

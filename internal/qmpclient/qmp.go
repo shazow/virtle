@@ -11,6 +11,7 @@ import (
 
 	doQMP "github.com/digitalocean/go-qemu/qmp"
 	rawQMP "github.com/digitalocean/go-qemu/qmp/raw"
+	"github.com/shazow/virtle/internal/qmpwire"
 )
 
 // RawRunner runs raw QMP monitor commands.
@@ -77,33 +78,24 @@ func (d *SocketMonitorDialer) Dial(ctx context.Context, socketPath string, timeo
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		if isTimeoutError(err) {
+		if qmpwire.IsTimeout(err) {
 			return nil, fmt.Errorf("qmp connect timed out after %s", timeout)
 		}
 		return nil, err
 	}
 
 	monitor.setTimeout(timeout)
-	interruptDone := make(chan struct{})
-	stopInterrupt := make(chan struct{})
-	go func() {
-		defer close(interruptDone)
-		select {
-		case <-ctx.Done():
-			_ = monitor.interrupt()
-		case <-stopInterrupt:
-		}
-	}()
-
+	// Cancel a blocked Connect by expiring the socket deadline; the ctx.Err
+	// checks below own the case where cancellation raced a successful connect.
+	stopInterrupt := context.AfterFunc(ctx, func() { _ = monitor.interrupt() })
 	err = monitor.Connect()
-	close(stopInterrupt)
-	<-interruptDone
+	stopInterrupt()
 	if err != nil {
 		_ = monitor.Disconnect()
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		if isTimeoutError(err) {
+		if qmpwire.IsTimeout(err) {
 			return nil, fmt.Errorf("qmp connect timed out after %s", timeout)
 		}
 		return nil, err
@@ -133,7 +125,7 @@ func (c *socketMonitorClient) RunRaw(timeout time.Duration, command string) erro
 		_, err := c.monitor.Run([]byte(command))
 		return err
 	})
-	if isTimeoutError(err) {
+	if qmpwire.IsTimeout(err) {
 		return fmt.Errorf("qmp command timed out after %s", timeout)
 	}
 	return err
@@ -155,7 +147,7 @@ func (c *socketMonitorClient) DeviceDelAndWait(timeout time.Duration, id string)
 	c.monitor.mu.Lock()
 	defer c.monitor.mu.Unlock()
 	err = c.monitor.withDeadline(func() error {
-		if _, err := c.monitor.conn.Write(appendQMPDelimiter(command)); err != nil {
+		if _, err := c.monitor.conn.Write(qmpwire.AppendDelimiter(command)); err != nil {
 			return err
 		}
 		if _, err := c.monitor.readResponseLocked(); err != nil {
@@ -163,7 +155,7 @@ func (c *socketMonitorClient) DeviceDelAndWait(timeout time.Duration, id string)
 		}
 		return c.monitor.waitDeviceDeletedLocked(id)
 	})
-	if isTimeoutError(err) {
+	if qmpwire.IsTimeout(err) {
 		return fmt.Errorf("qmp device_del %q timed out after %s", id, timeout)
 	}
 	return err
@@ -176,7 +168,7 @@ func (c *socketMonitorClient) Quit(timeout time.Duration) error {
 		}
 		return nil
 	})
-	if isTimeoutError(err) {
+	if qmpwire.IsTimeout(err) {
 		return fmt.Errorf("qmp quit timed out after %s", timeout)
 	}
 	return err
@@ -189,7 +181,7 @@ func (c *socketMonitorClient) Stop(timeout time.Duration) error {
 		}
 		return nil
 	})
-	if isTimeoutError(err) {
+	if qmpwire.IsTimeout(err) {
 		return fmt.Errorf("qmp stop timed out after %s", timeout)
 	}
 	return err
@@ -202,7 +194,7 @@ func (c *socketMonitorClient) Cont(timeout time.Duration) error {
 		}
 		return nil
 	})
-	if isTimeoutError(err) {
+	if qmpwire.IsTimeout(err) {
 		return fmt.Errorf("qmp cont timed out after %s", timeout)
 	}
 	return err
@@ -218,7 +210,7 @@ func (c *socketMonitorClient) QueryStatus(timeout time.Duration) (string, error)
 		status = info.Status.String()
 		return nil
 	})
-	if isTimeoutError(err) {
+	if qmpwire.IsTimeout(err) {
 		return "", fmt.Errorf("qmp query-status timed out after %s", timeout)
 	}
 	return status, err
@@ -232,7 +224,7 @@ func (c *socketMonitorClient) MigrateToFile(timeout time.Duration, path string) 
 		}
 		return nil
 	})
-	if isTimeoutError(err) {
+	if qmpwire.IsTimeout(err) {
 		return fmt.Errorf("qmp migrate %q timed out after %s", uri, timeout)
 	}
 	return err
@@ -246,7 +238,7 @@ func (c *socketMonitorClient) MigrateIncoming(timeout time.Duration, path string
 		}
 		return nil
 	})
-	if isTimeoutError(err) {
+	if qmpwire.IsTimeout(err) {
 		return fmt.Errorf("qmp migrate-incoming %q timed out after %s", uri, timeout)
 	}
 	return err
@@ -264,7 +256,7 @@ func (c *socketMonitorClient) QueryMigrate(timeout time.Duration) (string, error
 		}
 		return nil
 	})
-	if isTimeoutError(err) {
+	if qmpwire.IsTimeout(err) {
 		return "", fmt.Errorf("qmp query-migrate timed out after %s", timeout)
 	}
 	return status, err
@@ -327,7 +319,7 @@ func (m *deadlineSocketMonitor) Connect() error {
 		if err != nil {
 			return err
 		}
-		if _, err := m.conn.Write(appendQMPDelimiter(payload)); err != nil {
+		if _, err := m.conn.Write(qmpwire.AppendDelimiter(payload)); err != nil {
 			return err
 		}
 
@@ -349,7 +341,7 @@ func (m *deadlineSocketMonitor) Run(command []byte) ([]byte, error) {
 
 	var response []byte
 	err := m.withDeadline(func() error {
-		if _, err := m.conn.Write(appendQMPDelimiter(command)); err != nil {
+		if _, err := m.conn.Write(qmpwire.AppendDelimiter(command)); err != nil {
 			return err
 		}
 
@@ -441,16 +433,4 @@ func (m *deadlineSocketMonitor) waitDeviceDeletedLocked(id string) error {
 			return nil
 		}
 	}
-}
-
-func appendQMPDelimiter(command []byte) []byte {
-	if len(command) > 0 && command[len(command)-1] == '\n' {
-		return command
-	}
-	return append(append([]byte(nil), command...), '\n')
-}
-
-func isTimeoutError(err error) bool {
-	var netErr net.Error
-	return errors.As(err, &netErr) && netErr.Timeout()
 }

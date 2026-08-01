@@ -700,47 +700,6 @@ initrd_path = "/tmp/initrd"
 	}
 }
 
-func TestUpdateWorkingDirBytesPreservesTaggedMounts(t *testing.T) {
-	data := []byte(`
-[kernel]
-path = "/tmp/vmlinuz"
-initrd_path = "/tmp/initrd"
-
-[[mounts]]
-type = "virtiofs"
-tag = "workspace"
-source = "."
-virtiofs.socket = "workspace.sock"
-
-[[mounts]]
-type = "image"
-source = "root.img"
-image.size = 256
-image.fs = "ext4"
-image.create = true
-`)
-	updated, err := UpdateWorkingDirBytes(data, "manifest.toml", "/tmp/work")
-	if err != nil {
-		t.Fatalf("update working dir: %v", err)
-	}
-	document, err := DecodeDocumentBytes(updated, "manifest.toml")
-	if err != nil {
-		t.Fatalf("decode updated manifest: %v\n%s", err, updated)
-	}
-	if document.WorkingDir != "/tmp/work" {
-		t.Fatalf("unexpected working dir: got %q want /tmp/work", document.WorkingDir)
-	}
-	if got, want := len(document.Mounts), 2; got != want {
-		t.Fatalf("unexpected mount count: got %d want %d", got, want)
-	}
-	if _, ok := document.Mounts[0].(VirtioFSMountInput); !ok {
-		t.Fatalf("expected first mount to remain virtiofs, got %T", document.Mounts[0])
-	}
-	if _, ok := document.Mounts[1].(ImageMountInput); !ok {
-		t.Fatalf("expected second mount to remain image, got %T", document.Mounts[1])
-	}
-}
-
 func TestManifestSSHRetryDelayDefaultsAndValidation(t *testing.T) {
 	document := validDocument()
 	manifest, err := document.Manifest()

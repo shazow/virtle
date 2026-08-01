@@ -8,6 +8,8 @@ import (
 	"net"
 	"sync"
 	"time"
+
+	"github.com/shazow/virtle/internal/qmpwire"
 )
 
 // Pinger checks whether the guest agent is accepting commands.
@@ -78,7 +80,7 @@ func (d *SocketDialer) Dial(ctx context.Context, socketPath string, timeout time
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		if isTimeoutError(err) {
+		if qmpwire.IsTimeout(err) {
 			return nil, fmt.Errorf("guest agent connect timed out after %s", timeout)
 		}
 		return nil, err
@@ -243,7 +245,7 @@ func (c *socketClient) run(timeout time.Duration, execute string, arguments map[
 	if err != nil {
 		return nil, err
 	}
-	if _, err := c.conn.Write(appendDelimiter(payload)); err != nil {
+	if _, err := c.conn.Write(qmpwire.AppendDelimiter(payload)); err != nil {
 		return nil, err
 	}
 
@@ -270,16 +272,4 @@ func (c *socketClient) run(timeout time.Duration, execute string, arguments map[
 		}
 		return envelope.Return, nil
 	}
-}
-
-func appendDelimiter(command []byte) []byte {
-	if len(command) > 0 && command[len(command)-1] == '\n' {
-		return command
-	}
-	return append(append([]byte(nil), command...), '\n')
-}
-
-func isTimeoutError(err error) bool {
-	var netErr net.Error
-	return errors.As(err, &netErr) && netErr.Timeout()
 }

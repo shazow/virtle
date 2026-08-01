@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/shazow/virtle/internal/qmpwire"
 )
 
 // DialRetry configures guest-agent dial retry behavior.
@@ -20,33 +22,17 @@ func DialWithRetry(ctx context.Context, dialer Dialer, retry DialRetry) (Client,
 	if dialer == nil {
 		return nil, fmt.Errorf("guest agent dialer is not configured")
 	}
-	timer := time.NewTimer(0)
-	defer timer.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-timer.C:
-		}
-
-		if retry.Check != nil {
-			if err := retry.Check(); err != nil {
-				return nil, err
-			}
-		}
-
-		client, err := dialer.Dial(ctx, retry.SocketPath, retry.ConnectTimeout)
-		if err == nil {
-			if err := client.Ping(retry.CommandTimeout); err == nil {
-				return client, nil
-			}
+	return qmpwire.DialWithRetry(ctx, qmpwire.Retry[Client]{
+		Dial: func(ctx context.Context) (Client, error) {
+			return dialer.Dial(ctx, retry.SocketPath, retry.ConnectTimeout)
+		},
+		Probe: func(client Client) error {
+			return client.Ping(retry.CommandTimeout)
+		},
+		Close: func(client Client) {
 			_ = client.Disconnect()
-		}
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-
-		timer.Reset(retry.RetryDelay)
-	}
+		},
+		Check: retry.Check,
+		Delay: retry.RetryDelay,
+	})
 }

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/shazow/virtle/internal/qmpwire"
 )
 
 // DialRetry configures QMP dial retry behavior.
@@ -19,30 +21,11 @@ func DialWithRetry(ctx context.Context, dialer Dialer, retry DialRetry) (Client,
 	if dialer == nil {
 		return nil, fmt.Errorf("qmp dialer is not configured")
 	}
-	timer := time.NewTimer(0)
-	defer timer.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-timer.C:
-		}
-
-		if retry.Check != nil {
-			if err := retry.Check(); err != nil {
-				return nil, err
-			}
-		}
-
-		client, err := dialer.Dial(ctx, retry.SocketPath, retry.Timeout)
-		if err == nil {
-			return client, nil
-		}
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-
-		timer.Reset(retry.RetryDelay)
-	}
+	return qmpwire.DialWithRetry(ctx, qmpwire.Retry[Client]{
+		Dial: func(ctx context.Context) (Client, error) {
+			return dialer.Dial(ctx, retry.SocketPath, retry.Timeout)
+		},
+		Check: retry.Check,
+		Delay: retry.RetryDelay,
+	})
 }

@@ -290,22 +290,6 @@ func TestBlockAttachDetachCommands(t *testing.T) {
 	}
 }
 
-func TestHotplugRegistryKeysByInterfaceID(t *testing.T) {
-	registry := make(hotplugRegistry)
-	hotplug := fakeHotplug{id: "from-id"}
-
-	if err := registry.add(hotplug); err != nil {
-		t.Fatalf("add hotplug: %v", err)
-	}
-	got, err := registry.lookup("from-id")
-	if err != nil {
-		t.Fatalf("lookup hotplug: %v", err)
-	}
-	if got.ID() != "from-id" {
-		t.Fatalf("unexpected hotplug id: got %q want from-id", got.ID())
-	}
-}
-
 func TestHotplugRegistryMissingID(t *testing.T) {
 	tmpDir := t.TempDir()
 	runner, _, _, _ := testRunner(tmpDir, testVirtioFSDevice(tmpDir))
@@ -340,7 +324,7 @@ func TestHotplugRegistryRejectsUnsupportedKind(t *testing.T) {
 		{Kind: Kind("unsupported"), ID: "bad"},
 	})
 
-	err := runner.Attach(context.Background(), "cache")
+	err := runner.Attach(context.Background(), "bad")
 	if err == nil || !strings.Contains(err.Error(), `manifest.hotplug id "bad" has unsupported kind "unsupported"`) {
 		t.Fatalf("expected unsupported kind error, got %v", err)
 	}
@@ -365,6 +349,32 @@ func testRunnerDevices(tmpDir string, devices []Device) (Runner, *fakeStarter, *
 	}, starter, client, guest
 }
 
+// Every sequence in devicePlan is written out per kind rather than derived
+// from the attach commands. The cost of that is a new kind silently omitting
+// one and skipping its cleanup; this pins it.
+func TestDevicePlansDeclareEverySequenceExplicitly(t *testing.T) {
+	devices := []Device{
+		testVirtioFSDevice(t.TempDir()),
+		{Kind: KindNet, ID: "net0", Net: Net{Backend: "user", MAC: "02:02:00:00:00:10"}},
+		{Kind: KindBlock, ID: "data", Block: Block{ImagePath: "/tmp/data.img", Format: "raw"}},
+	}
+
+	for _, device := range devices {
+		t.Run(string(device.Kind), func(t *testing.T) {
+			plan := planFor(device, "pcie.hotplug.0")
+			if len(plan.backend) == 0 {
+				t.Errorf("backend sequence is empty")
+			}
+			if plan.deviceAdd == "" {
+				t.Errorf("deviceAdd command is empty")
+			}
+			if len(plan.release) == 0 {
+				t.Errorf("release sequence is empty: attach rollback and detach would both leak the backend")
+			}
+		})
+	}
+}
+
 func testVirtioFSDevice(tmpDir string) Device {
 	return Device{
 		Kind: KindVirtioFS,
@@ -377,14 +387,6 @@ func testVirtioFSDevice(tmpDir string) Device {
 		},
 	}
 }
-
-type fakeHotplug struct {
-	id string
-}
-
-func (h fakeHotplug) Attach() error { return nil }
-func (h fakeHotplug) Detach() error { return nil }
-func (h fakeHotplug) ID() string    { return h.id }
 
 type fakeStarter struct {
 	starts  []string

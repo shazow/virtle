@@ -39,6 +39,29 @@ func TestRunCommandStatusWaitsForExit(t *testing.T) {
 	}
 }
 
+func TestRunCommandStatusWithoutTimeoutWaitsForExit(t *testing.T) {
+	client := &execClient{
+		pid: 7,
+		statuses: []ExecStatus{
+			{Exited: false},
+			{Exited: true, ExitCode: 0},
+		},
+	}
+	status, err := RunCommandStatus(context.Background(), client, ExecWait{
+		Timeout:   0,
+		PollDelay: time.Millisecond,
+		Name:      "test",
+		Path:      "/bin/test",
+		Subject:   "/tmp/file",
+	})
+	if err != nil {
+		t.Fatalf("run command status without timeout: %v", err)
+	}
+	if !status.Exited || client.statusCalls != 2 {
+		t.Fatalf("unexpected status without timeout: status=%+v calls=%d", status, client.statusCalls)
+	}
+}
+
 func TestRunCommandStatusWrapsExecStatusError(t *testing.T) {
 	wantErr := errors.New("status failed")
 	client := &execClient{pid: 7, statusErr: wantErr}

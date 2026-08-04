@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"math"
+	"time"
 
 	"github.com/shazow/virtle/internal/executor"
 	controlpkg "github.com/shazow/virtle/internal/manager/control"
@@ -12,13 +14,14 @@ import (
 )
 
 type managerGuestFeature struct {
-	manager    *manager
-	socketPath string
-	processes  *launch.ProcessSet
+	manager           *manager
+	socketPath        string
+	processes         *launch.ProcessSet
+	guestAgentTimeout time.Duration
 }
 
-func (m *manager) guestFeature(socketPath string, processes *launch.ProcessSet) managerGuestFeature {
-	return managerGuestFeature{manager: m, socketPath: socketPath, processes: processes}
+func (m *manager) guestFeature(socketPath string, processes *launch.ProcessSet, guestAgentTimeout time.Duration) managerGuestFeature {
+	return managerGuestFeature{manager: m, socketPath: socketPath, processes: processes, guestAgentTimeout: guestAgentTimeout}
 }
 
 func (f managerGuestFeature) GuestPS(ctx context.Context, req controlpkg.GuestPSRequest) (controlpkg.GuestPSResponse, error) {
@@ -27,7 +30,7 @@ func (f managerGuestFeature) GuestPS(ctx context.Context, req controlpkg.GuestPS
 	if f.processes != nil {
 		watchers = f.processes.Watchers()
 	}
-	info, err := f.manager.collectGuestInfo(ctx, f.socketPath, watchers)
+	info, err := f.manager.collectGuestInfo(ctx, f.guestAgentTimeout, f.socketPath, watchers)
 	if err != nil {
 		return controlpkg.GuestPSResponse{}, controlpkg.FailedPrecondition(err)
 	}
@@ -38,6 +41,10 @@ func (f managerGuestFeature) GuestExec(ctx context.Context, req controlpkg.Guest
 	if req.Path == "" {
 		return controlpkg.GuestExecResponse{}, &controlpkg.RPCError{Code: controlpkg.ErrInvalidParams, Message: "guest exec path is required"}
 	}
+	timeout, err := guestExecTimeout(req.Timeout)
+	if err != nil {
+		return controlpkg.GuestExecResponse{}, &controlpkg.RPCError{Code: controlpkg.ErrInvalidParams, Message: err.Error()}
+	}
 	client, err := f.guestClient(ctx)
 	if err != nil {
 		return controlpkg.GuestExecResponse{}, controlpkg.FailedPrecondition(err)
@@ -45,7 +52,7 @@ func (f managerGuestFeature) GuestExec(ctx context.Context, req controlpkg.Guest
 	defer client.Disconnect()
 
 	status, err := qga.RunCommandStatus(ctx, client, qga.ExecWait{
-		Timeout:       f.manager.effectiveQMPCommandTimeout(),
+		Timeout:       timeout,
 		PollDelay:     defaultMigrationPollDelay,
 		Name:          "guest-exec",
 		Path:          req.Path,
@@ -64,6 +71,15 @@ func (f managerGuestFeature) GuestExec(ctx context.Context, req controlpkg.Guest
 	}, nil
 }
 
+// guestExecTimeout validates a request timeout given in seconds. Zero means no
+// timeout; callers resolve the manifest-wide default and set it explicitly.
+func guestExecTimeout(seconds float64) (time.Duration, error) {
+	if math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds < 0 {
+		return 0, fmt.Errorf("guest exec timeout must be a finite number greater than or equal to zero")
+	}
+	return time.Duration(seconds * float64(time.Second)), nil
+}
+
 func (f managerGuestFeature) GuestRead(ctx context.Context, req controlpkg.GuestReadRequest) (controlpkg.GuestReadResponse, error) {
 	if req.Path == "" {
 		return controlpkg.GuestReadResponse{}, &controlpkg.RPCError{Code: controlpkg.ErrInvalidParams, Message: "guest read path is required"}
@@ -74,7 +90,7 @@ func (f managerGuestFeature) GuestRead(ctx context.Context, req controlpkg.Guest
 	}
 	defer client.Disconnect()
 
-	data, err := f.manager.readGuestFile(client, req.Path)
+	data, err := f.manager.readGuestFile(client, f.guestAgentTimeout, req.Path)
 	if err != nil {
 		return controlpkg.GuestReadResponse{}, controlpkg.FailedPrecondition(err)
 	}
@@ -94,7 +110,7 @@ func (f managerGuestFeature) GuestWrite(ctx context.Context, req controlpkg.Gues
 	}
 	defer client.Disconnect()
 
-	if err := f.manager.writeGuestFile(client, req.Path, req.DataBase64); err != nil {
+	if err := f.manager.writeGuestFile(client, f.guestAgentTimeout, req.Path, req.DataBase64); err != nil {
 		return controlpkg.GuestWriteResponse{}, controlpkg.FailedPrecondition(err)
 	}
 	return controlpkg.GuestWriteResponse{Path: req.Path}, nil
@@ -108,5 +124,5 @@ func (f managerGuestFeature) guestClient(ctx context.Context) (qga.Client, error
 	if f.processes != nil {
 		watchers = f.processes.Watchers()
 	}
-	return f.manager.waitForGuestAgent(ctx, f.socketPath, watchers)
+	return f.manager.waitForGuestAgent(ctx, f.guestAgentTimeout, f.socketPath, watchers)
 }

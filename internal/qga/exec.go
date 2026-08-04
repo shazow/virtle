@@ -25,14 +25,21 @@ func RunCommandStatus(ctx context.Context, client ExecRunner, wait ExecWait) (Ex
 		return ExecStatus{}, fmt.Errorf("%s %q: %w", wait.Name, wait.Subject, err)
 	}
 
-	deadline := time.Now().Add(wait.Timeout)
+	var deadline time.Time
+	if wait.Timeout > 0 {
+		deadline = time.Now().Add(wait.Timeout)
+	}
 	for {
-		remaining := time.Until(deadline)
-		if remaining <= 0 {
-			return ExecStatus{}, fmt.Errorf("%s %q timed out after %s", wait.Name, wait.Subject, wait.Timeout)
+		commandTimeout := wait.Timeout
+		if !deadline.IsZero() {
+			remaining := time.Until(deadline)
+			if remaining <= 0 {
+				return ExecStatus{}, fmt.Errorf("%s %q timed out after %s", wait.Name, wait.Subject, wait.Timeout)
+			}
+			commandTimeout = minDuration(wait.Timeout, remaining)
 		}
 
-		status, err := client.ExecStatus(minDuration(wait.Timeout, remaining), pid)
+		status, err := client.ExecStatus(commandTimeout, pid)
 		if err != nil {
 			return ExecStatus{}, fmt.Errorf("%s %q: %w", wait.Name, wait.Subject, err)
 		}
@@ -40,7 +47,10 @@ func RunCommandStatus(ctx context.Context, client ExecRunner, wait ExecWait) (Ex
 			return status, nil
 		}
 
-		sleep := minDuration(wait.PollDelay, time.Until(deadline))
+		sleep := wait.PollDelay
+		if !deadline.IsZero() {
+			sleep = minDuration(sleep, time.Until(deadline))
+		}
 		if sleep <= 0 {
 			continue
 		}

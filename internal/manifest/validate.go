@@ -15,12 +15,13 @@ import (
 )
 
 const (
-	defaultSSHRetryDelaySeconds = 0.5
-	defaultSSHReadySocket       = ""
-	defaultVSockCIDStart        = 3
-	defaultVSockCIDEnd          = 65535
-	defaultVolumeFSType         = "ext4"
-	minAutoVolumeSize           = units.MiB(256)
+	defaultSSHRetryDelaySeconds       = 0.5
+	defaultGuestDefaultTimeoutSeconds = 30
+	defaultSSHReadySocket             = ""
+	defaultVSockCIDStart              = 3
+	defaultVSockCIDEnd                = 65535
+	defaultVolumeFSType               = "ext4"
+	minAutoVolumeSize                 = units.MiB(256)
 )
 
 var writeFileModePattern = regexp.MustCompile(`^0?[0-7]{3}$`)
@@ -70,6 +71,8 @@ func (m *Manifest) Validate() error {
 		return fmt.Errorf("manifest.qemu.binaryPath is required")
 	case m.QEMU.QMP.SocketPath == "":
 		return fmt.Errorf("manifest.qemu.qmp.socketPath is required")
+	case m.QEMU.GuestAgent.CommandTimeout < 0:
+		return fmt.Errorf("manifest.qemu.guestAgent.commandTimeout must be greater than or equal to zero")
 	case len(m.WriteFiles) > 0 && m.QEMU.GuestAgent.SocketPath == "":
 		return fmt.Errorf("manifest.qemu.guestAgent.socketPath is required when manifest.writeFiles is set")
 	case m.VSock.CIDRange.Start < defaultVSockCIDStart:

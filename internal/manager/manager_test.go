@@ -2487,7 +2487,7 @@ func TestManagerWriteGuestFileClosesAfterWriteFailure(t *testing.T) {
 	client := &fakeGuestAgentClient{writeErr: errors.New("write failed")}
 	manager := &manager{qmpConnectTimeout: time.Millisecond}
 
-	err := manager.writeGuestFile(client, "/etc/fail", "ZmFpbA==")
+	err := manager.writeGuestFile(client, time.Second, "/etc/fail", "ZmFpbA==")
 	if err == nil || !strings.Contains(err.Error(), "write failed") {
 		t.Fatalf("expected write failure, got %v", err)
 	}
@@ -3612,7 +3612,7 @@ func TestWaitForSessionReturnsNilWhenSavedStateExistsOnCancellation(t *testing.T
 	cancel()
 	session := (&executortest.Process{OverrideName: "ssh"}).Process()
 
-	err := (&manager{}).waitForSession(ctx, session, newTestLaunchLifecycle(), nil, "", executor.Group{})
+	err := (&manager{}).waitForSession(ctx, session, newTestLaunchLifecycle(), nil, 0, "", executor.Group{})
 	if err == nil {
 		t.Fatal("expected active session cancellation error")
 	}
@@ -3811,6 +3811,29 @@ func TestLaunchRuntimeRegistersHotplugAtControlPeriphery(t *testing.T) {
 	}
 }
 
+func TestGuestExecTimeoutResolvesRequestTimeout(t *testing.T) {
+	seconds := 2.5
+	got, err := guestExecTimeout(seconds)
+	if err != nil {
+		t.Fatalf("resolve guest exec timeout: %v", err)
+	}
+	if want := 2500 * time.Millisecond; got != want {
+		t.Fatalf("guest exec timeout: got %s want %s", got, want)
+	}
+
+	got, err = guestExecTimeout(0)
+	if err != nil {
+		t.Fatalf("resolve guest exec zero timeout: %v", err)
+	}
+	if want := time.Duration(0); got != want {
+		t.Fatalf("guest exec zero timeout: got %s want %s", got, want)
+	}
+
+	if _, err := guestExecTimeout(-1); err == nil {
+		t.Fatal("expected negative guest exec timeout error")
+	}
+}
+
 func TestLaunchRuntimeRegistersGuestRPCsAtControlPeriphery(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
@@ -3874,10 +3897,12 @@ func TestLaunchRuntimeRegistersGuestRPCsAtControlPeriphery(t *testing.T) {
 		t.Fatalf("unexpected ps exec: %#v", exec)
 	}
 
+	timeout := 300.0
 	execResp, err := client.GuestExec(context.Background(), control.GuestExecRequest{
 		Path:          "/bin/sh",
 		Args:          []string{"-c", "echo hi"},
 		CaptureOutput: true,
+		Timeout:       timeout,
 	})
 	if err != nil {
 		t.Fatalf("control guest exec: %v", err)
@@ -3889,7 +3914,7 @@ func TestLaunchRuntimeRegistersGuestRPCsAtControlPeriphery(t *testing.T) {
 		t.Fatalf("guest exec count after guest-exec: got %d want %d", got, want)
 	}
 	exec = guestAgent.execs[1]
-	if exec.path != "/bin/sh" || !reflect.DeepEqual(exec.args, []string{"-c", "echo hi"}) || !exec.captureOutput {
+	if exec.path != "/bin/sh" || !reflect.DeepEqual(exec.args, []string{"-c", "echo hi"}) || !exec.captureOutput || exec.timeout != 300*time.Second {
 		t.Fatalf("unexpected guest-exec call: %#v", exec)
 	}
 
@@ -4806,6 +4831,7 @@ type guestExecCall struct {
 	path          string
 	args          []string
 	captureOutput bool
+	timeout       time.Duration
 }
 
 func (c *fakeGuestAgentClient) Ping(timeout time.Duration) error {
@@ -4909,6 +4935,7 @@ func (c *fakeGuestAgentClient) Exec(timeout time.Duration, path string, args []s
 		path:          path,
 		args:          append([]string(nil), args...),
 		captureOutput: captureOutput,
+		timeout:       timeout,
 	})
 	pid := len(c.execs)
 	c.mu.Unlock()

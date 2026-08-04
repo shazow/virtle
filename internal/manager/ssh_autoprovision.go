@@ -29,7 +29,8 @@ func (m *manager) installSSHAutoprovisionKey(ctx context.Context, launchManifest
 	if err != nil {
 		return &launch.StageError{Stage: "ssh autoprovision", Err: err}
 	}
-	client, err := m.waitForGuestAgentStage(ctx, "ssh autoprovision", socketPath, watchers)
+	timeout := launchManifest.QEMU.GuestAgent.CommandTimeout
+	client, err := m.waitForGuestAgentStage(ctx, "ssh autoprovision", timeout, socketPath, watchers)
 	if err != nil {
 		return err
 	}
@@ -37,19 +38,19 @@ func (m *manager) installSSHAutoprovisionKey(ctx context.Context, launchManifest
 
 	return launch.InstallSSHAuthorizedKey(ctx, launchManifest, key, launch.SSHAuthorizedKeyInstaller{
 		InstallDirectory: func(ctx context.Context, guestPath string, owner string, mode string) error {
-			return m.installGuestFileDirectory(ctx, client, guestPath, owner, mode)
+			return m.installGuestFileDirectory(ctx, client, timeout, guestPath, owner, mode)
 		},
 		Chown: func(ctx context.Context, guestPath string, owner string) error {
-			return m.chownGuestFile(ctx, client, guestPath, owner)
+			return m.chownGuestFile(ctx, client, timeout, guestPath, owner)
 		},
 		Chmod: func(ctx context.Context, guestPath string, mode string) error {
-			return m.chmodGuestFile(ctx, client, guestPath, mode)
+			return m.chmodGuestFile(ctx, client, timeout, guestPath, mode)
 		},
 		WriteFile: func(_ context.Context, guestPath string, payloadBase64 string) error {
-			return m.writeGuestFile(client, guestPath, payloadBase64)
+			return m.writeGuestFile(client, timeout, guestPath, payloadBase64)
 		},
 		RunCommand: func(ctx context.Context, name string, path string, args []string, inputPath string) error {
-			return m.runGuestFileCommand(ctx, client, name, path, args, inputPath)
+			return m.runGuestFileCommand(ctx, client, timeout, name, path, args, inputPath)
 		},
 	})
 }

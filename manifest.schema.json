@@ -403,6 +403,10 @@
         "guest_agent_socket": {
           "type": "string",
           "description": "Path to the QEMU guest agent socket relative to the runtime state directory unless absolute."
+        },
+        "guest_default_timeout": {
+          "type": "number",
+          "description": "Seconds allowed for each QEMU guest agent command; zero disables the timeout."
         }
       },
       "additionalProperties": false,

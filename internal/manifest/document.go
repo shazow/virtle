@@ -59,6 +59,8 @@ type QEMUInput struct {
 	MachineOptions   map[string]string `json:"machine_options,omitempty" toml:"machine_options" jsonschema:"description=Additional QEMU machine options merged into the resolved machine option list."`
 	QMPSocket        string            `json:"qmp_socket,omitempty" toml:"qmp_socket" jsonschema:"description=Path to the QEMU Machine Protocol socket relative to the runtime state directory unless absolute."`
 	GuestAgentSocket string            `json:"guest_agent_socket,omitempty" toml:"guest_agent_socket" jsonschema:"description=Path to the QEMU guest agent socket relative to the runtime state directory unless absolute."`
+	// Pointer preserves omitted vs explicitly zero input until resolution.
+	GuestDefaultTimeout *float64 `json:"guest_default_timeout,omitempty" toml:"guest_default_timeout" jsonschema:"description=Seconds allowed for each QEMU guest agent command; zero disables the timeout."`
 }
 
 type MachineInput struct {

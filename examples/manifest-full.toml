@@ -62,6 +62,11 @@ machine_options = { accel = "kvm:tcg", pcie = "on" }  # Default: Derived for hos
 qmp_socket = "qmp.sock"  # Default: "qmp.sock"
 guest_agent_socket = "qga.sock"  # Default: "qga.sock"
 
+# Guest agent operations such as guest-exec and file transfer use an independent
+# timeout so slow guest commands are not constrained by the short QMP socket
+# timeout. Set this to zero to wait indefinitely.
+guest_default_timeout = 30  # Default: 30 seconds; 0 disables the timeout
+
 # Hotplugged PCI devices need root ports created when QEMU starts. virtle
 # automatically allocates one port for each entry under [hotplug].
 

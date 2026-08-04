@@ -742,6 +742,44 @@ func TestManifestSSHRetryDelayDefaultsAndValidation(t *testing.T) {
 	}
 }
 
+func TestManifestGuestDefaultTimeoutDefaultsConfiguresAndDisables(t *testing.T) {
+	document := validDocument()
+	resolved, err := document.Manifest()
+	if err != nil {
+		t.Fatalf("resolve manifest: %v", err)
+	}
+	if got, want := resolved.QEMU.GuestAgent.CommandTimeout, 30*time.Second; got != want {
+		t.Fatalf("default guest agent timeout: got %s want %s", got, want)
+	}
+
+	custom := validDocument()
+	custom.QEMU.GuestDefaultTimeout = float64Ptr(2.5)
+	resolved, err = custom.Manifest()
+	if err != nil {
+		t.Fatalf("resolve custom guest agent timeout: %v", err)
+	}
+	if got, want := resolved.QEMU.GuestAgent.CommandTimeout, 2500*time.Millisecond; got != want {
+		t.Fatalf("custom guest agent timeout: got %s want %s", got, want)
+	}
+
+	disabled := validDocument()
+	disabled.QEMU.GuestDefaultTimeout = float64Ptr(0)
+	resolved, err = disabled.Manifest()
+	if err != nil {
+		t.Fatalf("resolve disabled guest agent timeout: %v", err)
+	}
+	if got := resolved.QEMU.GuestAgent.CommandTimeout; got != 0 {
+		t.Fatalf("disabled guest agent timeout: got %s want 0", got)
+	}
+
+	invalid := validDocument()
+	invalid.QEMU.GuestDefaultTimeout = float64Ptr(-1)
+	_, err = invalid.Manifest()
+	if err == nil || !strings.Contains(err.Error(), "manifest.qemu.guest_default_timeout must be a finite number greater than or equal to zero") {
+		t.Fatalf("expected guest agent timeout validation error, got %v", err)
+	}
+}
+
 func TestDocumentSSHReadySocketDefaultAndEnable(t *testing.T) {
 	omitted := validDocument()
 	omitted.SSH.ReadySocket = ""

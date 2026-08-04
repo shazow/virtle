@@ -134,6 +134,32 @@ func TestManagerStartExternalVirtioFSFailureKeepsRuntimeSockets(t *testing.T) {
 	}
 }
 
+func TestManagerStartQEMULogsFullCommand(t *testing.T) {
+	var logOutput bytes.Buffer
+	runner := &executortest.Runner{}
+	manager := &manager{
+		runner: runner,
+		logger: slog.New(slog.NewTextHandler(&logOutput, nil)),
+	}
+	cmd := exec.Command("/bin/qemu-system-x86_64", "-name", "guest vm", "-append", "console=ttyS0 quiet")
+
+	if _, err := manager.startQEMU(cmd); err != nil {
+		t.Fatalf("start qemu: %v", err)
+	}
+
+	logs := logOutput.String()
+	for _, want := range []string{
+		"msg=\"starting qemu\"",
+		"/bin/qemu-system-x86_64",
+		"-name 'guest vm'",
+		"-append 'console=ttyS0 quiet'",
+	} {
+		if !strings.Contains(logs, want) {
+			t.Fatalf("expected qemu log to contain %q, got %q", want, logs)
+		}
+	}
+}
+
 func TestManagerStartQEMUNilRunnerWrapsOnce(t *testing.T) {
 	tmpDir := t.TempDir()
 	manager := newLaunchProviderTestManager(nil)

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	shellquote "github.com/kballard/go-shellquote"
 	"github.com/shazow/virtle/internal/executor"
 	controlpkg "github.com/shazow/virtle/internal/manager/control"
 	"github.com/shazow/virtle/internal/manager/launch"
@@ -281,7 +282,7 @@ func (m *manager) startQEMU(cmd *exec.Cmd) (*executor.Process, error) {
 		return nil, fmt.Errorf("qemu runner is not configured")
 	}
 	if m.logger != nil {
-		m.logger.Info("starting qemu")
+		m.logger.Info("starting qemu", "command", shellquote.Join(cmd.Args...))
 	}
 	return m.runner.Start(cmd)
 }

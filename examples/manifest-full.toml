@@ -62,6 +62,13 @@ machine_options = { accel = "kvm:tcg", pcie = "on" }  # Default: Derived for hos
 qmp_socket = "qmp.sock"  # Default: "qmp.sock"
 guest_agent_socket = "qga.sock"  # Default: "qga.sock"
 
+# Virtle asks QGA to shut down the guest cleanly before QEMU is forced to quit.
+# Set shutdown_exec to override QGA's native guest-shutdown action with an exec
+# tuple (guest path plus arguments) started through guest-exec. If QGA rejects
+# the request or the VM remains running after the timeout, virtle uses QMP quit.
+shutdown_exec = ["/bin/sh", "-c", "poweroff"]
+shutdown_timeout = 15  # Default: 15 seconds; 0 skips the wait
+
 # Hotplugged PCI devices need root ports created when QEMU starts. virtle
 # automatically allocates one port for each entry under [hotplug].
 

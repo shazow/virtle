@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"sync"
 	"time"
@@ -35,6 +36,11 @@ type FileReader interface {
 type ExecRunner interface {
 	Exec(timeout time.Duration, path string, args []string, captureOutput bool) (int, error)
 	ExecStatus(timeout time.Duration, pid int) (ExecStatus, error)
+}
+
+// Shutdowner asks the guest operating system to power down.
+type Shutdowner interface {
+	Shutdown(timeout time.Duration) error
 }
 
 // Disconnecter closes an open guest-agent connection.
@@ -217,6 +223,14 @@ func (c *socketClient) ExecStatus(timeout time.Duration, pid int) (ExecStatus, e
 		status.ExitCode = *result.ExitCode
 	}
 	return status, nil
+}
+
+func (c *socketClient) Shutdown(timeout time.Duration) error {
+	_, err := c.run(timeout, "guest-shutdown", map[string]any{"mode": "powerdown"})
+	if err == nil || qmpwire.IsTimeout(err) || errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
+		return nil
+	}
+	return fmt.Errorf("guest agent shutdown: %w", err)
 }
 
 func (c *socketClient) Disconnect() error {

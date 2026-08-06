@@ -403,6 +403,17 @@
         "guest_agent_socket": {
           "type": "string",
           "description": "Path to the QEMU guest agent socket relative to the runtime state directory unless absolute."
+        },
+        "shutdown_exec": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "description": "Optional guest command tuple invoked through QGA to shut down the VM gracefully."
+        },
+        "shutdown_timeout": {
+          "type": "number",
+          "description": "Seconds to wait for graceful guest shutdown before forcing QEMU to quit; zero disables the wait."
         }
       },
       "additionalProperties": false,

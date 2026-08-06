@@ -118,6 +118,36 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 	}
 	stats.Timer(launch.TimerQMPReady, time.Now())
 	qemu.SetShutdown(func() error {
+		shutdown := plan.Manifest.QEMU.GuestAgent
+		if m.logger != nil {
+			method := "guest-shutdown"
+			if len(shutdown.ShutdownExec) > 0 {
+				method = "guest-exec"
+			}
+			m.logger.Info("requesting guest shutdown", "method", method, "exec", shutdown.ShutdownExec)
+		}
+		err := m.requestGuestShutdown(plan.Paths.GuestAgentSocket, shutdown.ShutdownExec)
+		if err != nil {
+			if m.logger != nil {
+				m.logger.Info("guest shutdown request failed; forcing qemu quit", "err", err)
+			}
+		} else {
+			if m.logger != nil {
+				m.logger.Info("waiting for guest shutdown", "timeout", shutdown.ShutdownTimeout)
+			}
+			if qemu.WaitForExit(shutdown.ShutdownTimeout) {
+				if m.logger != nil {
+					m.logger.Info("guest shutdown completed")
+				}
+				return nil
+			}
+			if m.logger != nil {
+				m.logger.Info("guest shutdown timed out; forcing qemu quit", "timeout", shutdown.ShutdownTimeout)
+			}
+		}
+		if m.logger != nil {
+			m.logger.Info("forcing qemu quit through QMP")
+		}
 		return qmp.Quit(m.effectiveQMPQuitTimeout())
 	})
 

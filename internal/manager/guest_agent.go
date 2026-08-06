@@ -11,6 +11,43 @@ import (
 	"github.com/shazow/virtle/internal/qga"
 )
 
+const guestShutdownResponseTimeout = time.Second
+
+func (m *manager) requestGuestShutdown(socketPath string, exec []string) error {
+	if m.guestAgentDialer == nil {
+		return fmt.Errorf("guest agent dialer is not configured")
+	}
+	timeout := m.effectiveQMPCommandTimeout()
+	ctx := context.Background()
+	client, err := m.guestAgentDialer.Dial(ctx, socketPath, timeout)
+	if err != nil {
+		return fmt.Errorf("connect guest agent: %w", err)
+	}
+	defer client.Disconnect()
+	if len(exec) == 0 {
+		shutdowner, ok := client.(qga.Shutdowner)
+		if !ok {
+			return fmt.Errorf("guest agent client does not support shutdown")
+		}
+		requestTimeout := min(timeout, guestShutdownResponseTimeout)
+		return shutdowner.Shutdown(requestTimeout)
+	}
+	pid, err := client.Exec(timeout, exec[0], exec[1:], true)
+	if err != nil {
+		return fmt.Errorf("execute guest shutdown command %v: %w", exec, err)
+	}
+	status, err := client.ExecStatus(timeout, pid)
+	if err != nil {
+		// Losing QGA after the command starts is expected while the guest shuts
+		// down. QEMU exit is the authoritative completion signal.
+		return nil
+	}
+	if status.Exited && status.ExitCode != 0 {
+		return fmt.Errorf("guest shutdown command %v exited with status %d%s", exec, status.ExitCode, qga.ExecOutputSuffix(status))
+	}
+	return nil
+}
+
 func (m *manager) writeGuestFiles(ctx context.Context, launchManifest *manifest.Manifest, stats *launch.Stats, watchers executor.Group) error {
 	files := launchManifest.ResolvedWriteFiles()
 	mountCWD := launchManifest.Workspace.MountCWD

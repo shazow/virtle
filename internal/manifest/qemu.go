@@ -1,6 +1,8 @@
 package manifest
 
 import (
+	"time"
+
 	"github.com/shazow/virtle/internal/balloon"
 	"github.com/shazow/virtle/internal/units"
 )
@@ -104,7 +106,9 @@ type QEMUQMP struct {
 }
 
 type QEMUGuestAgent struct {
-	SocketPath string `json:"socketPath,omitempty"`
+	SocketPath      string        `json:"socketPath,omitempty"`
+	ShutdownExec    []string      `json:"shutdownExec,omitempty"`
+	ShutdownTimeout time.Duration `json:"shutdownTimeout,omitempty"`
 }
 
 type QEMUSSHReady struct {

@@ -742,6 +742,30 @@ func TestManifestSSHRetryDelayDefaultsAndValidation(t *testing.T) {
 	}
 }
 
+func TestManifestGuestShutdownConfiguration(t *testing.T) {
+	document := validDocument()
+	document.QEMU.ShutdownExec = []string{"/bin/sh", "-c", "poweroff"}
+	resolved, err := document.Manifest()
+	if err != nil {
+		t.Fatalf("resolve manifest: %v", err)
+	}
+	if got, want := resolved.QEMU.GuestAgent.ShutdownExec, document.QEMU.ShutdownExec; !slices.Equal(got, want) {
+		t.Fatalf("shutdown exec: got %v want %v", got, want)
+	}
+	if got, want := resolved.QEMU.GuestAgent.ShutdownTimeout, 15*time.Second; got != want {
+		t.Fatalf("default shutdown timeout: got %s want %s", got, want)
+	}
+
+	document.QEMU.ShutdownTimeout = float64Ptr(2.5)
+	resolved, err = document.Manifest()
+	if err != nil {
+		t.Fatalf("resolve custom shutdown timeout: %v", err)
+	}
+	if got, want := resolved.QEMU.GuestAgent.ShutdownTimeout, 2500*time.Millisecond; got != want {
+		t.Fatalf("custom shutdown timeout: got %s want %s", got, want)
+	}
+}
+
 func TestDocumentSSHReadySocketDefaultAndEnable(t *testing.T) {
 	omitted := validDocument()
 	omitted.SSH.ReadySocket = ""

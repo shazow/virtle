@@ -59,6 +59,9 @@ type QEMUInput struct {
 	MachineOptions   map[string]string `json:"machine_options,omitempty" toml:"machine_options" jsonschema:"description=Additional QEMU machine options merged into the resolved machine option list."`
 	QMPSocket        string            `json:"qmp_socket,omitempty" toml:"qmp_socket" jsonschema:"description=Path to the QEMU Machine Protocol socket relative to the runtime state directory unless absolute."`
 	GuestAgentSocket string            `json:"guest_agent_socket,omitempty" toml:"guest_agent_socket" jsonschema:"description=Path to the QEMU guest agent socket relative to the runtime state directory unless absolute."`
+	ShutdownExec     []string          `json:"shutdown_exec,omitempty" toml:"shutdown_exec" jsonschema:"description=Optional guest command tuple invoked through QGA to shut down the VM gracefully."`
+	// Pointer preserves omitted vs explicitly zero input until resolution.
+	ShutdownTimeout *float64 `json:"shutdown_timeout,omitempty" toml:"shutdown_timeout" jsonschema:"description=Seconds to wait for graceful guest shutdown before forcing QEMU to quit; zero disables the wait."`
 }
 
 type MachineInput struct {

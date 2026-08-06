@@ -29,7 +29,7 @@ func LoadBytes(data []byte, name string) (*Manifest, error) {
 }
 
 func DecodeDocumentBytes(data []byte, name string) (Document, error) {
-	var doc Document
+	doc := decodeDefaults()
 	var err error
 	if manifestLooksTOML(data, name) {
 		err = decodeTOML(data, &doc)
@@ -40,6 +40,15 @@ func DecodeDocumentBytes(data []byte, name string) (Document, error) {
 		return Document{}, err
 	}
 	return doc, nil
+}
+
+// decodeDefaults seeds fields whose zero value is meaningful input rather than
+// absence, so an omitted key and an explicit zero decode differently without
+// needing pointer fields. Both decoders leave absent keys untouched.
+func decodeDefaults() Document {
+	var doc Document
+	doc.QEMU.GuestDefaultTimeout = defaultGuestDefaultTimeoutSeconds
+	return doc
 }
 
 func decodeJSON(data []byte, doc *Document) error {

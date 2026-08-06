@@ -102,21 +102,22 @@ func (d Document) ManifestWithOptions(options ResolveOptions) (*Manifest, error)
 }
 
 func resolveRetryDelay(seconds *float64) (time.Duration, error) {
-	return resolveSecondsDuration(seconds, defaultSSHRetryDelaySeconds, "manifest.ssh.retry_delay")
-}
-
-func resolveGuestDefaultTimeout(seconds *float64) (time.Duration, error) {
-	return resolveSecondsDuration(seconds, defaultGuestDefaultTimeoutSeconds, "manifest.qemu.guest_default_timeout")
-}
-
-func resolveSecondsDuration(seconds *float64, defaultSeconds float64, field string) (time.Duration, error) {
 	if seconds == nil {
-		return time.Duration(defaultSeconds * float64(time.Second)), nil
+		return time.Duration(defaultSSHRetryDelaySeconds * float64(time.Second)), nil
 	}
 	if math.IsNaN(*seconds) || math.IsInf(*seconds, 0) || *seconds < 0 {
-		return 0, fmt.Errorf("%s must be a finite number greater than or equal to zero", field)
+		return 0, fmt.Errorf("manifest.ssh.retry_delay must be a finite number greater than or equal to zero")
 	}
 	return time.Duration(*seconds * float64(time.Second)), nil
+}
+
+// resolveGuestDefaultTimeout converts manifest seconds where zero disables the
+// timeout; the default for omitted keys is seeded at decode time.
+func resolveGuestDefaultTimeout(seconds float64) (time.Duration, error) {
+	if math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds < 0 {
+		return 0, fmt.Errorf("manifest.qemu.guest_default_timeout must be a finite number greater than or equal to zero")
+	}
+	return time.Duration(seconds * float64(time.Second)), nil
 }
 
 func (h HostInput) withDefaults() HostInput {

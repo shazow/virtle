@@ -54,13 +54,12 @@ type QEMUInput struct {
 	Exec          []string `json:"exec,omitempty" toml:"exec" jsonschema:"description=Command template used to launch QEMU; the first element is the QEMU binary."`
 	FwdTunnelExec []string `json:"fwd_tunnel_exec,omitempty" toml:"fwd_tunnel_exec" jsonschema:"description=Command template QEMU uses to forward host or guest ports."`
 	// Pointer preserves omitted vs explicitly empty input until resolution.
-	User             *string           `json:"user,omitempty" toml:"user" jsonschema:"description=Host user used for QEMU-related process policy when supported."`
-	Seccomp          bool              `json:"seccomp,omitempty" toml:"seccomp" jsonschema:"description=Enable QEMU seccomp sandboxing."`
-	MachineOptions   map[string]string `json:"machine_options,omitempty" toml:"machine_options" jsonschema:"description=Additional QEMU machine options merged into the resolved machine option list."`
-	QMPSocket        string            `json:"qmp_socket,omitempty" toml:"qmp_socket" jsonschema:"description=Path to the QEMU Machine Protocol socket relative to the runtime state directory unless absolute."`
-	GuestAgentSocket string            `json:"guest_agent_socket,omitempty" toml:"guest_agent_socket" jsonschema:"description=Path to the QEMU guest agent socket relative to the runtime state directory unless absolute."`
-	// Pointer preserves omitted vs explicitly zero input until resolution.
-	GuestDefaultTimeout *float64 `json:"guest_default_timeout,omitempty" toml:"guest_default_timeout" jsonschema:"description=Seconds allowed for each QEMU guest agent command; zero disables the timeout."`
+	User                *string           `json:"user,omitempty" toml:"user" jsonschema:"description=Host user used for QEMU-related process policy when supported."`
+	Seccomp             bool              `json:"seccomp,omitempty" toml:"seccomp" jsonschema:"description=Enable QEMU seccomp sandboxing."`
+	MachineOptions      map[string]string `json:"machine_options,omitempty" toml:"machine_options" jsonschema:"description=Additional QEMU machine options merged into the resolved machine option list."`
+	QMPSocket           string            `json:"qmp_socket,omitempty" toml:"qmp_socket" jsonschema:"description=Path to the QEMU Machine Protocol socket relative to the runtime state directory unless absolute."`
+	GuestAgentSocket    string            `json:"guest_agent_socket,omitempty" toml:"guest_agent_socket" jsonschema:"description=Path to the QEMU guest agent socket relative to the runtime state directory unless absolute."`
+	GuestDefaultTimeout float64           `json:"guest_default_timeout,omitempty" toml:"guest_default_timeout" jsonschema:"description=Seconds allowed for each QEMU guest agent command; zero disables the timeout and omitting the key uses the default of 30 seconds."`
 }
 
 type MachineInput struct {

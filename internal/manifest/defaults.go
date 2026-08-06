@@ -10,7 +10,6 @@ const (
 // kernel.path and kernel.initrd_path, are intentionally left unset.
 func DefaultDocument() Document {
 	retryDelay := defaultSSHRetryDelaySeconds
-	guestDefaultTimeout := float64(defaultGuestDefaultTimeoutSeconds)
 	return Document{
 		HostName:   defaultHostName,
 		WorkingDir: defaultWorkingDir,
@@ -18,7 +17,7 @@ func DefaultDocument() Document {
 		QEMU: QEMUInput{
 			QMPSocket:           defaultQMP,
 			GuestAgentSocket:    defaultGuestAgent,
-			GuestDefaultTimeout: &guestDefaultTimeout,
+			GuestDefaultTimeout: defaultGuestDefaultTimeoutSeconds,
 		},
 		Machine: MachineInput{
 			Type:   defaultMachineType,
@@ -132,9 +131,9 @@ func mergeQEMUInput(base QEMUInput, override QEMUInput) QEMUInput {
 	if override.GuestAgentSocket != "" {
 		base.GuestAgentSocket = override.GuestAgentSocket
 	}
-	if override.GuestDefaultTimeout != nil {
-		base.GuestDefaultTimeout = override.GuestDefaultTimeout
-	}
+	// Always taken from the override: zero means no timeout, and decode seeds
+	// the default for omitted keys.
+	base.GuestDefaultTimeout = override.GuestDefaultTimeout
 	return base
 }
 

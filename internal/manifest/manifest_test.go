@@ -742,19 +742,36 @@ func TestManifestSSHRetryDelayDefaultsAndValidation(t *testing.T) {
 	}
 }
 
-func TestManifestGuestDefaultTimeoutDefaultsConfiguresAndDisables(t *testing.T) {
-	document := validDocument()
-	resolved, err := document.Manifest()
+func TestDecodeDocumentGuestDefaultTimeout(t *testing.T) {
+	omitted, err := DecodeDocumentBytes([]byte("[qemu]\n"), "manifest.toml")
 	if err != nil {
-		t.Fatalf("resolve manifest: %v", err)
+		t.Fatalf("decode omitted guest default timeout: %v", err)
 	}
-	if got, want := resolved.QEMU.GuestAgent.CommandTimeout, 30*time.Second; got != want {
-		t.Fatalf("default guest agent timeout: got %s want %s", got, want)
+	if got, want := omitted.QEMU.GuestDefaultTimeout, 30.0; got != want {
+		t.Fatalf("omitted guest default timeout: got %v want %v", got, want)
 	}
 
-	custom := validDocument()
-	custom.QEMU.GuestDefaultTimeout = float64Ptr(2.5)
-	resolved, err = custom.Manifest()
+	zero, err := DecodeDocumentBytes([]byte("[qemu]\nguest_default_timeout = 0\n"), "manifest.toml")
+	if err != nil {
+		t.Fatalf("decode zero guest default timeout: %v", err)
+	}
+	if got := zero.QEMU.GuestDefaultTimeout; got != 0 {
+		t.Fatalf("zero guest default timeout: got %v want 0", got)
+	}
+
+	custom, err := DecodeDocumentBytes([]byte(`{"qemu": {"guest_default_timeout": 2.5}}`), "manifest.json")
+	if err != nil {
+		t.Fatalf("decode custom guest default timeout: %v", err)
+	}
+	if got, want := custom.QEMU.GuestDefaultTimeout, 2.5; got != want {
+		t.Fatalf("custom guest default timeout: got %v want %v", got, want)
+	}
+}
+
+func TestManifestGuestDefaultTimeoutResolutionAndValidation(t *testing.T) {
+	document := validDocument()
+	document.QEMU.GuestDefaultTimeout = 2.5
+	resolved, err := document.Manifest()
 	if err != nil {
 		t.Fatalf("resolve custom guest agent timeout: %v", err)
 	}
@@ -762,18 +779,18 @@ func TestManifestGuestDefaultTimeoutDefaultsConfiguresAndDisables(t *testing.T) 
 		t.Fatalf("custom guest agent timeout: got %s want %s", got, want)
 	}
 
-	disabled := validDocument()
-	disabled.QEMU.GuestDefaultTimeout = float64Ptr(0)
-	resolved, err = disabled.Manifest()
+	zero := validDocument()
+	zero.QEMU.GuestDefaultTimeout = 0
+	resolved, err = zero.Manifest()
 	if err != nil {
-		t.Fatalf("resolve disabled guest agent timeout: %v", err)
+		t.Fatalf("resolve zero guest agent timeout: %v", err)
 	}
 	if got := resolved.QEMU.GuestAgent.CommandTimeout; got != 0 {
-		t.Fatalf("disabled guest agent timeout: got %s want 0", got)
+		t.Fatalf("zero guest agent timeout: got %s want no timeout", got)
 	}
 
 	invalid := validDocument()
-	invalid.QEMU.GuestDefaultTimeout = float64Ptr(-1)
+	invalid.QEMU.GuestDefaultTimeout = -1
 	_, err = invalid.Manifest()
 	if err == nil || !strings.Contains(err.Error(), "manifest.qemu.guest_default_timeout must be a finite number greater than or equal to zero") {
 		t.Fatalf("expected guest agent timeout validation error, got %v", err)

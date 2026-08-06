@@ -406,7 +406,7 @@
         },
         "guest_default_timeout": {
           "type": "number",
-          "description": "Seconds allowed for each QEMU guest agent command; zero disables the timeout."
+          "description": "Seconds allowed for each QEMU guest agent command; zero disables the timeout and omitting the key uses the default of 30 seconds."
         }
       },
       "additionalProperties": false,

@@ -118,6 +118,12 @@ func mergeQEMUInput(base QEMUInput, override QEMUInput) QEMUInput {
 	// Always taken from the override: zero means no timeout, and decode seeds
 	// the default for omitted keys.
 	base.GuestDefaultTimeout = override.GuestDefaultTimeout
+	if override.ShutdownExec != nil {
+		base.ShutdownExec = override.ShutdownExec
+	}
+	// Always taken from the override: zero disables the graceful-shutdown
+	// wait, and decode seeds the default for omitted keys.
+	base.ShutdownTimeout = override.ShutdownTimeout
 	return base
 }
 

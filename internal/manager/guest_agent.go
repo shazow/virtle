@@ -11,6 +11,51 @@ import (
 	"github.com/shazow/virtle/internal/qga"
 )
 
+const guestShutdownResponseTimeout = time.Second
+
+// requestGuestShutdown asks the guest to power down through the guest agent,
+// either with the guest-shutdown command or a configured shutdown_exec guest
+// command. QEMU exit is the authoritative completion signal; this only issues
+// the request.
+func (m *manager) requestGuestShutdown(ctx context.Context, socketPath string, exec []string) error {
+	dialer := m.guestAgentDialer
+	if dialer == nil {
+		dialer = &qga.SocketDialer{RPCTimeout: m.effectiveQMPCommandTimeout()}
+	}
+	client, err := dialer.Dial(ctx, socketPath, m.effectiveQMPConnectTimeout())
+	if err != nil {
+		return fmt.Errorf("connect guest agent: %w", err)
+	}
+	defer client.Disconnect()
+	if len(exec) == 0 {
+		shutdowner, ok := client.(qga.Shutdowner)
+		if !ok {
+			return fmt.Errorf("guest agent client does not support shutdown")
+		}
+		// guest-shutdown rarely answers before the guest powers off; cap the
+		// wait for its response instead of holding out for a full RPC timeout.
+		ctx, cancel := context.WithTimeout(ctx, guestShutdownResponseTimeout)
+		defer cancel()
+		return shutdowner.Shutdown(ctx)
+	}
+	ctx, cancel := m.launchManifest.GuestCommandContext(ctx)
+	defer cancel()
+	pid, err := client.Exec(ctx, exec[0], exec[1:], true)
+	if err != nil {
+		return fmt.Errorf("execute guest shutdown command %v: %w", exec, err)
+	}
+	status, err := client.ExecStatus(ctx, pid)
+	if err != nil {
+		// Losing QGA after the command starts is expected while the guest shuts
+		// down. QEMU exit is the authoritative completion signal.
+		return nil
+	}
+	if status.Exited && status.ExitCode != 0 {
+		return fmt.Errorf("guest shutdown command %v exited with status %d%s", exec, status.ExitCode, qga.ExecOutputSuffix(status))
+	}
+	return nil
+}
+
 func (m *manager) writeGuestFiles(ctx context.Context, stats *launch.Stats, watchers executor.Group) error {
 	launchManifest := m.launchManifest
 	files := launchManifest.ResolvedWriteFiles()

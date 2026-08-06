@@ -71,6 +71,12 @@ func (m *Manifest) Validate() error {
 		return fmt.Errorf("manifest.qemu.qmp.socketPath is required")
 	case m.QEMU.GuestAgent.CommandTimeout < 0:
 		return fmt.Errorf("manifest.qemu.guestAgent.commandTimeout must be greater than or equal to zero")
+	case m.QEMU.GuestAgent.ShutdownTimeout < 0:
+		return fmt.Errorf("manifest.qemu.guestAgent.shutdownTimeout must be greater than or equal to zero")
+	case len(m.QEMU.GuestAgent.ShutdownExec) > 0 && m.QEMU.GuestAgent.ShutdownExec[0] == "":
+		return fmt.Errorf("manifest.qemu.guestAgent.shutdownExec[0] is required")
+	case len(m.QEMU.GuestAgent.ShutdownExec) > 0 && m.QEMU.GuestAgent.SocketPath == "":
+		return fmt.Errorf("manifest.qemu.guestAgent.socketPath is required when shutdown_exec is set")
 	case len(m.WriteFiles) > 0 && m.QEMU.GuestAgent.SocketPath == "":
 		return fmt.Errorf("manifest.qemu.guestAgent.socketPath is required when manifest.writeFiles is set")
 	case m.VSock.CIDRange.Start < defaultVSockCIDStart:

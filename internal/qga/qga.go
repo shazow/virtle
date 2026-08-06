@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"sync"
 	"time"
@@ -39,6 +40,11 @@ type FileReader interface {
 type ExecRunner interface {
 	Exec(ctx context.Context, path string, args []string, captureOutput bool) (int, error)
 	ExecStatus(ctx context.Context, pid int) (ExecStatus, error)
+}
+
+// Shutdowner asks the guest operating system to power down.
+type Shutdowner interface {
+	Shutdown(ctx context.Context) error
 }
 
 // Disconnecter closes an open guest-agent connection.
@@ -234,6 +240,17 @@ func (c *socketClient) ExecStatus(ctx context.Context, pid int) (ExecStatus, err
 		status.ExitCode = *result.ExitCode
 	}
 	return status, nil
+}
+
+// Shutdown asks the guest to power down. The guest often powers off without
+// answering, so a missing or truncated response counts as success; callers
+// bound the wait through ctx.
+func (c *socketClient) Shutdown(ctx context.Context) error {
+	_, err := c.run(ctx, "guest-shutdown", map[string]any{"mode": "powerdown"})
+	if err == nil || errors.Is(err, context.DeadlineExceeded) || qmpwire.IsTimeout(err) || errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
+		return nil
+	}
+	return fmt.Errorf("guest agent shutdown: %w", err)
 }
 
 func (c *socketClient) Disconnect() error {

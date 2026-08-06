@@ -1951,8 +1951,8 @@ func TestManagerLaunchDoesNotAutoprovisionWhenDisabled(t *testing.T) {
 	if got, want := len(runner.sshArgs()), 1; got != want {
 		t.Fatalf("unexpected ssh starts: got %d want %d", got, want)
 	}
-	if guestDialer.attempts != 0 {
-		t.Fatalf("expected no guest agent use without autoprovision, got %d attempts", guestDialer.attempts)
+	if guestDialer.attempts != 1 {
+		t.Fatalf("expected only the guest shutdown attempt without autoprovision, got %d attempts", guestDialer.attempts)
 	}
 }
 
@@ -2505,8 +2505,8 @@ func TestManagerLaunchSkipsGuestFilesOnResume(t *testing.T) {
 	if err := manager.launchWithOptions(context.Background(), cfg, nil, LaunchOptions{Resume: ResumeModeForce, SSH: true}); err != nil {
 		t.Fatalf("resume launch: %v", err)
 	}
-	if guestDialer.attempts != 0 {
-		t.Fatalf("expected resume launch to skip guest agent writes, got %d dial attempts", guestDialer.attempts)
+	if guestDialer.attempts != 1 {
+		t.Fatalf("expected resume launch to skip guest agent writes and only request shutdown, got %d dial attempts", guestDialer.attempts)
 	}
 	if qmpClient.migrateIncomingCalls != 1 || qmpClient.contCalls != 1 {
 		t.Fatalf("expected resume path to restore and continue, migrate=%d cont=%d", qmpClient.migrateIncomingCalls, qmpClient.contCalls)
@@ -4828,6 +4828,23 @@ func (d *fakeSSHReadyDialer) Dial(ctx context.Context, socketPath string, timeou
 		data = SSHReadyToken
 	}
 	return io.NopCloser(strings.NewReader(data)), nil
+}
+
+func TestRequestGuestShutdownReportsCommandFailure(t *testing.T) {
+	client := &fakeGuestAgentClient{execStatuses: []qga.ExecStatus{{Exited: true, ExitCode: 127}}}
+	manager := &manager{
+		guestAgentDialer:  &fakeGuestAgentDialer{client: client},
+		qmpConnectTimeout: time.Second,
+	}
+	manager.launchManifest = &manifest.Manifest{}
+	exec := []string{"/bin/sh", "-c", "poweroff"}
+	err := manager.requestGuestShutdown(context.Background(), "/tmp/qga.sock", exec)
+	if err == nil || !strings.Contains(err.Error(), "exited with status 127") {
+		t.Fatalf("expected shutdown command failure, got %v", err)
+	}
+	if len(client.execs) != 1 || client.execs[0].path != exec[0] || !reflect.DeepEqual(client.execs[0].args, exec[1:]) {
+		t.Fatalf("unexpected guest shutdown exec: %#v", client.execs)
+	}
 }
 
 type fakeGuestAgentClient struct {

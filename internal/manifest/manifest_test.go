@@ -830,6 +830,30 @@ func TestManifestGuestDefaultTimeoutResolutionAndValidation(t *testing.T) {
 	}
 }
 
+func TestManifestGuestShutdownConfiguration(t *testing.T) {
+	omitted, err := DecodeDocumentBytes([]byte("[qemu]\n"), "manifest.toml")
+	if err != nil {
+		t.Fatalf("decode omitted shutdown timeout: %v", err)
+	}
+	if got, want := omitted.QEMU.ShutdownTimeout, units.Duration(90*time.Second); got != want {
+		t.Fatalf("omitted shutdown timeout: got %v want %v", got, want)
+	}
+
+	document := validDocument()
+	document.QEMU.ShutdownExec = []string{"/bin/sh", "-c", "poweroff"}
+	document.QEMU.ShutdownTimeout = units.Duration(2500 * time.Millisecond)
+	resolved, err := document.Manifest()
+	if err != nil {
+		t.Fatalf("resolve manifest: %v", err)
+	}
+	if got, want := resolved.QEMU.GuestAgent.ShutdownExec, document.QEMU.ShutdownExec; !slices.Equal(got, want) {
+		t.Fatalf("shutdown exec: got %v want %v", got, want)
+	}
+	if got, want := resolved.QEMU.GuestAgent.ShutdownTimeout, 2500*time.Millisecond; got != want {
+		t.Fatalf("custom shutdown timeout: got %s want %s", got, want)
+	}
+}
+
 func TestDocumentSSHReadySocketDefaultAndEnable(t *testing.T) {
 	omitted := validDocument()
 	omitted.SSH.ReadySocket = ""

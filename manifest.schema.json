@@ -407,6 +407,17 @@
         "guest_default_timeout": {
           "type": "string",
           "description": "Timeout for each QEMU guest agent command as a duration such as 30s. Zero disables the timeout and omitting the key uses the default of 30s."
+        },
+        "shutdown_exec": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "description": "Optional guest command tuple invoked through QGA to shut down the VM gracefully."
+        },
+        "shutdown_timeout": {
+          "type": "string",
+          "description": "Wait for graceful guest shutdown before forcing QEMU to quit as a duration such as 90s. Zero disables the wait and omitting the key uses the default of 90s."
         }
       },
       "additionalProperties": false,

@@ -116,7 +116,7 @@ func (p *Process) Stop(delay time.Duration) error {
 	if p.shutdown != nil {
 		if err := p.shutdown(); err != nil {
 			shutdownErr = fmt.Errorf("shutdown %s: %w", p.Name(), err)
-		} else if p.waitForExit(delay) {
+		} else if p.WaitForExit(delay) {
 			return nil
 		}
 	}
@@ -128,7 +128,7 @@ func (p *Process) Stop(delay time.Duration) error {
 		return fmt.Errorf("stop %s: %w", p.Name(), err)
 	}
 
-	if p.waitForExit(delay) {
+	if p.WaitForExit(delay) {
 		return shutdownErr
 	}
 	if err := p.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
@@ -145,7 +145,7 @@ func (p *Process) Stop(delay time.Duration) error {
 	if killWait < minKillWait {
 		killWait = minKillWait
 	}
-	if !p.waitForExit(killWait) {
+	if !p.WaitForExit(killWait) {
 		err := fmt.Errorf("kill %s: process did not exit", p.Name())
 		if shutdownErr != nil {
 			return errors.Join(shutdownErr, err)
@@ -184,7 +184,8 @@ func SignalProcessGroup(pid int, sig syscall.Signal) error {
 	return nil
 }
 
-func (p *Process) waitForExit(delay time.Duration) bool {
+// WaitForExit waits up to delay for the process to exit.
+func (p *Process) WaitForExit(delay time.Duration) bool {
 	if delay <= 0 {
 		select {
 		case <-p.done:

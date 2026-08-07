@@ -7,6 +7,7 @@ import (
 
 	"github.com/invopop/jsonschema"
 	"github.com/shazow/virtle/internal/manifest"
+	"github.com/shazow/virtle/internal/units"
 )
 
 // Generate returns the JSON Schema for the virtle manifest input format.
@@ -20,6 +21,14 @@ func Generate() *jsonschema.Schema {
 		RequiredFromJSONSchemaTags: true,
 		AllowAdditionalProperties:  false,
 		Mapper: func(t reflect.Type) *jsonschema.Schema {
+			if t == reflect.TypeOf(units.Duration(0)) {
+				// Durations decode from Go duration strings or bare numbers of
+				// seconds.
+				return &jsonschema.Schema{OneOf: []*jsonschema.Schema{
+					{Type: "string"},
+					{Type: "number"},
+				}}
+			}
 			if t == reflect.TypeOf(manifest.MountsInput{}) {
 				// MountsInput is a tagged-union slice backed by the MountEntry interface.
 				// Reflection only sees []MountEntry and would emit "items: true", so map it

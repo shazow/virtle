@@ -2,6 +2,7 @@ package manifest
 
 import (
 	"testing"
+	"time"
 
 	"github.com/shazow/virtle/internal/units"
 )
@@ -105,7 +106,7 @@ func TestDocumentWithDefaultsPreservesExplicitOverridesForMovedDefaults(t *testi
 	document.QEMU.GuestAgentSocket = "custom-qga.sock"
 	document.SSH.User = "custom-user"
 	document.SSH.ReadySocket = "custom-ready.sock"
-	document.SSH.RetryDelay = 2.5
+	document.SSH.RetryDelay = units.Duration(2500 * time.Millisecond)
 	document.VSock.CIDRange = RangeInput{Min: 10, Max: 20}
 
 	manifest, err := document.Manifest()

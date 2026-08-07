@@ -50,7 +50,7 @@ type QEMUInput struct {
 	MachineOptions      map[string]string `json:"machine_options,omitempty" toml:"machine_options" jsonschema:"description=Additional QEMU machine options merged into the resolved machine option list."`
 	QMPSocket           string            `json:"qmp_socket,omitempty" toml:"qmp_socket" default:"qmp.sock" jsonschema:"description=Path to the QEMU Machine Protocol socket relative to the runtime state directory unless absolute."`
 	GuestAgentSocket    string            `json:"guest_agent_socket,omitempty" toml:"guest_agent_socket" default:"qga.sock" jsonschema:"description=Path to the QEMU guest agent socket relative to the runtime state directory unless absolute."`
-	GuestDefaultTimeout float64           `json:"guest_default_timeout,omitempty" toml:"guest_default_timeout" default:"30" jsonschema:"description=Seconds allowed for each QEMU guest agent command; zero disables the timeout and omitting the key uses the default of 30 seconds."`
+	GuestDefaultTimeout units.Duration    `json:"guest_default_timeout,omitempty" toml:"guest_default_timeout" default:"30s" jsonschema:"description=Timeout for each QEMU guest agent command as a duration such as 30s; bare numbers are seconds. Zero disables the timeout and omitting the key uses the default of 30s."`
 }
 
 type MachineInput struct {
@@ -234,21 +234,21 @@ type BalloonInput struct {
 }
 
 type BalloonControllerInput struct {
-	MinActual             units.MiB `json:"min_actual,omitempty" toml:"min_actual" jsonschema:"description=Minimum guest memory target in MiB."`
-	MaxActual             units.MiB `json:"max_actual,omitempty" toml:"max_actual" jsonschema:"description=Maximum guest memory target in MiB."`
-	GrowBelowAvailable    units.MiB `json:"grow_below_available,omitempty" toml:"grow_below_available" jsonschema:"description=Grow guest memory when available guest memory falls below this MiB threshold."`
-	ReclaimAboveAvailable units.MiB `json:"reclaim_above_available,omitempty" toml:"reclaim_above_available" jsonschema:"description=Reclaim guest memory when available guest memory rises above this MiB threshold."`
-	Step                  units.MiB `json:"step,omitempty" toml:"step" jsonschema:"description=Memory adjustment step size in MiB."`
-	PollInterval          float64   `json:"poll_interval,omitempty" toml:"poll_interval" jsonschema:"description=Seconds between balloon controller polling cycles."`
-	ReclaimHoldoff        float64   `json:"reclaim_holdoff,omitempty" toml:"reclaim_holdoff" jsonschema:"description=Seconds to wait after growing memory before reclaiming again."`
+	MinActual             units.MiB      `json:"min_actual,omitempty" toml:"min_actual" jsonschema:"description=Minimum guest memory target in MiB."`
+	MaxActual             units.MiB      `json:"max_actual,omitempty" toml:"max_actual" jsonschema:"description=Maximum guest memory target in MiB."`
+	GrowBelowAvailable    units.MiB      `json:"grow_below_available,omitempty" toml:"grow_below_available" jsonschema:"description=Grow guest memory when available guest memory falls below this MiB threshold."`
+	ReclaimAboveAvailable units.MiB      `json:"reclaim_above_available,omitempty" toml:"reclaim_above_available" jsonschema:"description=Reclaim guest memory when available guest memory rises above this MiB threshold."`
+	Step                  units.MiB      `json:"step,omitempty" toml:"step" jsonschema:"description=Memory adjustment step size in MiB."`
+	PollInterval          units.Duration `json:"poll_interval,omitempty" toml:"poll_interval" jsonschema:"description=Delay between balloon controller polling cycles as a duration such as 5s; bare numbers are seconds."`
+	ReclaimHoldoff        units.Duration `json:"reclaim_holdoff,omitempty" toml:"reclaim_holdoff" jsonschema:"description=Wait after growing memory before reclaiming again as a duration such as 30s; bare numbers are seconds."`
 }
 
 type SSHInput struct {
-	Exec          []string `json:"exec,omitempty" toml:"exec" jsonschema:"description=SSH command template used to attach to the guest."`
-	User          string   `json:"user,omitempty" toml:"user" default:"agent" jsonschema:"description=Guest SSH username."`
-	ReadySocket   string   `json:"ready_socket,omitempty" toml:"ready_socket" jsonschema:"description=Guest readiness socket path relative to the runtime state directory unless absolute."`
-	RetryDelay    float64  `json:"retry_delay,omitempty" toml:"retry_delay" default:"0.5" jsonschema:"description=Seconds to wait between SSH readiness or connection retry attempts; zero retries immediately and omitting the key uses the default of 0.5 seconds."`
-	Autoprovision bool     `json:"autoprovision,omitempty" toml:"autoprovision" jsonschema:"description=Automatically provision an SSH key after authentication failure."`
+	Exec          []string       `json:"exec,omitempty" toml:"exec" jsonschema:"description=SSH command template used to attach to the guest."`
+	User          string         `json:"user,omitempty" toml:"user" default:"agent" jsonschema:"description=Guest SSH username."`
+	ReadySocket   string         `json:"ready_socket,omitempty" toml:"ready_socket" jsonschema:"description=Guest readiness socket path relative to the runtime state directory unless absolute."`
+	RetryDelay    units.Duration `json:"retry_delay,omitempty" toml:"retry_delay" default:"500ms" jsonschema:"description=Delay between SSH readiness or connection retry attempts as a duration such as 500ms; bare numbers are seconds. Zero retries immediately and omitting the key uses the default of 500ms."`
+	Autoprovision bool           `json:"autoprovision,omitempty" toml:"autoprovision" jsonschema:"description=Automatically provision an SSH key after authentication failure."`
 }
 
 type VSockInput struct {

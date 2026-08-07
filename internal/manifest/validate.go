@@ -64,7 +64,7 @@ func (m *Manifest) Validate() error {
 	case m.SSH.User == "":
 		return fmt.Errorf("manifest.ssh.user is required")
 	case m.SSH.RetryDelay < 0:
-		return fmt.Errorf("manifest.ssh.retryDelay must be a finite number greater than or equal to zero")
+		return fmt.Errorf("manifest.ssh.retryDelay must be greater than or equal to zero")
 	case m.QEMU.BinaryPath == "":
 		return fmt.Errorf("manifest.qemu.binaryPath is required")
 	case m.QEMU.QMP.SocketPath == "":

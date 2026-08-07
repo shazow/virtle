@@ -1,0 +1,82 @@
+package units
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestParseDurationAcceptsUnitsAndBareSeconds(t *testing.T) {
+	for _, tt := range []struct {
+		in   string
+		want Duration
+	}{
+		{"30s", Duration(30 * time.Second)},
+		{"1m30s", Duration(90 * time.Second)},
+		{"500ms", Duration(500 * time.Millisecond)},
+		{"5", Duration(5 * time.Second)},
+		{"0.5", Duration(500 * time.Millisecond)},
+		{"0", 0},
+	} {
+		got, err := ParseDuration(tt.in)
+		if err != nil {
+			t.Fatalf("parse %q: %v", tt.in, err)
+		}
+		if got != tt.want {
+			t.Fatalf("parse %q: got %s want %s", tt.in, got, tt.want)
+		}
+	}
+
+	if _, err := ParseDuration("nope"); err == nil || !strings.Contains(err.Error(), `invalid duration "nope"`) {
+		t.Fatalf("expected parse error, got %v", err)
+	}
+}
+
+func TestDurationJSONRoundTrip(t *testing.T) {
+	encoded, err := json.Marshal(Duration(90 * time.Second))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if got, want := string(encoded), `"1m30s"`; got != want {
+		t.Fatalf("encoded: got %s want %s", got, want)
+	}
+
+	var decoded Duration
+	for raw, want := range map[string]Duration{
+		`"2m"`:  Duration(2 * time.Minute),
+		`"2.5"`: Duration(2500 * time.Millisecond),
+		`2.5`:   Duration(2500 * time.Millisecond),
+		`30`:    Duration(30 * time.Second),
+	} {
+		if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+			t.Fatalf("unmarshal %s: %v", raw, err)
+		}
+		if decoded != want {
+			t.Fatalf("unmarshal %s: got %s want %s", raw, decoded, want)
+		}
+	}
+
+	if err := json.Unmarshal([]byte(`"nope"`), &decoded); err == nil {
+		t.Fatal("expected invalid duration error")
+	}
+	if err := json.Unmarshal([]byte(`true`), &decoded); err == nil {
+		t.Fatal("expected type error")
+	}
+}
+
+func TestDurationUnmarshalTOML(t *testing.T) {
+	var d Duration
+	if err := d.UnmarshalTOML(int64(30)); err != nil || d != Duration(30*time.Second) {
+		t.Fatalf("int64: got %s err %v", d, err)
+	}
+	if err := d.UnmarshalTOML(0.5); err != nil || d != Duration(500*time.Millisecond) {
+		t.Fatalf("float64: got %s err %v", d, err)
+	}
+	if err := d.UnmarshalTOML("1m"); err != nil || d != Duration(time.Minute) {
+		t.Fatalf("string: got %s err %v", d, err)
+	}
+	if err := d.UnmarshalTOML(true); err == nil {
+		t.Fatal("expected type error for bool")
+	}
+}

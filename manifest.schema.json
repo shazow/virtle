@@ -25,12 +25,26 @@
           "description": "Memory adjustment step size in MiB."
         },
         "poll_interval": {
-          "type": "number",
-          "description": "Seconds between balloon controller polling cycles."
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "description": "Delay between balloon controller polling cycles as a duration such as 5s; bare numbers are seconds."
         },
         "reclaim_holdoff": {
-          "type": "number",
-          "description": "Seconds to wait after growing memory before reclaiming again."
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "description": "Wait after growing memory before reclaiming again as a duration such as 30s; bare numbers are seconds."
         }
       },
       "additionalProperties": false,
@@ -405,8 +419,15 @@
           "description": "Path to the QEMU guest agent socket relative to the runtime state directory unless absolute."
         },
         "guest_default_timeout": {
-          "type": "number",
-          "description": "Seconds allowed for each QEMU guest agent command; zero disables the timeout and omitting the key uses the default of 30 seconds."
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "description": "Timeout for each QEMU guest agent command as a duration such as 30s; bare numbers are seconds. Zero disables the timeout and omitting the key uses the default of 30s."
         }
       },
       "additionalProperties": false,
@@ -461,8 +482,15 @@
           "description": "Guest readiness socket path relative to the runtime state directory unless absolute."
         },
         "retry_delay": {
-          "type": "number",
-          "description": "Seconds to wait between SSH readiness or connection retry attempts; zero retries immediately and omitting the key uses the default of 0.5 seconds."
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "description": "Delay between SSH readiness or connection retry attempts as a duration such as 500ms; bare numbers are seconds. Zero retries immediately and omitting the key uses the default of 500ms."
         },
         "autoprovision": {
           "type": "boolean",

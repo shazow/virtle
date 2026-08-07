@@ -2485,9 +2485,8 @@ func TestManagerLaunchSkipsGuestFilesOnResume(t *testing.T) {
 
 func TestManagerWriteGuestFileClosesAfterWriteFailure(t *testing.T) {
 	client := &fakeGuestAgentClient{writeErr: errors.New("write failed")}
-	manager := &manager{qmpConnectTimeout: time.Millisecond}
 
-	err := manager.writeGuestFile(client, time.Second, "/etc/fail", "ZmFpbA==")
+	err := qga.WriteFile(context.Background(), client, "/etc/fail", "ZmFpbA==")
 	if err == nil || !strings.Contains(err.Error(), "write failed") {
 		t.Fatalf("expected write failure, got %v", err)
 	}
@@ -3612,7 +3611,7 @@ func TestWaitForSessionReturnsNilWhenSavedStateExistsOnCancellation(t *testing.T
 	cancel()
 	session := (&executortest.Process{OverrideName: "ssh"}).Process()
 
-	err := (&manager{}).waitForSession(ctx, session, newTestLaunchLifecycle(), nil, 0, "", executor.Group{})
+	err := (&manager{}).waitForSession(ctx, session, newTestLaunchLifecycle(), nil, "", executor.Group{})
 	if err == nil {
 		t.Fatal("expected active session cancellation error")
 	}
@@ -3914,8 +3913,11 @@ func TestLaunchRuntimeRegistersGuestRPCsAtControlPeriphery(t *testing.T) {
 		t.Fatalf("guest exec count after guest-exec: got %d want %d", got, want)
 	}
 	exec = guestAgent.execs[1]
-	if exec.path != "/bin/sh" || !reflect.DeepEqual(exec.args, []string{"-c", "echo hi"}) || !exec.captureOutput || exec.timeout != 300*time.Second {
+	if exec.path != "/bin/sh" || !reflect.DeepEqual(exec.args, []string{"-c", "echo hi"}) || !exec.captureOutput {
 		t.Fatalf("unexpected guest-exec call: %#v", exec)
+	}
+	if exec.timeout <= 299*time.Second || exec.timeout > 300*time.Second {
+		t.Fatalf("guest-exec deadline: got %s want ~300s", exec.timeout)
 	}
 
 	readResp, err := client.GuestRead(context.Background(), control.GuestReadRequest{Path: "/tmp/message"})
@@ -4831,17 +4833,19 @@ type guestExecCall struct {
 	path          string
 	args          []string
 	captureOutput bool
-	timeout       time.Duration
+	// timeout is the remaining ctx deadline observed at exec time; zero when
+	// the exec ctx had no deadline.
+	timeout time.Duration
 }
 
-func (c *fakeGuestAgentClient) Ping(timeout time.Duration) error {
+func (c *fakeGuestAgentClient) Ping(ctx context.Context) error {
 	if c.record != nil {
 		c.record("guest-ping")
 	}
 	return c.pingErr
 }
 
-func (c *fakeGuestAgentClient) OpenFile(timeout time.Duration, path string) (int, error) {
+func (c *fakeGuestAgentClient) OpenFile(ctx context.Context, path string) (int, error) {
 	if c.record != nil {
 		c.record("guest-open:" + path)
 	}
@@ -4859,7 +4863,7 @@ func (c *fakeGuestAgentClient) OpenFile(timeout time.Duration, path string) (int
 	return c.nextHandle, nil
 }
 
-func (c *fakeGuestAgentClient) OpenFileRead(timeout time.Duration, path string) (int, error) {
+func (c *fakeGuestAgentClient) OpenFileRead(ctx context.Context, path string) (int, error) {
 	if c.record != nil {
 		c.record("guest-open-read:" + path)
 	}
@@ -4877,7 +4881,7 @@ func (c *fakeGuestAgentClient) OpenFileRead(timeout time.Duration, path string) 
 	return c.nextHandle, nil
 }
 
-func (c *fakeGuestAgentClient) ReadFile(timeout time.Duration, handle int, count int) (string, bool, error) {
+func (c *fakeGuestAgentClient) ReadFile(ctx context.Context, handle int, count int) (string, bool, error) {
 	c.mu.Lock()
 	path := c.handles[handle]
 	index := c.readIndexes[path]
@@ -4902,7 +4906,7 @@ func (c *fakeGuestAgentClient) ReadFile(timeout time.Duration, handle int, count
 	return payloads[index], index == len(payloads)-1, nil
 }
 
-func (c *fakeGuestAgentClient) WriteFile(timeout time.Duration, handle int, payloadBase64 string) error {
+func (c *fakeGuestAgentClient) WriteFile(ctx context.Context, handle int, payloadBase64 string) error {
 	c.mu.Lock()
 	path := c.handles[handle]
 	if c.writes == nil {
@@ -4917,7 +4921,7 @@ func (c *fakeGuestAgentClient) WriteFile(timeout time.Duration, handle int, payl
 	return c.writeErr
 }
 
-func (c *fakeGuestAgentClient) CloseFile(timeout time.Duration, handle int) error {
+func (c *fakeGuestAgentClient) CloseFile(ctx context.Context, handle int) error {
 	c.mu.Lock()
 	path := c.handles[handle]
 	c.closes = append(c.closes, path)
@@ -4929,13 +4933,17 @@ func (c *fakeGuestAgentClient) CloseFile(timeout time.Duration, handle int) erro
 	return c.closeErr
 }
 
-func (c *fakeGuestAgentClient) Exec(timeout time.Duration, path string, args []string, captureOutput bool) (int, error) {
+func (c *fakeGuestAgentClient) Exec(ctx context.Context, path string, args []string, captureOutput bool) (int, error) {
+	remaining := time.Duration(0)
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining = time.Until(deadline)
+	}
 	c.mu.Lock()
 	c.execs = append(c.execs, guestExecCall{
 		path:          path,
 		args:          append([]string(nil), args...),
 		captureOutput: captureOutput,
-		timeout:       timeout,
+		timeout:       remaining,
 	})
 	pid := len(c.execs)
 	c.mu.Unlock()
@@ -4961,7 +4969,7 @@ func (c *fakeGuestAgentClient) Exec(timeout time.Duration, path string, args []s
 	return pid, nil
 }
 
-func (c *fakeGuestAgentClient) ExecStatus(timeout time.Duration, pid int) (qga.ExecStatus, error) {
+func (c *fakeGuestAgentClient) ExecStatus(ctx context.Context, pid int) (qga.ExecStatus, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.execStatusCalls++

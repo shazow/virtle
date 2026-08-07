@@ -16,7 +16,6 @@ type GuestAgentWait struct {
 	SocketWaiter   SocketWaiter
 	Dialer         qga.Dialer
 	ConnectTimeout time.Duration
-	CommandTimeout time.Duration
 	RetryDelay     time.Duration
 	PollDelay      time.Duration
 	Watchers       executor.Group
@@ -43,7 +42,6 @@ func WaitForGuestAgent(ctx context.Context, wait GuestAgentWait) (qga.Client, er
 	client, err := qga.DialWithRetry(ctx, wait.Dialer, qga.DialRetry{
 		SocketPath:     wait.SocketPath,
 		ConnectTimeout: wait.ConnectTimeout,
-		CommandTimeout: wait.CommandTimeout,
 		RetryDelay:     wait.RetryDelay,
 		Check: func() error {
 			return firstUnexpectedExit(stage, wait.Watchers)

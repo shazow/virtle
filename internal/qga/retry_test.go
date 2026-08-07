@@ -19,7 +19,6 @@ func TestDialWithRetryReturnsClientAfterRetry(t *testing.T) {
 	client, err := DialWithRetry(context.Background(), dialer, DialRetry{
 		SocketPath:     "qga.sock",
 		ConnectTimeout: 10 * time.Millisecond,
-		CommandTimeout: 20 * time.Millisecond,
 		RetryDelay:     time.Millisecond,
 	})
 	if err != nil {
@@ -96,16 +95,16 @@ type retryClient struct {
 	disconnected bool
 }
 
-func (c *retryClient) Ping(time.Duration) error                        { return c.pingErr }
-func (c *retryClient) OpenFile(time.Duration, string) (int, error)     { return 0, nil }
-func (c *retryClient) OpenFileRead(time.Duration, string) (int, error) { return 0, nil }
-func (c *retryClient) ReadFile(time.Duration, int, int) (string, bool, error) {
+func (c *retryClient) Ping(context.Context) error                        { return c.pingErr }
+func (c *retryClient) OpenFile(context.Context, string) (int, error)     { return 0, nil }
+func (c *retryClient) OpenFileRead(context.Context, string) (int, error) { return 0, nil }
+func (c *retryClient) ReadFile(context.Context, int, int) (string, bool, error) {
 	return "", false, nil
 }
-func (c *retryClient) WriteFile(time.Duration, int, string) error              { return nil }
-func (c *retryClient) CloseFile(time.Duration, int) error                      { return nil }
-func (c *retryClient) Exec(time.Duration, string, []string, bool) (int, error) { return 0, nil }
-func (c *retryClient) ExecStatus(time.Duration, int) (ExecStatus, error) {
+func (c *retryClient) WriteFile(context.Context, int, string) error              { return nil }
+func (c *retryClient) CloseFile(context.Context, int) error                      { return nil }
+func (c *retryClient) Exec(context.Context, string, []string, bool) (int, error) { return 0, nil }
+func (c *retryClient) ExecStatus(context.Context, int) (ExecStatus, error) {
 	return ExecStatus{}, nil
 }
 func (c *retryClient) Disconnect() error {

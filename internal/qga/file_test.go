@@ -1,14 +1,14 @@
 package qga
 
 import (
+	"context"
 	"errors"
 	"testing"
-	"time"
 )
 
 func TestWriteFileClosesHandleAfterWrite(t *testing.T) {
 	client := &fileClient{openHandle: 42}
-	if err := WriteFile(client, time.Second, "/tmp/file", "aGVsbG8="); err != nil {
+	if err := WriteFile(context.Background(), client, "/tmp/file", "aGVsbG8="); err != nil {
 		t.Fatalf("write file: %v", err)
 	}
 	if client.wroteHandle != 42 || client.wrotePayload != "aGVsbG8=" {
@@ -23,7 +23,7 @@ func TestWriteFileJoinsWriteAndCloseErrors(t *testing.T) {
 	writeErr := errors.New("write failed")
 	closeErr := errors.New("close failed")
 	client := &fileClient{openHandle: 42, writeErr: writeErr, closeErr: closeErr}
-	err := WriteFile(client, time.Second, "/tmp/file", "payload")
+	err := WriteFile(context.Background(), client, "/tmp/file", "payload")
 	if !errors.Is(err, writeErr) || !errors.Is(err, closeErr) {
 		t.Fatalf("expected joined errors, got %v", err)
 	}
@@ -37,7 +37,7 @@ func TestReadFileReadsChunksAndClosesHandle(t *testing.T) {
 			{payload: "bG8=", eof: true},
 		},
 	}
-	data, err := ReadFile(client, time.Second, "/tmp/file", 2)
+	data, err := ReadFile(context.Background(), client, "/tmp/file", 2)
 	if err != nil {
 		t.Fatalf("read file: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestReadFileClosesHandleOnDecodeError(t *testing.T) {
 			{payload: "not base64", eof: true},
 		},
 	}
-	_, err := ReadFile(client, time.Second, "/tmp/file", 1024)
+	_, err := ReadFile(context.Background(), client, "/tmp/file", 1024)
 	if err == nil {
 		t.Fatalf("expected decode error")
 	}
@@ -85,19 +85,19 @@ type fileClient struct {
 	closedHandle int
 }
 
-func (c *fileClient) OpenFile(time.Duration, string) (int, error)     { return c.openHandle, nil }
-func (c *fileClient) OpenFileRead(time.Duration, string) (int, error) { return c.openHandle, nil }
-func (c *fileClient) ReadFile(time.Duration, int, int) (string, bool, error) {
+func (c *fileClient) OpenFile(context.Context, string) (int, error)     { return c.openHandle, nil }
+func (c *fileClient) OpenFileRead(context.Context, string) (int, error) { return c.openHandle, nil }
+func (c *fileClient) ReadFile(context.Context, int, int) (string, bool, error) {
 	chunk := c.readChunks[c.readCount]
 	c.readCount++
 	return chunk.payload, chunk.eof, chunk.err
 }
-func (c *fileClient) WriteFile(_ time.Duration, handle int, payloadBase64 string) error {
+func (c *fileClient) WriteFile(_ context.Context, handle int, payloadBase64 string) error {
 	c.wroteHandle = handle
 	c.wrotePayload = payloadBase64
 	return c.writeErr
 }
-func (c *fileClient) CloseFile(_ time.Duration, handle int) error {
+func (c *fileClient) CloseFile(_ context.Context, handle int) error {
 	c.closedHandle = handle
 	return c.closeErr
 }

@@ -14,7 +14,7 @@ type Info struct {
 	ProcessList string
 }
 
-func (m *manager) collectGuestInfo(ctx context.Context, guestAgentTimeout time.Duration, socketPath string, watchers executor.Group) (Info, error) {
+func (m *manager) collectGuestInfo(ctx context.Context, socketPath string, watchers executor.Group) (Info, error) {
 	if socketPath == "" {
 		return Info{}, fmt.Errorf("guest agent socket is not configured")
 	}
@@ -26,13 +26,13 @@ func (m *manager) collectGuestInfo(ctx context.Context, guestAgentTimeout time.D
 	infoCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	client, err := m.waitForGuestAgent(infoCtx, guestAgentTimeout, socketPath, watchers)
+	client, err := m.waitForGuestAgent(infoCtx, socketPath, watchers)
 	if err != nil {
 		return Info{}, err
 	}
 	defer client.Disconnect()
 
-	status, err := m.runGuestCommandStatus(infoCtx, client, guestAgentTimeout, "ps", guestPSPath, []string{"-eo", "user=,comm="}, "process list")
+	status, err := m.runGuestCommandStatus(infoCtx, client, "ps", guestPSPath, []string{"-eo", "user=,comm="}, "process list")
 	if err != nil {
 		return Info{}, err
 	}
@@ -43,8 +43,8 @@ func (m *manager) collectGuestInfo(ctx context.Context, guestAgentTimeout time.D
 	return Info{ProcessList: qga.FormatProcessListExecData(status.OutData)}, nil
 }
 
-func (m *manager) printGuestInfo(ctx context.Context, guestAgentTimeout time.Duration, socketPath string, watchers executor.Group) {
-	info, err := m.collectGuestInfo(ctx, guestAgentTimeout, socketPath, watchers)
+func (m *manager) printGuestInfo(ctx context.Context, socketPath string, watchers executor.Group) {
+	info, err := m.collectGuestInfo(ctx, socketPath, watchers)
 	if err != nil {
 		m.logger.Info("guest info failed", "err", err)
 		return

@@ -6,6 +6,7 @@ import (
 	"github.com/shazow/virtle/internal/executor"
 	"github.com/shazow/virtle/internal/manager/launch"
 	"github.com/shazow/virtle/internal/manifest"
+	"github.com/shazow/virtle/internal/qga"
 	"github.com/shazow/virtle/internal/sshtools"
 )
 
@@ -29,28 +30,38 @@ func (m *manager) installSSHAutoprovisionKey(ctx context.Context, launchManifest
 	if err != nil {
 		return &launch.StageError{Stage: "ssh autoprovision", Err: err}
 	}
-	timeout := launchManifest.QEMU.GuestAgent.CommandTimeout
-	client, err := m.waitForGuestAgentStage(ctx, "ssh autoprovision", timeout, socketPath, watchers)
+	client, err := m.waitForGuestAgentStage(ctx, "ssh autoprovision", socketPath, watchers)
 	if err != nil {
 		return err
 	}
 	defer client.Disconnect()
 
+	timeout := launchManifest.QEMU.GuestAgent.CommandTimeout
 	return launch.InstallSSHAuthorizedKey(ctx, launchManifest, key, launch.SSHAuthorizedKeyInstaller{
 		InstallDirectory: func(ctx context.Context, guestPath string, owner string, mode string) error {
-			return m.installGuestFileDirectory(ctx, client, timeout, guestPath, owner, mode)
+			ctx, cancel := guestOp(ctx, timeout)
+			defer cancel()
+			return m.installGuestFileDirectory(ctx, client, guestPath, owner, mode)
 		},
 		Chown: func(ctx context.Context, guestPath string, owner string) error {
-			return m.chownGuestFile(ctx, client, timeout, guestPath, owner)
+			ctx, cancel := guestOp(ctx, timeout)
+			defer cancel()
+			return m.chownGuestFile(ctx, client, guestPath, owner)
 		},
 		Chmod: func(ctx context.Context, guestPath string, mode string) error {
-			return m.chmodGuestFile(ctx, client, timeout, guestPath, mode)
+			ctx, cancel := guestOp(ctx, timeout)
+			defer cancel()
+			return m.chmodGuestFile(ctx, client, guestPath, mode)
 		},
-		WriteFile: func(_ context.Context, guestPath string, payloadBase64 string) error {
-			return m.writeGuestFile(client, timeout, guestPath, payloadBase64)
+		WriteFile: func(ctx context.Context, guestPath string, payloadBase64 string) error {
+			ctx, cancel := guestOp(ctx, timeout)
+			defer cancel()
+			return qga.WriteFile(ctx, client, guestPath, payloadBase64)
 		},
 		RunCommand: func(ctx context.Context, name string, path string, args []string, inputPath string) error {
-			return m.runGuestFileCommand(ctx, client, timeout, name, path, args, inputPath)
+			ctx, cancel := guestOp(ctx, timeout)
+			defer cancel()
+			return m.runGuestFileCommand(ctx, client, name, path, args, inputPath)
 		},
 	})
 }

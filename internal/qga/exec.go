@@ -7,9 +7,10 @@ import (
 	"time"
 )
 
-// ExecWait configures guest command execution and polling.
+// ExecWait configures guest command execution and polling. The command
+// deadline is carried by ctx; RunCommandStatus polls until the command exits
+// or ctx ends.
 type ExecWait struct {
-	Timeout       time.Duration
 	PollDelay     time.Duration
 	Name          string
 	Path          string
@@ -20,26 +21,13 @@ type ExecWait struct {
 
 // RunCommandStatus starts a guest command and waits for its exit status.
 func RunCommandStatus(ctx context.Context, client ExecRunner, wait ExecWait) (ExecStatus, error) {
-	pid, err := client.Exec(wait.Timeout, wait.Path, wait.Args, wait.CaptureOutput)
+	pid, err := client.Exec(ctx, wait.Path, wait.Args, wait.CaptureOutput)
 	if err != nil {
 		return ExecStatus{}, fmt.Errorf("%s %q: %w", wait.Name, wait.Subject, err)
 	}
 
-	var deadline time.Time
-	if wait.Timeout > 0 {
-		deadline = time.Now().Add(wait.Timeout)
-	}
 	for {
-		commandTimeout := wait.Timeout
-		if !deadline.IsZero() {
-			remaining := time.Until(deadline)
-			if remaining <= 0 {
-				return ExecStatus{}, fmt.Errorf("%s %q timed out after %s", wait.Name, wait.Subject, wait.Timeout)
-			}
-			commandTimeout = minDuration(wait.Timeout, remaining)
-		}
-
-		status, err := client.ExecStatus(commandTimeout, pid)
+		status, err := client.ExecStatus(ctx, pid)
 		if err != nil {
 			return ExecStatus{}, fmt.Errorf("%s %q: %w", wait.Name, wait.Subject, err)
 		}
@@ -47,19 +35,10 @@ func RunCommandStatus(ctx context.Context, client ExecRunner, wait ExecWait) (Ex
 			return status, nil
 		}
 
-		sleep := wait.PollDelay
-		if !deadline.IsZero() {
-			sleep = minDuration(sleep, time.Until(deadline))
-		}
-		if sleep <= 0 {
-			continue
-		}
-		timer := time.NewTimer(sleep)
 		select {
 		case <-ctx.Done():
-			timer.Stop()
-			return ExecStatus{}, ctx.Err()
-		case <-timer.C:
+			return ExecStatus{}, fmt.Errorf("%s %q: %w", wait.Name, wait.Subject, context.Cause(ctx))
+		case <-time.After(wait.PollDelay):
 		}
 	}
 }
@@ -90,11 +69,4 @@ func DecodeExecData(data string) string {
 		return data
 	}
 	return string(decoded)
-}
-
-func minDuration(a time.Duration, b time.Duration) time.Duration {
-	if a < b {
-		return a
-	}
-	return b
 }

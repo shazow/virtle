@@ -90,12 +90,14 @@ func (g guestCommandRunner) Run(ctx context.Context, command []string) error {
 	if err != nil {
 		return err
 	}
-	client, err := g.m.waitForGuestAgent(ctx, g.manifest.QEMU.GuestAgent.CommandTimeout, socketPath, executor.Group{})
+	client, err := g.m.waitForGuestAgent(ctx, socketPath, executor.Group{})
 	if err != nil {
 		return err
 	}
 	defer client.Disconnect()
-	status, err := g.m.runGuestCommandStatus(ctx, client, g.manifest.QEMU.GuestAgent.CommandTimeout, filepath.Base(command[0]), command[0], command[1:], strings.Join(command, " "))
+	ctx, cancel := guestOp(ctx, g.manifest.QEMU.GuestAgent.CommandTimeout)
+	defer cancel()
+	status, err := g.m.runGuestCommandStatus(ctx, client, filepath.Base(command[0]), command[0], command[1:], strings.Join(command, " "))
 	if err != nil {
 		return err
 	}

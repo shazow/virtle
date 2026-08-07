@@ -30,7 +30,7 @@ func (f managerGuestFeature) GuestPS(ctx context.Context, req controlpkg.GuestPS
 	if f.processes != nil {
 		watchers = f.processes.Watchers()
 	}
-	info, err := f.manager.collectGuestInfo(ctx, f.guestAgentTimeout, f.socketPath, watchers)
+	info, err := f.manager.collectGuestInfo(ctx, f.socketPath, watchers)
 	if err != nil {
 		return controlpkg.GuestPSResponse{}, controlpkg.FailedPrecondition(err)
 	}
@@ -51,8 +51,9 @@ func (f managerGuestFeature) GuestExec(ctx context.Context, req controlpkg.Guest
 	}
 	defer client.Disconnect()
 
+	ctx, cancel := guestOp(ctx, timeout)
+	defer cancel()
 	status, err := qga.RunCommandStatus(ctx, client, qga.ExecWait{
-		Timeout:       timeout,
 		PollDelay:     defaultMigrationPollDelay,
 		Name:          "guest-exec",
 		Path:          req.Path,
@@ -90,7 +91,9 @@ func (f managerGuestFeature) GuestRead(ctx context.Context, req controlpkg.Guest
 	}
 	defer client.Disconnect()
 
-	data, err := f.manager.readGuestFile(client, f.guestAgentTimeout, req.Path)
+	ctx, cancel := guestOp(ctx, f.guestAgentTimeout)
+	defer cancel()
+	data, err := qga.ReadFile(ctx, client, req.Path, qga.DefaultFileReadChunkSize)
 	if err != nil {
 		return controlpkg.GuestReadResponse{}, controlpkg.FailedPrecondition(err)
 	}
@@ -110,7 +113,9 @@ func (f managerGuestFeature) GuestWrite(ctx context.Context, req controlpkg.Gues
 	}
 	defer client.Disconnect()
 
-	if err := f.manager.writeGuestFile(client, f.guestAgentTimeout, req.Path, req.DataBase64); err != nil {
+	ctx, cancel := guestOp(ctx, f.guestAgentTimeout)
+	defer cancel()
+	if err := qga.WriteFile(ctx, client, req.Path, req.DataBase64); err != nil {
 		return controlpkg.GuestWriteResponse{}, controlpkg.FailedPrecondition(err)
 	}
 	return controlpkg.GuestWriteResponse{Path: req.Path}, nil
@@ -124,5 +129,5 @@ func (f managerGuestFeature) guestClient(ctx context.Context) (qga.Client, error
 	if f.processes != nil {
 		watchers = f.processes.Watchers()
 	}
-	return f.manager.waitForGuestAgent(ctx, f.guestAgentTimeout, f.socketPath, watchers)
+	return f.manager.waitForGuestAgent(ctx, f.socketPath, watchers)
 }

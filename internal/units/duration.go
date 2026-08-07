@@ -8,7 +8,8 @@ import (
 )
 
 // Duration is a time.Duration that decodes from a Go duration string such as
-// "30s" or "5m"; bare numbers, quoted or not, are seconds.
+// "30s" or "5m". Bare numbers, quoted or not, decode as seconds; that form is
+// undocumented and kept for backward compatibility.
 type Duration time.Duration
 
 // ParseDuration parses a Go duration string, treating a bare number as
@@ -19,7 +20,7 @@ func ParseDuration(value string) (Duration, error) {
 	}
 	parsed, err := time.ParseDuration(value)
 	if err != nil {
-		return 0, fmt.Errorf("invalid duration %q: expected a duration such as %q or a number of seconds", value, "30s")
+		return 0, fmt.Errorf("invalid duration %q: expected a duration such as %q", value, "30s")
 	}
 	return Duration(parsed), nil
 }
@@ -40,7 +41,7 @@ func (d *Duration) UnmarshalJSON(data []byte) error {
 	}
 	var value string
 	if err := json.Unmarshal(data, &value); err != nil {
-		return fmt.Errorf("duration must be a string such as %q or a number of seconds", "30s")
+		return fmt.Errorf("duration must be a string such as %q", "30s")
 	}
 	parsed, err := ParseDuration(value)
 	if err != nil {
@@ -65,7 +66,7 @@ func (d *Duration) UnmarshalTOML(value any) error {
 		}
 		*d = parsed
 	default:
-		return fmt.Errorf("duration must be a string such as %q or a number of seconds, got %T", "30s", value)
+		return fmt.Errorf("duration must be a string such as %q, got %T", "30s", value)
 	}
 	return nil
 }

@@ -22,12 +22,10 @@ func Generate() *jsonschema.Schema {
 		AllowAdditionalProperties:  false,
 		Mapper: func(t reflect.Type) *jsonschema.Schema {
 			if t == reflect.TypeOf(units.Duration(0)) {
-				// Durations decode from Go duration strings or bare numbers of
-				// seconds.
-				return &jsonschema.Schema{OneOf: []*jsonschema.Schema{
-					{Type: "string"},
-					{Type: "number"},
-				}}
+				// Durations are documented as Go duration strings; the decoder
+				// also accepts bare numbers of seconds for backward
+				// compatibility, deliberately left out of the schema.
+				return &jsonschema.Schema{Type: "string"}
 			}
 			if t == reflect.TypeOf(manifest.MountsInput{}) {
 				// MountsInput is a tagged-union slice backed by the MountEntry interface.

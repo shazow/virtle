@@ -153,7 +153,7 @@ func (m *manager) installGuestFileDirectory(ctx context.Context, client qga.Clie
 }
 
 func (m *manager) guestDirectoryExists(ctx context.Context, client qga.Client, guestDir string) (bool, error) {
-	status, err := m.runGuestFileCommandStatus(ctx, client, "test -d", guestTestPath, []string{"-d", guestDir}, guestDir)
+	status, err := m.runGuestCommandStatus(ctx, client, "test -d", guestTestPath, []string{"-d", guestDir}, guestDir)
 	if err != nil {
 		return false, err
 	}
@@ -161,7 +161,7 @@ func (m *manager) guestDirectoryExists(ctx context.Context, client qga.Client, g
 }
 
 func (m *manager) guestPathExists(ctx context.Context, client qga.Client, guestPath string) (bool, error) {
-	status, err := m.runGuestFileCommandStatus(ctx, client, "test -e", guestTestPath, []string{"-e", guestPath}, guestPath)
+	status, err := m.runGuestCommandStatus(ctx, client, "test -e", guestTestPath, []string{"-e", guestPath}, guestPath)
 	if err != nil {
 		return false, err
 	}
@@ -177,7 +177,7 @@ func (m *manager) chmodGuestFile(ctx context.Context, client qga.Client, guestPa
 }
 
 func (m *manager) runGuestFileCommand(ctx context.Context, client qga.Client, name string, path string, args []string, guestPath string) error {
-	status, err := m.runGuestFileCommandStatus(ctx, client, name, path, args, guestPath)
+	status, err := m.runGuestCommandStatus(ctx, client, name, path, args, guestPath)
 	if err != nil {
 		return err
 	}
@@ -185,10 +185,6 @@ func (m *manager) runGuestFileCommand(ctx context.Context, client qga.Client, na
 		return fmt.Errorf("%s %q exited with status %d%s", name, guestPath, status.ExitCode, qga.ExecOutputSuffix(status))
 	}
 	return nil
-}
-
-func (m *manager) runGuestFileCommandStatus(ctx context.Context, client qga.Client, name string, path string, args []string, guestPath string) (qga.ExecStatus, error) {
-	return m.runGuestCommandStatus(ctx, client, name, path, args, guestPath)
 }
 
 func (m *manager) runGuestCommandStatus(ctx context.Context, client qga.Client, name string, path string, args []string, subject string) (qga.ExecStatus, error) {

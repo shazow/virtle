@@ -39,6 +39,11 @@ const (
 )
 
 type manager struct {
+	// launchManifest is bound once where each operation enters (startWithPlan
+	// for launches, the Suspend and Hotplug wrappers otherwise); one manager
+	// serves exactly one manifest.
+	launchManifest *manifest.Manifest
+
 	locker              launch.Locker
 	vsockCIDChecker     launch.VSockCIDChecker
 	runner              launch.Runner
@@ -224,7 +229,8 @@ func (m *manager) startManagedProcess(cmd *exec.Cmd) (*executor.Process, error) 
 	return m.runner.Start(cmd)
 }
 
-func (m *manager) startRuns(cid int, manifest *manifest.Manifest) (executor.Group, error) {
+func (m *manager) startRuns(cid int) (executor.Group, error) {
+	manifest := m.launchManifest
 	runs, err := manifest.ResolvedRuns(cid)
 	if err != nil {
 		return executor.Group{}, &launch.StageError{Stage: "run startup", Err: err}
@@ -319,7 +325,6 @@ func (m *manager) effectiveQMPCommandTimeout() time.Duration {
 
 type launchSuspendHandler struct {
 	manager       *manager
-	manifest      *manifest.Manifest
 	qmpSocketPath string
 	client        qmpclient.Client
 	cid           int
@@ -333,10 +338,9 @@ type suspendHandler interface {
 	Handle(context.Context, *launch.SuspendCoordinator) error
 }
 
-func newLaunchSuspendHandler(manager *manager, manifest *manifest.Manifest, qmpSocketPath string, client qmpclient.Client, cid int, notifier launch.NotificationSink, writeBack func() bool) *launchSuspendHandler {
+func newLaunchSuspendHandler(manager *manager, qmpSocketPath string, client qmpclient.Client, cid int, notifier launch.NotificationSink, writeBack func() bool) *launchSuspendHandler {
 	return &launchSuspendHandler{
 		manager:       manager,
-		manifest:      manifest,
 		qmpSocketPath: qmpSocketPath,
 		client:        client,
 		cid:           cid,
@@ -359,12 +363,12 @@ func (h *launchSuspendHandler) Handle(ctx context.Context, coordinator *launch.S
 func (h *launchSuspendHandler) saveAndExit(ctx context.Context) error {
 	h.once.Do(func() {
 		if h.writeBack != nil && h.writeBack() {
-			if err := h.manager.writeBackGuestFiles(ctx, h.manifest, executor.Group{}); err != nil {
+			if err := h.manager.writeBackGuestFiles(ctx, executor.Group{}); err != nil {
 				h.err = err
 				return
 			}
 		}
-		if err := h.manager.saveSuspendStateConnected(ctx, h.manifest, h.qmpSocketPath, h.client, h.cid, h.notifier); err != nil {
+		if err := h.manager.saveSuspendStateConnected(ctx, h.qmpSocketPath, h.client, h.cid, h.notifier); err != nil {
 			h.err = err
 			return
 		}
@@ -395,15 +399,15 @@ func (m *manager) runSSHSession(
 			return m.waitForSession(ctx, session, lifecycle, suspendHandler, plan.Paths.GuestAgentSocket, watchers)
 		},
 		WaitForRetry: func(ctx context.Context, watchers executor.Group) error {
-			return m.waitBeforeSSHRetry(ctx, plan.Manifest, lifecycle, suspendHandler, plan.Paths.GuestAgentSocket, watchers)
+			return m.waitBeforeSSHRetry(ctx, lifecycle, suspendHandler, plan.Paths.GuestAgentSocket, watchers)
 		},
 		EnsureKey:  m.ensureSSHAutoprovisionKey,
 		InstallKey: m.installSSHAutoprovisionKey,
 	})
 }
 
-func (m *manager) waitBeforeSSHRetry(ctx context.Context, launchManifest *manifest.Manifest, lifecycle *launch.Lifecycle, suspendHandler suspendHandler, guestAgentSocketPath string, watchers executor.Group) error {
-	delay := launchManifest.SSHRetryDelay(m.sshRetryDelay)
+func (m *manager) waitBeforeSSHRetry(ctx context.Context, lifecycle *launch.Lifecycle, suspendHandler suspendHandler, guestAgentSocketPath string, watchers executor.Group) error {
+	delay := m.launchManifest.SSHRetryDelay(m.sshRetryDelay)
 	if delay <= 0 {
 		delay = m.sshRetryDelay
 	}
@@ -447,7 +451,8 @@ func (m *manager) waitForLifecycleEvent(ctx context.Context, stage string, delay
 	return m.waitForProcess(ctx, stage, nil, delay, lifecycle, suspendHandler, guestAgentSocketPath, watchers)
 }
 
-func (m *manager) saveSuspendStateConnected(ctx context.Context, manifest *manifest.Manifest, qmpSocketPath string, client qmpclient.Client, cid int, notifier launch.NotificationSink) error {
+func (m *manager) saveSuspendStateConnected(ctx context.Context, qmpSocketPath string, client qmpclient.Client, cid int, notifier launch.NotificationSink) error {
+	manifest := m.launchManifest
 	if manifest == nil {
 		return launch.WrapFixedStage("qmp suspend")(fmt.Errorf("suspend manifest is not configured"))
 	}

@@ -21,7 +21,6 @@ func TestWaitForGuestAgentWaitsForSocketThenDials(t *testing.T) {
 		SocketWaiter:   waiter,
 		Dialer:         dialer,
 		ConnectTimeout: 10 * time.Millisecond,
-		CommandTimeout: 20 * time.Millisecond,
 		RetryDelay:     time.Millisecond,
 		PollDelay:      time.Millisecond,
 	})
@@ -40,8 +39,8 @@ func TestWaitForGuestAgentWaitsForSocketThenDials(t *testing.T) {
 	if got, want := dialer.timeout, 10*time.Millisecond; got != want {
 		t.Fatalf("dial timeout: got %s want %s", got, want)
 	}
-	if got, want := client.pingTimeout, 20*time.Millisecond; got != want {
-		t.Fatalf("ping timeout: got %s want %s", got, want)
+	if !client.pinged {
+		t.Fatal("expected readiness ping")
 	}
 }
 
@@ -136,27 +135,27 @@ func (d *fakeGuestAgentDialer) Dial(ctx context.Context, socketPath string, time
 }
 
 type fakeGuestAgentClient struct {
-	pingTimeout time.Duration
+	pinged bool
 }
 
-func (c *fakeGuestAgentClient) Ping(timeout time.Duration) error {
-	c.pingTimeout = timeout
+func (c *fakeGuestAgentClient) Ping(ctx context.Context) error {
+	c.pinged = true
 	return nil
 }
 
-func (c *fakeGuestAgentClient) OpenFile(time.Duration, string) (int, error) { return 0, nil }
-func (c *fakeGuestAgentClient) OpenFileRead(time.Duration, string) (int, error) {
+func (c *fakeGuestAgentClient) OpenFile(context.Context, string) (int, error) { return 0, nil }
+func (c *fakeGuestAgentClient) OpenFileRead(context.Context, string) (int, error) {
 	return 0, nil
 }
-func (c *fakeGuestAgentClient) ReadFile(time.Duration, int, int) (string, bool, error) {
+func (c *fakeGuestAgentClient) ReadFile(context.Context, int, int) (string, bool, error) {
 	return "", false, nil
 }
-func (c *fakeGuestAgentClient) WriteFile(time.Duration, int, string) error { return nil }
-func (c *fakeGuestAgentClient) CloseFile(time.Duration, int) error         { return nil }
-func (c *fakeGuestAgentClient) Exec(time.Duration, string, []string, bool) (int, error) {
+func (c *fakeGuestAgentClient) WriteFile(context.Context, int, string) error { return nil }
+func (c *fakeGuestAgentClient) CloseFile(context.Context, int) error         { return nil }
+func (c *fakeGuestAgentClient) Exec(context.Context, string, []string, bool) (int, error) {
 	return 0, nil
 }
-func (c *fakeGuestAgentClient) ExecStatus(time.Duration, int) (qga.ExecStatus, error) {
+func (c *fakeGuestAgentClient) ExecStatus(context.Context, int) (qga.ExecStatus, error) {
 	return qga.ExecStatus{}, nil
 }
 func (c *fakeGuestAgentClient) Disconnect() error { return nil }

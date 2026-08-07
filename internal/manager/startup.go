@@ -20,6 +20,7 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 	if plan == nil {
 		return nil, &launch.StageError{Stage: "preflight", Err: errors.New("launch plan is required")}
 	}
+	m.launchManifest = plan.Manifest
 
 	stats := launch.NewStats(time.Now())
 	launchCtx, cancelLaunch := context.WithCancel(ctx)
@@ -89,7 +90,7 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 	}
 	socketCleanupReached = true
 
-	runProcesses, err := m.startRuns(plan.CID, plan.Manifest)
+	runProcesses, err := m.startRuns(plan.CID)
 	if err != nil {
 		return nil, err
 	}
@@ -128,7 +129,7 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 		writeBackOnExit = true
 	}
 
-	suspendHandler := newLaunchSuspendHandler(m, plan.Manifest, plan.Paths.QMPSocket, qmp, plan.CID, plan.Notifier, func() bool {
+	suspendHandler := newLaunchSuspendHandler(m, plan.Paths.QMPSocket, qmp, plan.CID, plan.Notifier, func() bool {
 		return writeBackOnExit
 	})
 	runtime := runtimepkg.New(runtimepkg.RuntimeConfig{
@@ -144,7 +145,7 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 			if !writeBackOnExit {
 				return nil
 			}
-			return m.writeBackGuestFiles(ctx, plan.Manifest, executor.Group{})
+			return m.writeBackGuestFiles(ctx, executor.Group{})
 		},
 		Cleanup: func() error {
 			return errors.Join(launch.RemoveStaleSockets(plan.RuntimeSocketCleanupFiles()...), cleanupRuntime())
@@ -166,7 +167,7 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 	runtime.SetReady()
 	if _, err := runtime.StartControl(launchCtx, controlpkg.Handlers{
 		Guest:   m.guestFeature(plan.Paths.GuestAgentSocket, processes),
-		Hotplug: m.hotplugFeature(plan.Manifest, runtime.QMP()),
+		Hotplug: m.hotplugFeature(runtime.QMP()),
 	}); err != nil {
 		return nil, launch.WrapFixedStage("control startup")(err)
 	}
@@ -174,7 +175,7 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 		return nil, err
 	}
 	if plan.ResumeState == nil {
-		if err := m.writeGuestFiles(launchCtx, plan.Manifest, stats, processes.Watchers()); err != nil {
+		if err := m.writeGuestFiles(launchCtx, stats, processes.Watchers()); err != nil {
 			return nil, err
 		}
 		stats.Timer(launch.TimerFilesReady, time.Now())

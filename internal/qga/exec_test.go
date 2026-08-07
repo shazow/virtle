@@ -17,7 +17,6 @@ func TestRunCommandStatusWaitsForExit(t *testing.T) {
 		},
 	}
 	status, err := RunCommandStatus(context.Background(), client, ExecWait{
-		Timeout:       time.Second,
 		PollDelay:     time.Millisecond,
 		Name:          "test",
 		Path:          "/bin/test",
@@ -43,7 +42,6 @@ func TestRunCommandStatusWrapsExecStatusError(t *testing.T) {
 	wantErr := errors.New("status failed")
 	client := &execClient{pid: 7, statusErr: wantErr}
 	_, err := RunCommandStatus(context.Background(), client, ExecWait{
-		Timeout:   time.Second,
 		PollDelay: time.Millisecond,
 		Name:      "chmod",
 		Path:      "/bin/chmod",
@@ -59,7 +57,6 @@ func TestRunCommandStatusReturnsContextCancellation(t *testing.T) {
 	client := &execClient{pid: 7, statuses: []ExecStatus{{Exited: false}}}
 	cancel()
 	_, err := RunCommandStatus(ctx, client, ExecWait{
-		Timeout:   time.Second,
 		PollDelay: time.Hour,
 		Name:      "test",
 		Path:      "/bin/test",
@@ -67,6 +64,22 @@ func TestRunCommandStatusReturnsContextCancellation(t *testing.T) {
 	})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancel error: got %v want %v", err, context.Canceled)
+	}
+}
+
+func TestRunCommandStatusReturnsContextDeadlineCause(t *testing.T) {
+	cause := errors.New("guest command timed out after 1s")
+	ctx, cancel := context.WithTimeoutCause(context.Background(), -time.Second, cause)
+	defer cancel()
+	client := &execClient{pid: 7, statuses: []ExecStatus{{Exited: false}}}
+	_, err := RunCommandStatus(ctx, client, ExecWait{
+		PollDelay: time.Hour,
+		Name:      "test",
+		Path:      "/bin/test",
+		Subject:   "/tmp/file",
+	})
+	if !errors.Is(err, cause) || !strings.Contains(err.Error(), `test "/tmp/file"`) {
+		t.Fatalf("deadline error: got %v want cause %v", err, cause)
 	}
 }
 
@@ -101,13 +114,13 @@ type execClient struct {
 	statusCalls int
 }
 
-func (c *execClient) Exec(_ time.Duration, path string, args []string, captureOutput bool) (int, error) {
+func (c *execClient) Exec(_ context.Context, path string, args []string, captureOutput bool) (int, error) {
 	c.execPath = path
 	c.execArgs = append([]string(nil), args...)
 	c.capture = captureOutput
 	return c.pid, c.execErr
 }
-func (c *execClient) ExecStatus(time.Duration, int) (ExecStatus, error) {
+func (c *execClient) ExecStatus(context.Context, int) (ExecStatus, error) {
 	c.statusCalls++
 	if c.statusErr != nil {
 		return ExecStatus{}, c.statusErr

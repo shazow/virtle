@@ -145,7 +145,8 @@ func TestSaveSuspendStateConnectedNotifiesAfterSavedStateWrite(t *testing.T) {
 			}
 		},
 	}
-	if err := manager.saveSuspendStateConnected(context.Background(), cfg, qmpSocketPath, qmpClient, 7, notifier); err != nil {
+	manager.launchManifest = cfg
+	if err := manager.saveSuspendStateConnected(context.Background(), qmpSocketPath, qmpClient, 7, notifier); err != nil {
 		t.Fatalf("suspend: %v", err)
 	}
 

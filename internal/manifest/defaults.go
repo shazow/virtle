@@ -9,8 +9,7 @@ const (
 // optional fields are omitted. Required fields without defaults, such as
 // kernel.path and kernel.initrd_path, are intentionally left unset.
 func DefaultDocument() Document {
-	retryDelay := defaultSSHRetryDelaySeconds
-	return Document{
+	doc := Document{
 		HostName:   defaultHostName,
 		WorkingDir: defaultWorkingDir,
 		StateDir:   defaultBaseDir,
@@ -36,9 +35,8 @@ func DefaultDocument() Document {
 			},
 		},
 		SSH: SSHInput{
-			Exec:       []string{defaultSSHCommand},
-			User:       defaultSSHUser,
-			RetryDelay: &retryDelay,
+			Exec: []string{defaultSSHCommand},
+			User: defaultSSHUser,
 		},
 		VSock: VSockInput{
 			CIDRange: RangeInput{
@@ -47,6 +45,8 @@ func DefaultDocument() Document {
 			},
 		},
 	}
+	applyDefaultTags(&doc)
+	return doc
 }
 
 // DocumentWithDefaults returns document overlaid on DefaultDocument. Pointer,
@@ -115,7 +115,7 @@ func mergeQEMUInput(base QEMUInput, override QEMUInput) QEMUInput {
 	if override.FwdTunnelExec != nil {
 		base.FwdTunnelExec = override.FwdTunnelExec
 	}
-	if override.User != nil {
+	if override.User != "" {
 		base.User = override.User
 	}
 	if override.Seccomp {
@@ -130,6 +130,9 @@ func mergeQEMUInput(base QEMUInput, override QEMUInput) QEMUInput {
 	if override.GuestAgentSocket != "" {
 		base.GuestAgentSocket = override.GuestAgentSocket
 	}
+	// Always taken from the override: zero means no timeout, and decode seeds
+	// the default for omitted keys.
+	base.GuestDefaultTimeout = override.GuestDefaultTimeout
 	return base
 }
 
@@ -137,10 +140,10 @@ func mergeMachineInput(base MachineInput, override MachineInput) MachineInput {
 	if override.Type != "" {
 		base.Type = override.Type
 	}
-	if override.VCPU != nil {
+	if override.VCPU != 0 {
 		base.VCPU = override.VCPU
 	}
-	if override.ID != nil {
+	if override.ID != "" {
 		base.ID = override.ID
 	}
 	if override.Memory != 0 {
@@ -194,9 +197,9 @@ func mergeSSHInput(base SSHInput, override SSHInput) SSHInput {
 	if override.ReadySocket != "" {
 		base.ReadySocket = override.ReadySocket
 	}
-	if override.RetryDelay != nil {
-		base.RetryDelay = override.RetryDelay
-	}
+	// Always taken from the override: zero means retry immediately, and decode
+	// seeds the default for omitted keys.
+	base.RetryDelay = override.RetryDelay
 	if override.Autoprovision {
 		base.Autoprovision = override.Autoprovision
 	}

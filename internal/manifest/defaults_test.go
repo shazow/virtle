@@ -43,7 +43,6 @@ func TestDocumentWithDefaultsPreservesKeyResolvedDefaults(t *testing.T) {
 	document.QEMU.GuestAgentSocket = ""
 	document.SSH.User = ""
 	document.SSH.ReadySocket = ""
-	document.SSH.RetryDelay = nil
 	document.VSock.CIDRange = RangeInput{}
 
 	manifest, err := document.Manifest()
@@ -83,9 +82,6 @@ func TestDocumentWithDefaultsPreservesKeyResolvedDefaults(t *testing.T) {
 	if got := manifest.SSH.User; got != defaultSSHUser {
 		t.Fatalf("ssh user = %q, want %q", got, defaultSSHUser)
 	}
-	if got := manifest.SSH.RetryDelay.Seconds(); got != defaultSSHRetryDelaySeconds {
-		t.Fatalf("ssh retry delay = %v, want %v", got, defaultSSHRetryDelaySeconds)
-	}
 	if got := manifest.VSock.CIDRange.Start; got != defaultVSockCIDStart {
 		t.Fatalf("cid start = %d, want %d", got, defaultVSockCIDStart)
 	}
@@ -105,8 +101,7 @@ func TestDocumentWithDefaultsPreservesExplicitOverridesForMovedDefaults(t *testi
 	document.QEMU.GuestAgentSocket = "custom-qga.sock"
 	document.SSH.User = "custom-user"
 	document.SSH.ReadySocket = "custom-ready.sock"
-	retryDelay := 2.5
-	document.SSH.RetryDelay = &retryDelay
+	document.SSH.RetryDelay = 2.5
 	document.VSock.CIDRange = RangeInput{Min: 10, Max: 20}
 
 	manifest, err := document.Manifest()

@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"time"
 
 	"github.com/shazow/virtle/internal/executor"
 	controlpkg "github.com/shazow/virtle/internal/manager/control"
 	"github.com/shazow/virtle/internal/manager/launch"
+	"github.com/shazow/virtle/internal/manifest"
 	"github.com/shazow/virtle/internal/qga"
 )
 
@@ -38,14 +40,18 @@ func (f managerGuestFeature) GuestExec(ctx context.Context, req controlpkg.Guest
 	if req.Path == "" {
 		return controlpkg.GuestExecResponse{}, &controlpkg.RPCError{Code: controlpkg.ErrInvalidParams, Message: "guest exec path is required"}
 	}
+	if req.Timeout < 0 {
+		return controlpkg.GuestExecResponse{}, &controlpkg.RPCError{Code: controlpkg.ErrInvalidParams, Message: "guest exec timeout must not be negative"}
+	}
 	client, err := f.guestClient(ctx)
 	if err != nil {
 		return controlpkg.GuestExecResponse{}, controlpkg.FailedPrecondition(err)
 	}
 	defer client.Disconnect()
 
+	ctx, cancel := manifest.GuestCommandContext(ctx, time.Duration(req.Timeout))
+	defer cancel()
 	status, err := qga.RunCommandStatus(ctx, client, qga.ExecWait{
-		Timeout:       f.manager.effectiveQMPCommandTimeout(),
 		PollDelay:     defaultMigrationPollDelay,
 		Name:          "guest-exec",
 		Path:          req.Path,
@@ -74,7 +80,9 @@ func (f managerGuestFeature) GuestRead(ctx context.Context, req controlpkg.Guest
 	}
 	defer client.Disconnect()
 
-	data, err := f.manager.readGuestFile(client, req.Path)
+	ctx, cancel := f.manager.launchManifest.GuestCommandContext(ctx)
+	defer cancel()
+	data, err := qga.ReadFile(ctx, client, req.Path, qga.DefaultFileReadChunkSize)
 	if err != nil {
 		return controlpkg.GuestReadResponse{}, controlpkg.FailedPrecondition(err)
 	}
@@ -94,7 +102,9 @@ func (f managerGuestFeature) GuestWrite(ctx context.Context, req controlpkg.Gues
 	}
 	defer client.Disconnect()
 
-	if err := f.manager.writeGuestFile(client, req.Path, req.DataBase64); err != nil {
+	ctx, cancel := f.manager.launchManifest.GuestCommandContext(ctx)
+	defer cancel()
+	if err := qga.WriteFile(ctx, client, req.Path, req.DataBase64); err != nil {
 		return controlpkg.GuestWriteResponse{}, controlpkg.FailedPrecondition(err)
 	}
 	return controlpkg.GuestWriteResponse{Path: req.Path}, nil

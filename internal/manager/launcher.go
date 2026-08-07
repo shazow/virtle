@@ -30,7 +30,7 @@ const (
 )
 
 type Launcher struct {
-	manager *manager
+	config *Config
 }
 
 func DefaultConfig() Config {
@@ -59,7 +59,7 @@ func NewLauncher(configs ...Config) *Launcher {
 	if len(configs) > 0 {
 		config = mergeConfig(config, configs[0])
 	}
-	return &Launcher{manager: newManagerFromConfig(config)}
+	return &Launcher{config: &config}
 }
 
 // Launch runs the supported virtle sandbox session.
@@ -77,12 +77,8 @@ func (l *Launcher) launch(ctx context.Context, manifest *manifest.Manifest, remo
 }
 
 func (l *Launcher) launchWithOptions(ctx context.Context, manifest *manifest.Manifest, remoteCommand []string, options launch.Options) error {
-	if l == nil || l.manager == nil {
+	if l == nil || l.config == nil {
 		l = NewLauncher()
 	}
-	plan, err := l.manager.planLaunch(launch.Spec{Manifest: manifest, RemoteCommand: remoteCommand, Options: options})
-	if err != nil {
-		return err
-	}
-	return l.manager.launchWithPlan(ctx, plan)
+	return newManagerFromConfig(*l.config).launchWithOptions(ctx, manifest, remoteCommand, options)
 }

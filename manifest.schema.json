@@ -298,7 +298,7 @@
         },
         "vcpu": {
           "type": "integer",
-          "description": "Number of virtual CPUs to expose to the guest."
+          "description": "Number of virtual CPUs to expose to the guest; zero derives the count."
         },
         "id": {
           "type": "string",
@@ -403,6 +403,10 @@
         "guest_agent_socket": {
           "type": "string",
           "description": "Path to the QEMU guest agent socket relative to the runtime state directory unless absolute."
+        },
+        "guest_default_timeout": {
+          "type": "number",
+          "description": "Seconds allowed for each QEMU guest agent command; zero disables the timeout and omitting the key uses the default of 30 seconds."
         }
       },
       "additionalProperties": false,
@@ -458,7 +462,7 @@
         },
         "retry_delay": {
           "type": "number",
-          "description": "Seconds to wait between SSH readiness or connection retry attempts."
+          "description": "Seconds to wait between SSH readiness or connection retry attempts; zero retries immediately and omitting the key uses the default of 0.5 seconds."
         },
         "autoprovision": {
           "type": "boolean",

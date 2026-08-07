@@ -1,8 +1,11 @@
 package qga
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net"
+	"strings"
 	"testing"
 	"time"
 )
@@ -24,31 +27,31 @@ func TestClientFileAndExecCommands(t *testing.T) {
 	})
 	defer cleanup()
 
-	handle, err := client.OpenFile(time.Second, "/tmp/file")
+	handle, err := client.OpenFile(context.Background(), "/tmp/file")
 	if err != nil {
 		t.Fatalf("open file: %v", err)
 	}
 	if handle != 42 {
 		t.Fatalf("unexpected handle: got %d want 42", handle)
 	}
-	if err := client.WriteFile(time.Second, handle, "aGVsbG8="); err != nil {
+	if err := client.WriteFile(context.Background(), handle, "aGVsbG8="); err != nil {
 		t.Fatalf("write file: %v", err)
 	}
-	payload, eof, err := client.ReadFile(time.Second, handle, 1024)
+	payload, eof, err := client.ReadFile(context.Background(), handle, 1024)
 	if err != nil {
 		t.Fatalf("read file: %v", err)
 	}
 	if payload != "aGVsbG8=" || !eof {
 		t.Fatalf("unexpected read: payload=%q eof=%v", payload, eof)
 	}
-	pid, err := client.Exec(time.Second, "/bin/true", []string{"--flag"}, true)
+	pid, err := client.Exec(context.Background(), "/bin/true", []string{"--flag"}, true)
 	if err != nil {
 		t.Fatalf("exec: %v", err)
 	}
 	if pid != 7 {
 		t.Fatalf("unexpected pid: got %d want 7", pid)
 	}
-	status, err := client.ExecStatus(time.Second, pid)
+	status, err := client.ExecStatus(context.Background(), pid)
 	if err != nil {
 		t.Fatalf("exec status: %v", err)
 	}
@@ -72,10 +75,62 @@ func TestClientSkipsEvents(t *testing.T) {
 	})
 	defer cleanup()
 
-	if err := client.Ping(time.Second); err != nil {
+	if err := client.Ping(context.Background()); err != nil {
 		t.Fatalf("ping: %v", err)
 	}
 	assertCommand(t, commands, "guest-ping")
+}
+
+func TestClientCancellationInterruptsBlockedRead(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	go func() {
+		// Swallow the request and never respond.
+		buf := make([]byte, 1024)
+		_, _ = serverConn.Read(buf)
+	}()
+
+	client := &socketClient{
+		conn:       clientConn,
+		decoder:    json.NewDecoder(clientConn),
+		rpcTimeout: time.Hour,
+	}
+	defer client.Disconnect()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		cancel()
+	}()
+	start := time.Now()
+	err := client.Ping(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context cancellation, got %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("cancellation took %s; read was not interrupted", elapsed)
+	}
+}
+
+func TestClientRPCTimeoutBoundsUnresponsiveAgent(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	go func() {
+		buf := make([]byte, 1024)
+		_, _ = serverConn.Read(buf)
+	}()
+
+	client := &socketClient{
+		conn:       clientConn,
+		decoder:    json.NewDecoder(clientConn),
+		rpcTimeout: 20 * time.Millisecond,
+	}
+	defer client.Disconnect()
+
+	err := client.Ping(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "guest agent unresponsive after 20ms") {
+		t.Fatalf("expected unresponsive-agent error, got %v", err)
+	}
 }
 
 func newTestClient(t *testing.T, handler func(message map[string]any) map[string]any) (*socketClient, <-chan map[string]any, func()) {
@@ -116,8 +171,9 @@ func newTestClient(t *testing.T, handler func(message map[string]any) map[string
 	}()
 
 	client := &socketClient{
-		conn:    clientConn,
-		decoder: json.NewDecoder(clientConn),
+		conn:       clientConn,
+		decoder:    json.NewDecoder(clientConn),
+		rpcTimeout: time.Second,
 	}
 	cleanup := func() {
 		_ = client.Disconnect()

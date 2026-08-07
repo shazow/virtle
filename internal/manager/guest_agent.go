@@ -11,7 +11,8 @@ import (
 	"github.com/shazow/virtle/internal/qga"
 )
 
-func (m *manager) writeGuestFiles(ctx context.Context, launchManifest *manifest.Manifest, stats *launch.Stats, watchers executor.Group) error {
+func (m *manager) writeGuestFiles(ctx context.Context, stats *launch.Stats, watchers executor.Group) error {
+	launchManifest := m.launchManifest
 	files := launchManifest.ResolvedWriteFiles()
 	mountCWD := launchManifest.Workspace.MountCWD
 	if len(files) == 0 && !mountCWD {
@@ -34,25 +35,35 @@ func (m *manager) writeGuestFiles(ctx context.Context, launchManifest *manifest.
 	defer client.Disconnect()
 
 	if mountCWD {
-		if err := m.mountWorkspaceCWD(ctx, client, launchManifest); err != nil {
+		if err := m.mountWorkspaceCWD(ctx, client); err != nil {
 			return err
 		}
 	}
 
 	return launch.WriteGuestFiles(ctx, files, launch.GuestFileWriter{
 		PathExists: func(ctx context.Context, guestPath string) (bool, error) {
+			ctx, cancel := launchManifest.GuestCommandContext(ctx)
+			defer cancel()
 			return m.guestPathExists(ctx, client, guestPath)
 		},
 		InstallDirectory: func(ctx context.Context, file manifest.ResolvedWriteFile) error {
+			ctx, cancel := launchManifest.GuestCommandContext(ctx)
+			defer cancel()
 			return m.installGuestFileDirectory(ctx, client, file.GuestPath, file.Chown, file.Mode)
 		},
-		WriteFile: func(_ context.Context, guestPath string, payloadBase64 string) error {
-			return m.writeGuestFile(client, guestPath, payloadBase64)
+		WriteFile: func(ctx context.Context, guestPath string, payloadBase64 string) error {
+			ctx, cancel := launchManifest.GuestCommandContext(ctx)
+			defer cancel()
+			return qga.WriteFile(ctx, client, guestPath, payloadBase64)
 		},
 		Chown: func(ctx context.Context, guestPath string, owner string) error {
+			ctx, cancel := launchManifest.GuestCommandContext(ctx)
+			defer cancel()
 			return m.chownGuestFile(ctx, client, guestPath, owner)
 		},
 		Chmod: func(ctx context.Context, guestPath string, mode string) error {
+			ctx, cancel := launchManifest.GuestCommandContext(ctx)
+			defer cancel()
 			return m.chmodGuestFile(ctx, client, guestPath, mode)
 		},
 		SkipExisting: func(guestPath string) {
@@ -64,7 +75,8 @@ func (m *manager) writeGuestFiles(ctx context.Context, launchManifest *manifest.
 	})
 }
 
-func (m *manager) writeBackGuestFiles(ctx context.Context, launchManifest *manifest.Manifest, watchers executor.Group) error {
+func (m *manager) writeBackGuestFiles(ctx context.Context, watchers executor.Group) error {
+	launchManifest := m.launchManifest
 	writeBackFiles := launch.GuestWriteBackFiles(launchManifest.ResolvedWriteFiles())
 	if len(writeBackFiles) == 0 {
 		return nil
@@ -83,22 +95,16 @@ func (m *manager) writeBackGuestFiles(ctx context.Context, launchManifest *manif
 	defer client.Disconnect()
 
 	return launch.WriteBackGuestFiles(ctx, writeBackFiles, launch.GuestFileWriteBacker{
-		ReadFile: func(_ context.Context, guestPath string) ([]byte, error) {
-			return m.readGuestFile(client, guestPath)
+		ReadFile: func(ctx context.Context, guestPath string) ([]byte, error) {
+			ctx, cancel := launchManifest.GuestCommandContext(ctx)
+			defer cancel()
+			return qga.ReadFile(ctx, client, guestPath, qga.DefaultFileReadChunkSize)
 		},
 		WriteHostFile: launch.WriteHostFileAtomic,
 		Wrote: func(guestPath string, hostPath string) {
 			m.logger.Info("wrote guest file back to host", "guest_path", guestPath, "host_path", hostPath)
 		},
 	})
-}
-
-func (m *manager) writeGuestFile(client qga.Client, guestPath string, payloadBase64 string) error {
-	return qga.WriteFile(client, m.effectiveQMPCommandTimeout(), guestPath, payloadBase64)
-}
-
-func (m *manager) readGuestFile(client qga.Client, guestPath string) ([]byte, error) {
-	return qga.ReadFile(client, m.effectiveQMPCommandTimeout(), guestPath, qga.DefaultFileReadChunkSize)
 }
 
 const (
@@ -110,12 +116,17 @@ const (
 	guestTestPath    = "test"
 )
 
-func (m *manager) mountWorkspaceCWD(ctx context.Context, client qga.Client, launchManifest *manifest.Manifest) error {
+func (m *manager) mountWorkspaceCWD(ctx context.Context, client qga.Client) error {
+	launchManifest := m.launchManifest
 	return launch.MountWorkspaceCWD(ctx, launchManifest, launch.WorkspaceCWDMounter{
 		InstallDir: func(ctx context.Context, target string, args []string) error {
+			ctx, cancel := launchManifest.GuestCommandContext(ctx)
+			defer cancel()
 			return m.runGuestFileCommand(ctx, client, "install -d", guestInstallPath, args, target)
 		},
 		MountBind: func(ctx context.Context, source string, target string, args []string) error {
+			ctx, cancel := launchManifest.GuestCommandContext(ctx)
+			defer cancel()
 			return m.runGuestFileCommand(ctx, client, "mount --bind", guestMountPath, args, target)
 		},
 		Mounted: func(source string, target string) {
@@ -142,7 +153,7 @@ func (m *manager) installGuestFileDirectory(ctx context.Context, client qga.Clie
 }
 
 func (m *manager) guestDirectoryExists(ctx context.Context, client qga.Client, guestDir string) (bool, error) {
-	status, err := m.runGuestFileCommandStatus(ctx, client, "test -d", guestTestPath, []string{"-d", guestDir}, guestDir)
+	status, err := m.runGuestCommandStatus(ctx, client, "test -d", guestTestPath, []string{"-d", guestDir}, guestDir)
 	if err != nil {
 		return false, err
 	}
@@ -150,7 +161,7 @@ func (m *manager) guestDirectoryExists(ctx context.Context, client qga.Client, g
 }
 
 func (m *manager) guestPathExists(ctx context.Context, client qga.Client, guestPath string) (bool, error) {
-	status, err := m.runGuestFileCommandStatus(ctx, client, "test -e", guestTestPath, []string{"-e", guestPath}, guestPath)
+	status, err := m.runGuestCommandStatus(ctx, client, "test -e", guestTestPath, []string{"-e", guestPath}, guestPath)
 	if err != nil {
 		return false, err
 	}
@@ -166,7 +177,7 @@ func (m *manager) chmodGuestFile(ctx context.Context, client qga.Client, guestPa
 }
 
 func (m *manager) runGuestFileCommand(ctx context.Context, client qga.Client, name string, path string, args []string, guestPath string) error {
-	status, err := m.runGuestFileCommandStatus(ctx, client, name, path, args, guestPath)
+	status, err := m.runGuestCommandStatus(ctx, client, name, path, args, guestPath)
 	if err != nil {
 		return err
 	}
@@ -176,13 +187,8 @@ func (m *manager) runGuestFileCommand(ctx context.Context, client qga.Client, na
 	return nil
 }
 
-func (m *manager) runGuestFileCommandStatus(ctx context.Context, client qga.Client, name string, path string, args []string, guestPath string) (qga.ExecStatus, error) {
-	return m.runGuestCommandStatus(ctx, client, name, path, args, guestPath)
-}
-
 func (m *manager) runGuestCommandStatus(ctx context.Context, client qga.Client, name string, path string, args []string, subject string) (qga.ExecStatus, error) {
 	return qga.RunCommandStatus(ctx, client, qga.ExecWait{
-		Timeout:       m.effectiveQMPCommandTimeout(),
 		PollDelay:     defaultMigrationPollDelay,
 		Name:          name,
 		Path:          path,
@@ -199,7 +205,7 @@ func (m *manager) waitForGuestAgent(ctx context.Context, socketPath string, watc
 func (m *manager) waitForGuestAgentStage(ctx context.Context, stage string, socketPath string, watchers executor.Group) (qga.Client, error) {
 	dialer := m.guestAgentDialer
 	if dialer == nil {
-		dialer = &qga.SocketDialer{}
+		dialer = &qga.SocketDialer{RPCTimeout: m.effectiveQMPCommandTimeout()}
 	}
 	retryDelay := m.qmpRetryDelay
 	if retryDelay <= 0 {
@@ -211,7 +217,6 @@ func (m *manager) waitForGuestAgentStage(ctx context.Context, stage string, sock
 		SocketWaiter:   m.socketWaiter,
 		Dialer:         dialer,
 		ConnectTimeout: m.effectiveQMPConnectTimeout(),
-		CommandTimeout: m.effectiveQMPCommandTimeout(),
 		RetryDelay:     retryDelay,
 		PollDelay:      defaultSocketPollInterval,
 		Watchers:       watchers,

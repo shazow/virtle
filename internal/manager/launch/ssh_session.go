@@ -8,7 +8,6 @@ import (
 
 	shellquote "github.com/kballard/go-shellquote"
 	"github.com/shazow/virtle/internal/executor"
-	"github.com/shazow/virtle/internal/manifest"
 	"github.com/shazow/virtle/internal/sshtools"
 )
 
@@ -31,8 +30,8 @@ type SSHSession struct {
 	RecordTimer   func(TimerEvent, time.Time)
 	Wait          func(context.Context, *executor.Process, executor.Group) error
 	WaitForRetry  func(context.Context, executor.Group) error
-	EnsureKey     func(*manifest.Manifest) (SSHAutoprovisionKey, error)
-	InstallKey    func(context.Context, *manifest.Manifest, SSHAutoprovisionKey, executor.Group) error
+	EnsureKey     func() (SSHAutoprovisionKey, error)
+	InstallKey    func(context.Context, SSHAutoprovisionKey, executor.Group) error
 	wrapStage     func(stage string, err error) error
 	Now           func() time.Time
 }
@@ -100,11 +99,11 @@ func RunSSHSession(ctx context.Context, session SSHSession) error {
 				session.RemoveProcess(started)
 			}
 			sessionLogger.Info("ssh authentication failed; autoprovisioning a key", "state_dir", launchManifest.ResolvedPersistenceStateDir(), "user", launchManifest.SSH.User)
-			key, keyErr := session.EnsureKey(launchManifest)
+			key, keyErr := session.EnsureKey()
 			if keyErr != nil {
 				return wrapSSHSessionStage(session, "ssh autoprovision", keyErr)
 			}
-			if installErr := session.InstallKey(ctx, launchManifest, key, watchers); installErr != nil {
+			if installErr := session.InstallKey(ctx, key, watchers); installErr != nil {
 				return installErr
 			}
 			sessionLogger.Info("installed autoprovisioned ssh key; retrying ssh", "identity_file", key.IdentityFile, "public_key_file", key.PublicKeyFile)

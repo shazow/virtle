@@ -6,7 +6,6 @@ import (
 	"github.com/shazow/virtle/internal/hotplug"
 	controlpkg "github.com/shazow/virtle/internal/manager/control"
 	"github.com/shazow/virtle/internal/manager/launch"
-	"github.com/shazow/virtle/internal/manifest"
 	"github.com/shazow/virtle/internal/qmpclient"
 )
 
@@ -27,11 +26,12 @@ func (f managerHotplugFeature) Hotplug(ctx context.Context, req controlpkg.Hotpl
 	return controlpkg.HotplugResponse{ID: req.ID}, nil
 }
 
-func (m *manager) hotplugFeature(launchManifest *manifest.Manifest, client qmpclient.Client) managerHotplugFeature {
-	return managerHotplugFeature{runner: m.hotplugRunner(launchManifest, client)}
+func (m *manager) hotplugFeature(client qmpclient.Client) managerHotplugFeature {
+	return managerHotplugFeature{runner: m.hotplugRunner(client)}
 }
 
-func (m *manager) hotplugRunner(launchManifest *manifest.Manifest, client qmpclient.Client) hotplug.Runner {
+func (m *manager) hotplugRunner(client qmpclient.Client) hotplug.Runner {
+	launchManifest := m.launchManifest
 	return hotplug.Runner{
 		StateDir: launchManifest.ResolvedPersistenceStateDir(),
 		WorkDir:  launchManifest.Paths.WorkingDir,
@@ -39,6 +39,6 @@ func (m *manager) hotplugRunner(launchManifest *manifest.Manifest, client qmpcli
 		Start:    managedProcessStarter{m: m},
 		Sockets:  socketReadinessWaiter{m: m},
 		QMP:      hotplug.QMPDeviceAdapter{Client: client, Timeout: m.effectiveQMPCommandTimeout()},
-		Guest:    guestCommandRunner{m: m, manifest: launchManifest},
+		Guest:    guestCommandRunner{m: m},
 	}
 }

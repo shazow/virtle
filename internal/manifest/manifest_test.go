@@ -701,7 +701,16 @@ initrd_path = "/tmp/initrd"
 }
 
 func TestManifestSSHRetryDelayDefaultsAndValidation(t *testing.T) {
+	decoded, err := DecodeDocumentBytes([]byte("[ssh]\n"), "manifest.toml")
+	if err != nil {
+		t.Fatalf("decode omitted ssh retry delay: %v", err)
+	}
+	if got, want := decoded.SSH.RetryDelay, 0.5; got != want {
+		t.Fatalf("omitted ssh retry delay: got %v want %v", got, want)
+	}
+
 	document := validDocument()
+	document.SSH.RetryDelay = 0.5
 	manifest, err := document.Manifest()
 	if err != nil {
 		t.Fatalf("resolve manifest: %v", err)
@@ -725,7 +734,7 @@ func TestManifestSSHRetryDelayDefaultsAndValidation(t *testing.T) {
 	}
 
 	customDoc := validDocument()
-	customDoc.SSH.RetryDelay = float64Ptr(0.25)
+	customDoc.SSH.RetryDelay = 0.25
 	custom, err := customDoc.Manifest()
 	if err != nil {
 		t.Fatalf("resolve custom retry delay: %v", err)
@@ -734,11 +743,76 @@ func TestManifestSSHRetryDelayDefaultsAndValidation(t *testing.T) {
 		t.Fatalf("unexpected custom ssh retry delay: got %s want %s", got, want)
 	}
 
+	zeroDoc := validDocument()
+	zeroDoc.SSH.RetryDelay = 0
+	zero, err := zeroDoc.Manifest()
+	if err != nil {
+		t.Fatalf("resolve zero retry delay: %v", err)
+	}
+	if got := zero.SSHRetryDelay(time.Second); got != 0 {
+		t.Fatalf("unexpected zero ssh retry delay: got %s want 0", got)
+	}
+
 	invalid := validDocument()
-	invalid.SSH.RetryDelay = float64Ptr(-1)
+	invalid.SSH.RetryDelay = -1
 	_, err = invalid.Manifest()
 	if err == nil || !strings.Contains(err.Error(), "manifest.ssh.retry_delay must be a finite number greater than or equal to zero") {
 		t.Fatalf("expected retry delay validation error, got %v", err)
+	}
+}
+
+func TestDecodeDocumentGuestDefaultTimeout(t *testing.T) {
+	omitted, err := DecodeDocumentBytes([]byte("[qemu]\n"), "manifest.toml")
+	if err != nil {
+		t.Fatalf("decode omitted guest default timeout: %v", err)
+	}
+	if got, want := omitted.QEMU.GuestDefaultTimeout, 30.0; got != want {
+		t.Fatalf("omitted guest default timeout: got %v want %v", got, want)
+	}
+
+	zero, err := DecodeDocumentBytes([]byte("[qemu]\nguest_default_timeout = 0\n"), "manifest.toml")
+	if err != nil {
+		t.Fatalf("decode zero guest default timeout: %v", err)
+	}
+	if got := zero.QEMU.GuestDefaultTimeout; got != 0 {
+		t.Fatalf("zero guest default timeout: got %v want 0", got)
+	}
+
+	custom, err := DecodeDocumentBytes([]byte(`{"qemu": {"guest_default_timeout": 2.5}}`), "manifest.json")
+	if err != nil {
+		t.Fatalf("decode custom guest default timeout: %v", err)
+	}
+	if got, want := custom.QEMU.GuestDefaultTimeout, 2.5; got != want {
+		t.Fatalf("custom guest default timeout: got %v want %v", got, want)
+	}
+}
+
+func TestManifestGuestDefaultTimeoutResolutionAndValidation(t *testing.T) {
+	document := validDocument()
+	document.QEMU.GuestDefaultTimeout = 2.5
+	resolved, err := document.Manifest()
+	if err != nil {
+		t.Fatalf("resolve custom guest agent timeout: %v", err)
+	}
+	if got, want := resolved.QEMU.GuestAgent.CommandTimeout, 2500*time.Millisecond; got != want {
+		t.Fatalf("custom guest agent timeout: got %s want %s", got, want)
+	}
+
+	zero := validDocument()
+	zero.QEMU.GuestDefaultTimeout = 0
+	resolved, err = zero.Manifest()
+	if err != nil {
+		t.Fatalf("resolve zero guest agent timeout: %v", err)
+	}
+	if got := resolved.QEMU.GuestAgent.CommandTimeout; got != 0 {
+		t.Fatalf("zero guest agent timeout: got %s want no timeout", got)
+	}
+
+	invalid := validDocument()
+	invalid.QEMU.GuestDefaultTimeout = -1
+	_, err = invalid.Manifest()
+	if err == nil || !strings.Contains(err.Error(), "manifest.qemu.guest_default_timeout must be a finite number greater than or equal to zero") {
+		t.Fatalf("expected guest agent timeout validation error, got %v", err)
 	}
 }
 
@@ -2526,7 +2600,7 @@ func validDocument() Document {
 		},
 		Machine: MachineInput{
 			Type:   "microvm",
-			VCPU:   intPtr(2),
+			VCPU:   2,
 			CPU:    "host",
 			Memory: 1024,
 		},

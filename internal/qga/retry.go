@@ -8,11 +8,11 @@ import (
 	"github.com/shazow/virtle/internal/qmpwire"
 )
 
-// DialRetry configures guest-agent dial retry behavior.
+// DialRetry configures guest-agent dial retry behavior. The readiness ping is
+// bounded by the transport's RPC timeout.
 type DialRetry struct {
 	SocketPath     string
 	ConnectTimeout time.Duration
-	CommandTimeout time.Duration
 	RetryDelay     time.Duration
 	Check          func() error
 }
@@ -27,7 +27,7 @@ func DialWithRetry(ctx context.Context, dialer Dialer, retry DialRetry) (Client,
 			return dialer.Dial(ctx, retry.SocketPath, retry.ConnectTimeout)
 		},
 		Probe: func(client Client) error {
-			return client.Ping(retry.CommandTimeout)
+			return client.Ping(ctx)
 		},
 		Close: func(client Client) {
 			_ = client.Disconnect()

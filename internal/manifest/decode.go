@@ -30,6 +30,7 @@ func LoadBytes(data []byte, name string) (*Manifest, error) {
 
 func DecodeDocumentBytes(data []byte, name string) (Document, error) {
 	var doc Document
+	applyDefaultTags(&doc)
 	var err error
 	if manifestLooksTOML(data, name) {
 		err = decodeTOML(data, &doc)

@@ -15,13 +15,11 @@ import (
 )
 
 const (
-	defaultSSHRetryDelaySeconds       = 0.5
-	defaultGuestDefaultTimeoutSeconds = 30
-	defaultSSHReadySocket             = ""
-	defaultVSockCIDStart              = 3
-	defaultVSockCIDEnd                = 65535
-	defaultVolumeFSType               = "ext4"
-	minAutoVolumeSize                 = units.MiB(256)
+	defaultSSHReadySocket = ""
+	defaultVSockCIDStart  = 3
+	defaultVSockCIDEnd    = 65535
+	defaultVolumeFSType   = "ext4"
+	minAutoVolumeSize     = units.MiB(256)
 )
 
 var writeFileModePattern = regexp.MustCompile(`^0?[0-7]{3}$`)

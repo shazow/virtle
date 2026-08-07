@@ -58,7 +58,7 @@ type QEMUInput struct {
 	MachineOptions      map[string]string `json:"machine_options,omitempty" toml:"machine_options" jsonschema:"description=Additional QEMU machine options merged into the resolved machine option list."`
 	QMPSocket           string            `json:"qmp_socket,omitempty" toml:"qmp_socket" jsonschema:"description=Path to the QEMU Machine Protocol socket relative to the runtime state directory unless absolute."`
 	GuestAgentSocket    string            `json:"guest_agent_socket,omitempty" toml:"guest_agent_socket" jsonschema:"description=Path to the QEMU guest agent socket relative to the runtime state directory unless absolute."`
-	GuestDefaultTimeout float64           `json:"guest_default_timeout,omitempty" toml:"guest_default_timeout" jsonschema:"description=Seconds allowed for each QEMU guest agent command; zero disables the timeout and omitting the key uses the default of 30 seconds."`
+	GuestDefaultTimeout float64           `json:"guest_default_timeout,omitempty" toml:"guest_default_timeout" default:"30" jsonschema:"description=Seconds allowed for each QEMU guest agent command; zero disables the timeout and omitting the key uses the default of 30 seconds."`
 }
 
 type MachineInput struct {
@@ -255,7 +255,7 @@ type SSHInput struct {
 	Exec          []string `json:"exec,omitempty" toml:"exec" jsonschema:"description=SSH command template used to attach to the guest."`
 	User          string   `json:"user,omitempty" toml:"user" jsonschema:"description=Guest SSH username."`
 	ReadySocket   string   `json:"ready_socket,omitempty" toml:"ready_socket" jsonschema:"description=Guest readiness socket path relative to the runtime state directory unless absolute."`
-	RetryDelay    float64  `json:"retry_delay,omitempty" toml:"retry_delay" jsonschema:"description=Seconds to wait between SSH readiness or connection retry attempts; zero retries immediately and omitting the key uses the default of 0.5 seconds."`
+	RetryDelay    float64  `json:"retry_delay,omitempty" toml:"retry_delay" default:"0.5" jsonschema:"description=Seconds to wait between SSH readiness or connection retry attempts; zero retries immediately and omitting the key uses the default of 0.5 seconds."`
 	Autoprovision bool     `json:"autoprovision,omitempty" toml:"autoprovision" jsonschema:"description=Automatically provision an SSH key after authentication failure."`
 }
 

@@ -95,7 +95,7 @@ func (g guestCommandRunner) Run(ctx context.Context, command []string) error {
 		return err
 	}
 	defer client.Disconnect()
-	ctx, cancel := guestOp(ctx, g.manifest.QEMU.GuestAgent.CommandTimeout)
+	ctx, cancel := withGuestContext(ctx, g.manifest.QEMU.GuestAgent.CommandTimeout)
 	defer cancel()
 	status, err := g.m.runGuestCommandStatus(ctx, client, filepath.Base(command[0]), command[0], command[1:], strings.Join(command, " "))
 	if err != nil {

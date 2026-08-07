@@ -106,8 +106,9 @@ type GuestExecRequest struct {
 	Path          string   `json:"path"`
 	Args          []string `json:"args,omitempty"`
 	CaptureOutput bool     `json:"captureOutput,omitempty"`
-	// Timeout is the guest command timeout in seconds; zero waits indefinitely.
-	Timeout float64 `json:"timeout,omitempty"`
+	// Timeout bounds the guest command as a Go duration string such as "30s"
+	// or "5m"; empty waits indefinitely.
+	Timeout string `json:"timeout,omitempty"`
 }
 
 // GuestExecResponse reports the completed guest process status.

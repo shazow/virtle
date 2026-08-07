@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
-	"math"
 	"time"
 
 	"github.com/shazow/virtle/internal/executor"
@@ -24,6 +23,10 @@ func (m *manager) guestFeature(socketPath string, processes *launch.ProcessSet, 
 	return managerGuestFeature{manager: m, socketPath: socketPath, processes: processes, guestAgentTimeout: guestAgentTimeout}
 }
 
+func (f managerGuestFeature) guestContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return withGuestContext(ctx, f.guestAgentTimeout)
+}
+
 func (f managerGuestFeature) GuestPS(ctx context.Context, req controlpkg.GuestPSRequest) (controlpkg.GuestPSResponse, error) {
 	_ = req
 	watchers := executor.Group{}
@@ -41,9 +44,13 @@ func (f managerGuestFeature) GuestExec(ctx context.Context, req controlpkg.Guest
 	if req.Path == "" {
 		return controlpkg.GuestExecResponse{}, &controlpkg.RPCError{Code: controlpkg.ErrInvalidParams, Message: "guest exec path is required"}
 	}
-	timeout, err := guestExecTimeout(req.Timeout)
-	if err != nil {
-		return controlpkg.GuestExecResponse{}, &controlpkg.RPCError{Code: controlpkg.ErrInvalidParams, Message: err.Error()}
+	var timeout time.Duration
+	if req.Timeout != "" {
+		parsed, err := time.ParseDuration(req.Timeout)
+		if err != nil || parsed < 0 {
+			return controlpkg.GuestExecResponse{}, &controlpkg.RPCError{Code: controlpkg.ErrInvalidParams, Message: fmt.Sprintf("guest exec timeout must be a non-negative duration such as %q, got %q", "30s", req.Timeout)}
+		}
+		timeout = parsed
 	}
 	client, err := f.guestClient(ctx)
 	if err != nil {
@@ -51,7 +58,7 @@ func (f managerGuestFeature) GuestExec(ctx context.Context, req controlpkg.Guest
 	}
 	defer client.Disconnect()
 
-	ctx, cancel := guestOp(ctx, timeout)
+	ctx, cancel := withGuestContext(ctx, timeout)
 	defer cancel()
 	status, err := qga.RunCommandStatus(ctx, client, qga.ExecWait{
 		PollDelay:     defaultMigrationPollDelay,
@@ -72,15 +79,6 @@ func (f managerGuestFeature) GuestExec(ctx context.Context, req controlpkg.Guest
 	}, nil
 }
 
-// guestExecTimeout validates a request timeout given in seconds. Zero means no
-// timeout; callers resolve the manifest-wide default and set it explicitly.
-func guestExecTimeout(seconds float64) (time.Duration, error) {
-	if math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds < 0 {
-		return 0, fmt.Errorf("guest exec timeout must be a finite number greater than or equal to zero")
-	}
-	return time.Duration(seconds * float64(time.Second)), nil
-}
-
 func (f managerGuestFeature) GuestRead(ctx context.Context, req controlpkg.GuestReadRequest) (controlpkg.GuestReadResponse, error) {
 	if req.Path == "" {
 		return controlpkg.GuestReadResponse{}, &controlpkg.RPCError{Code: controlpkg.ErrInvalidParams, Message: "guest read path is required"}
@@ -91,7 +89,7 @@ func (f managerGuestFeature) GuestRead(ctx context.Context, req controlpkg.Guest
 	}
 	defer client.Disconnect()
 
-	ctx, cancel := guestOp(ctx, f.guestAgentTimeout)
+	ctx, cancel := f.guestContext(ctx)
 	defer cancel()
 	data, err := qga.ReadFile(ctx, client, req.Path, qga.DefaultFileReadChunkSize)
 	if err != nil {
@@ -113,7 +111,7 @@ func (f managerGuestFeature) GuestWrite(ctx context.Context, req controlpkg.Gues
 	}
 	defer client.Disconnect()
 
-	ctx, cancel := guestOp(ctx, f.guestAgentTimeout)
+	ctx, cancel := f.guestContext(ctx)
 	defer cancel()
 	if err := qga.WriteFile(ctx, client, req.Path, req.DataBase64); err != nil {
 		return controlpkg.GuestWriteResponse{}, controlpkg.FailedPrecondition(err)

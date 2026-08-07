@@ -705,7 +705,7 @@ func TestManifestSSHRetryDelayDefaultsAndValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode omitted ssh retry delay: %v", err)
 	}
-	if got, want := decoded.SSH.RetryDelay, defaultSSHRetryDelaySeconds; got != want {
+	if got, want := decoded.SSH.RetryDelay, 0.5; got != want {
 		t.Fatalf("omitted ssh retry delay: got %v want %v", got, want)
 	}
 

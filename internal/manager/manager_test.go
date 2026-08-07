@@ -3810,26 +3810,32 @@ func TestLaunchRuntimeRegistersHotplugAtControlPeriphery(t *testing.T) {
 	}
 }
 
-func TestGuestExecTimeoutResolvesRequestTimeout(t *testing.T) {
-	seconds := 2.5
-	got, err := guestExecTimeout(seconds)
-	if err != nil {
-		t.Fatalf("resolve guest exec timeout: %v", err)
+func TestWithGuestContextBoundsOperations(t *testing.T) {
+	ctx, cancel := withGuestContext(context.Background(), 2500*time.Millisecond)
+	defer cancel()
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		t.Fatal("expected guest context deadline")
 	}
-	if want := 2500 * time.Millisecond; got != want {
-		t.Fatalf("guest exec timeout: got %s want %s", got, want)
-	}
-
-	got, err = guestExecTimeout(0)
-	if err != nil {
-		t.Fatalf("resolve guest exec zero timeout: %v", err)
-	}
-	if want := time.Duration(0); got != want {
-		t.Fatalf("guest exec zero timeout: got %s want %s", got, want)
+	if remaining := time.Until(deadline); remaining <= 0 || remaining > 2500*time.Millisecond {
+		t.Fatalf("unexpected guest context deadline: %s remaining", remaining)
 	}
 
-	if _, err := guestExecTimeout(-1); err == nil {
-		t.Fatal("expected negative guest exec timeout error")
+	ctx, cancel = withGuestContext(context.Background(), 0)
+	defer cancel()
+	if _, ok := ctx.Deadline(); ok {
+		t.Fatal("expected no deadline for zero guest timeout")
+	}
+}
+
+func TestGuestExecRejectsInvalidTimeout(t *testing.T) {
+	feature := (&manager{}).guestFeature("qga.sock", nil, 0)
+	for _, timeout := range []string{"nope", "-5s", "30"} {
+		_, err := feature.GuestExec(context.Background(), control.GuestExecRequest{Path: "/bin/true", Timeout: timeout})
+		var rpcErr *control.RPCError
+		if !errors.As(err, &rpcErr) || rpcErr.Code != control.ErrInvalidParams {
+			t.Fatalf("timeout %q: expected invalid params error, got %v", timeout, err)
+		}
 	}
 }
 
@@ -3896,12 +3902,11 @@ func TestLaunchRuntimeRegistersGuestRPCsAtControlPeriphery(t *testing.T) {
 		t.Fatalf("unexpected ps exec: %#v", exec)
 	}
 
-	timeout := 300.0
 	execResp, err := client.GuestExec(context.Background(), control.GuestExecRequest{
 		Path:          "/bin/sh",
 		Args:          []string{"-c", "echo hi"},
 		CaptureOutput: true,
-		Timeout:       timeout,
+		Timeout:       "300s",
 	})
 	if err != nil {
 		t.Fatalf("control guest exec: %v", err)

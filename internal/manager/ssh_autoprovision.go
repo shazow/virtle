@@ -36,30 +36,30 @@ func (m *manager) installSSHAutoprovisionKey(ctx context.Context, launchManifest
 	}
 	defer client.Disconnect()
 
-	timeout := launchManifest.QEMU.GuestAgent.CommandTimeout
+	guestCtx := guestContextFor(launchManifest)
 	return launch.InstallSSHAuthorizedKey(ctx, launchManifest, key, launch.SSHAuthorizedKeyInstaller{
 		InstallDirectory: func(ctx context.Context, guestPath string, owner string, mode string) error {
-			ctx, cancel := guestOp(ctx, timeout)
+			ctx, cancel := guestCtx(ctx)
 			defer cancel()
 			return m.installGuestFileDirectory(ctx, client, guestPath, owner, mode)
 		},
 		Chown: func(ctx context.Context, guestPath string, owner string) error {
-			ctx, cancel := guestOp(ctx, timeout)
+			ctx, cancel := guestCtx(ctx)
 			defer cancel()
 			return m.chownGuestFile(ctx, client, guestPath, owner)
 		},
 		Chmod: func(ctx context.Context, guestPath string, mode string) error {
-			ctx, cancel := guestOp(ctx, timeout)
+			ctx, cancel := guestCtx(ctx)
 			defer cancel()
 			return m.chmodGuestFile(ctx, client, guestPath, mode)
 		},
 		WriteFile: func(ctx context.Context, guestPath string, payloadBase64 string) error {
-			ctx, cancel := guestOp(ctx, timeout)
+			ctx, cancel := guestCtx(ctx)
 			defer cancel()
 			return qga.WriteFile(ctx, client, guestPath, payloadBase64)
 		},
 		RunCommand: func(ctx context.Context, name string, path string, args []string, inputPath string) error {
-			ctx, cancel := guestOp(ctx, timeout)
+			ctx, cancel := guestCtx(ctx)
 			defer cancel()
 			return m.runGuestFileCommand(ctx, client, name, path, args, inputPath)
 		},

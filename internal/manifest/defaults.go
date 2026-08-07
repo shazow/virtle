@@ -9,14 +9,13 @@ const (
 // optional fields are omitted. Required fields without defaults, such as
 // kernel.path and kernel.initrd_path, are intentionally left unset.
 func DefaultDocument() Document {
-	return Document{
+	doc := Document{
 		HostName:   defaultHostName,
 		WorkingDir: defaultWorkingDir,
 		StateDir:   defaultBaseDir,
 		QEMU: QEMUInput{
-			QMPSocket:           defaultQMP,
-			GuestAgentSocket:    defaultGuestAgent,
-			GuestDefaultTimeout: defaultGuestDefaultTimeoutSeconds,
+			QMPSocket:        defaultQMP,
+			GuestAgentSocket: defaultGuestAgent,
 		},
 		Machine: MachineInput{
 			Type:   defaultMachineType,
@@ -36,9 +35,8 @@ func DefaultDocument() Document {
 			},
 		},
 		SSH: SSHInput{
-			Exec:       []string{defaultSSHCommand},
-			User:       defaultSSHUser,
-			RetryDelay: defaultSSHRetryDelaySeconds,
+			Exec: []string{defaultSSHCommand},
+			User: defaultSSHUser,
 		},
 		VSock: VSockInput{
 			CIDRange: RangeInput{
@@ -47,6 +45,8 @@ func DefaultDocument() Document {
 			},
 		},
 	}
+	applyDefaultTags(&doc)
+	return doc
 }
 
 // DocumentWithDefaults returns document overlaid on DefaultDocument. Pointer,

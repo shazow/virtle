@@ -407,10 +407,9 @@ func (m *manager) runSSHSession(
 }
 
 func (m *manager) waitBeforeSSHRetry(ctx context.Context, lifecycle *launch.Lifecycle, suspendHandler suspendHandler, guestAgentSocketPath string, watchers executor.Group) error {
+	// An explicit manifest retry_delay of zero means retry immediately; the
+	// manager default applies only when no manifest is bound.
 	delay := m.launchManifest.SSHRetryDelay(m.sshRetryDelay)
-	if delay <= 0 {
-		delay = m.sshRetryDelay
-	}
 	if delay <= 0 {
 		return nil
 	}

@@ -17,8 +17,8 @@ func TestEvaluateGrowsGuestMemory(t *testing.T) {
 		GrowBelowAvailable:    128,
 		ReclaimAboveAvailable: 768,
 		Step:                  128,
-		PollIntervalSeconds:   5,
-		ReclaimHoldoffSeconds: 30,
+		PollInterval:          5 * time.Second,
+		ReclaimHoldoff:        30 * time.Second,
 	}
 	state := &controllerState{startedAt: now.Add(-time.Minute)}
 
@@ -46,8 +46,8 @@ func TestEvaluateReclaimsAfterHoldoff(t *testing.T) {
 		GrowBelowAvailable:    128,
 		ReclaimAboveAvailable: 768,
 		Step:                  128,
-		PollIntervalSeconds:   5,
-		ReclaimHoldoffSeconds: 30,
+		PollInterval:          5 * time.Second,
+		ReclaimHoldoff:        30 * time.Second,
 	}
 	state := &controllerState{startedAt: now.Add(-time.Minute)}
 
@@ -83,8 +83,8 @@ func TestEvaluateNoopsWithinHysteresis(t *testing.T) {
 		GrowBelowAvailable:    128,
 		ReclaimAboveAvailable: 768,
 		Step:                  128,
-		PollIntervalSeconds:   5,
-		ReclaimHoldoffSeconds: 30,
+		PollInterval:          5 * time.Second,
+		ReclaimHoldoff:        30 * time.Second,
 	}
 	state := &controllerState{
 		startedAt:           now.Add(-time.Minute),
@@ -115,8 +115,8 @@ func TestEvaluateRejectsStaleStats(t *testing.T) {
 		GrowBelowAvailable:    128,
 		ReclaimAboveAvailable: 768,
 		Step:                  128,
-		PollIntervalSeconds:   5,
-		ReclaimHoldoffSeconds: 30,
+		PollInterval:          5 * time.Second,
+		ReclaimHoldoff:        30 * time.Second,
 	}
 	state := &controllerState{startedAt: now.Add(-time.Minute)}
 
@@ -138,8 +138,8 @@ func TestEvaluateRejectsUnavailableStats(t *testing.T) {
 		GrowBelowAvailable:    128,
 		ReclaimAboveAvailable: 768,
 		Step:                  128,
-		PollIntervalSeconds:   5,
-		ReclaimHoldoffSeconds: 30,
+		PollInterval:          5 * time.Second,
+		ReclaimHoldoff:        30 * time.Second,
 	}
 	state := &controllerState{startedAt: now.Add(-11 * time.Second)}
 
@@ -157,8 +157,8 @@ func TestEvaluateClampsToBounds(t *testing.T) {
 		GrowBelowAvailable:    128,
 		ReclaimAboveAvailable: 768,
 		Step:                  256,
-		PollIntervalSeconds:   5,
-		ReclaimHoldoffSeconds: 30,
+		PollInterval:          5 * time.Second,
+		ReclaimHoldoff:        30 * time.Second,
 	}
 	state := &controllerState{startedAt: now.Add(-time.Minute)}
 
@@ -272,8 +272,8 @@ func TestControllerNotifiesAfterSuccessfulResize(t *testing.T) {
 			GrowBelowAvailable:    128,
 			ReclaimAboveAvailable: 4096,
 			Step:                  2048,
-			PollIntervalSeconds:   1,
-			ReclaimHoldoffSeconds: 1,
+			PollInterval:          1 * time.Second,
+			ReclaimHoldoff:        1 * time.Second,
 		},
 		Notifier: notifications,
 		Now:      func() time.Time { return now },
@@ -329,19 +329,18 @@ func TestControllerSurvivesTransientFailures(t *testing.T) {
 		},
 	}
 	controller := &controller{
-		Session:      session,
-		Logger:       slog.New(slog.DiscardHandler),
-		DeviceID:     "balloon0",
-		QMPTimeout:   time.Second,
-		PollInterval: 10 * time.Millisecond,
+		Session:    session,
+		Logger:     slog.New(slog.DiscardHandler),
+		DeviceID:   "balloon0",
+		QMPTimeout: time.Second,
 		Config: ControllerConfig{
 			MinActual:             1024,
 			MaxActual:             8192,
 			GrowBelowAvailable:    128,
 			ReclaimAboveAvailable: 4096,
 			Step:                  2048,
-			PollIntervalSeconds:   1,
-			ReclaimHoldoffSeconds: 1,
+			PollInterval:          10 * time.Millisecond,
+			ReclaimHoldoff:        time.Second,
 		},
 		Now: func() time.Time { return now },
 	}
@@ -375,19 +374,18 @@ func TestControllerStopsAfterConsecutiveFailures(t *testing.T) {
 		},
 	}
 	controller := &controller{
-		Session:      session,
-		Logger:       slog.New(slog.DiscardHandler),
-		DeviceID:     "balloon0",
-		QMPTimeout:   time.Second,
-		PollInterval: 10 * time.Millisecond,
+		Session:    session,
+		Logger:     slog.New(slog.DiscardHandler),
+		DeviceID:   "balloon0",
+		QMPTimeout: time.Second,
 		Config: ControllerConfig{
 			MinActual:             1024,
 			MaxActual:             8192,
 			GrowBelowAvailable:    128,
 			ReclaimAboveAvailable: 4096,
 			Step:                  2048,
-			PollIntervalSeconds:   1,
-			ReclaimHoldoffSeconds: 1,
+			PollInterval:          10 * time.Millisecond,
+			ReclaimHoldoff:        time.Second,
 		},
 	}
 
@@ -437,8 +435,8 @@ func TestControllerDoesNotNotifyWhenResizeIsNotApplied(t *testing.T) {
 			GrowBelowAvailable:    128,
 			ReclaimAboveAvailable: 4096,
 			Step:                  2048,
-			PollIntervalSeconds:   1,
-			ReclaimHoldoffSeconds: 1,
+			PollInterval:          1 * time.Second,
+			ReclaimHoldoff:        1 * time.Second,
 		},
 		Notifier: notifications,
 		Now:      func() time.Time { return now },

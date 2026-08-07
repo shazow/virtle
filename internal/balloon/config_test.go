@@ -28,10 +28,10 @@ func TestApplyDefaultsCreatesHalfAllocationTarget(t *testing.T) {
 	if got, want := device.Controller.Step, DefaultControllerStep; got != want {
 		t.Fatalf("unexpected stepMiB: got %d want %d", got, want)
 	}
-	if got, want := device.Controller.PollIntervalSeconds, DefaultControllerPollIntervalSecs; got != want {
+	if got, want := device.Controller.PollInterval, DefaultControllerPollInterval; got != want {
 		t.Fatalf("unexpected pollIntervalSeconds: got %d want %d", got, want)
 	}
-	if got, want := device.Controller.ReclaimHoldoffSeconds, DefaultControllerReclaimHoldoff; got != want {
+	if got, want := device.Controller.ReclaimHoldoff, DefaultControllerReclaimHoldoff; got != want {
 		t.Fatalf("unexpected reclaimHoldoffSeconds: got %d want %d", got, want)
 	}
 }
@@ -65,8 +65,8 @@ func TestValidateControllerRejectsNegativeThresholds(t *testing.T) {
 		GrowBelowAvailable:    -1,
 		ReclaimAboveAvailable: 512,
 		Step:                  DefaultControllerStep,
-		PollIntervalSeconds:   DefaultControllerPollIntervalSecs,
-		ReclaimHoldoffSeconds: DefaultControllerReclaimHoldoff,
+		PollInterval:          DefaultControllerPollInterval,
+		ReclaimHoldoff:        DefaultControllerReclaimHoldoff,
 	}
 	if err := ValidateController(1024, config); err == nil {
 		t.Fatal("expected negative grow threshold validation error")
@@ -78,8 +78,8 @@ func TestValidateControllerRejectsNegativeThresholds(t *testing.T) {
 		GrowBelowAvailable:    256,
 		ReclaimAboveAvailable: -1,
 		Step:                  DefaultControllerStep,
-		PollIntervalSeconds:   DefaultControllerPollIntervalSecs,
-		ReclaimHoldoffSeconds: DefaultControllerReclaimHoldoff,
+		PollInterval:          DefaultControllerPollInterval,
+		ReclaimHoldoff:        DefaultControllerReclaimHoldoff,
 	}
 	if err := ValidateController(1024, config); err == nil {
 		t.Fatal("expected negative reclaim threshold validation error")

@@ -247,8 +247,8 @@ type BalloonControllerInput struct {
 	GrowBelowAvailable    units.MiB `json:"grow_below_available,omitempty" toml:"grow_below_available" jsonschema:"description=Grow guest memory when available guest memory falls below this MiB threshold."`
 	ReclaimAboveAvailable units.MiB `json:"reclaim_above_available,omitempty" toml:"reclaim_above_available" jsonschema:"description=Reclaim guest memory when available guest memory rises above this MiB threshold."`
 	Step                  units.MiB `json:"step,omitempty" toml:"step" jsonschema:"description=Memory adjustment step size in MiB."`
-	PollIntervalSeconds   int       `json:"poll_interval_seconds,omitempty" toml:"poll_interval_seconds" jsonschema:"description=Seconds between balloon controller polling cycles."`
-	ReclaimHoldoffSeconds int       `json:"reclaim_holdoff_seconds,omitempty" toml:"reclaim_holdoff_seconds" jsonschema:"description=Seconds to wait after growing memory before reclaiming again."`
+	PollInterval          float64   `json:"poll_interval,omitempty" toml:"poll_interval" jsonschema:"description=Seconds between balloon controller polling cycles."`
+	ReclaimHoldoff        float64   `json:"reclaim_holdoff,omitempty" toml:"reclaim_holdoff" jsonschema:"description=Seconds to wait after growing memory before reclaiming again."`
 }
 
 type SSHInput struct {

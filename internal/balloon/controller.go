@@ -57,9 +57,6 @@ type controller struct {
 	QMPTimeout time.Duration
 	Now        func() time.Time
 	Notifier   notifier
-	// PollInterval overrides Config.PollIntervalSeconds for the host-side
-	// sampling ticker; tests use it for sub-second cycles.
-	PollInterval time.Duration
 }
 
 type controllerState struct {
@@ -85,7 +82,7 @@ func (c *controller) Run(ctx context.Context) error {
 		return err
 	}
 
-	if err := c.Session.EnableBalloonStatsPolling(c.QMPTimeout, qomPath, c.Config.PollIntervalSeconds); err != nil {
+	if err := c.Session.EnableBalloonStatsPolling(c.QMPTimeout, qomPath, statsPollSeconds(c.Config.PollInterval)); err != nil {
 		return err
 	}
 
@@ -238,10 +235,17 @@ func (c *controller) readSample(qomPath string) (info, guestStatsSample, error) 
 }
 
 func (c *controller) pollInterval() time.Duration {
-	if c.PollInterval > 0 {
-		return c.PollInterval
+	return c.Config.PollInterval
+}
+
+// statsPollSeconds converts the poll interval for QEMU's integer-second
+// guest-stats-polling-interval property, keeping at least one second.
+func statsPollSeconds(interval time.Duration) int {
+	seconds := int(interval / time.Second)
+	if seconds < 1 {
+		return 1
 	}
-	return time.Duration(c.Config.PollIntervalSeconds) * time.Second
+	return seconds
 }
 
 func (c *controller) nowFunc() func() time.Time {
@@ -258,8 +262,7 @@ func evaluate(
 	actualBytes int64,
 	stats guestStatsSample,
 ) (int64, bool, error) {
-	pollInterval := time.Duration(config.PollIntervalSeconds) * time.Second
-	staleAfter := 2 * pollInterval
+	staleAfter := 2 * config.PollInterval
 
 	if stats.LastUpdate.IsZero() {
 		if now.Sub(state.startedAt) >= staleAfter {
@@ -306,7 +309,7 @@ func evaluate(
 			state.aboveThresholdSince = now
 			return 0, false, nil
 		}
-		if now.Sub(state.aboveThresholdSince) < time.Duration(config.ReclaimHoldoffSeconds)*time.Second {
+		if now.Sub(state.aboveThresholdSince) < config.ReclaimHoldoff {
 			return 0, false, nil
 		}
 

@@ -101,6 +101,15 @@ func (d Document) ManifestWithOptions(options ResolveOptions) (*Manifest, error)
 	return m, nil
 }
 
+// secondsDuration converts manifest seconds; non-finite values map to a
+// negative duration so downstream validation rejects them.
+func secondsDuration(seconds float64) time.Duration {
+	if math.IsNaN(seconds) || math.IsInf(seconds, 0) {
+		return -1
+	}
+	return time.Duration(seconds * float64(time.Second))
+}
+
 // resolveRetryDelay converts manifest seconds where zero retries immediately;
 // the default for omitted keys is seeded at decode time.
 func resolveRetryDelay(seconds float64) (time.Duration, error) {
@@ -941,8 +950,8 @@ func resolveBalloon(facts *BalloonInput, transport string) *balloon.Device {
 			GrowBelowAvailable:    facts.Controller.GrowBelowAvailable,
 			ReclaimAboveAvailable: facts.Controller.ReclaimAboveAvailable,
 			Step:                  facts.Controller.Step,
-			PollIntervalSeconds:   facts.Controller.PollIntervalSeconds,
-			ReclaimHoldoffSeconds: facts.Controller.ReclaimHoldoffSeconds,
+			PollInterval:          secondsDuration(facts.Controller.PollInterval),
+			ReclaimHoldoff:        secondsDuration(facts.Controller.ReclaimHoldoff),
 		}
 	}
 	return device

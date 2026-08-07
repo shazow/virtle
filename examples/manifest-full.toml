@@ -308,8 +308,8 @@ max_actual = 1024  # MiB
 grow_below_available = 256  # MiB
 reclaim_above_available = 512  # MiB
 step = 256  # MiB
-poll_interval_seconds = 5
-reclaim_holdoff_seconds = 30
+poll_interval = 5  # Seconds between polling cycles
+reclaim_holdoff = 30  # Seconds to wait after growing before reclaiming
 
 [[write_files]]
 # Guest file writes depend on the QEMU guest agent. They belong in the manifest

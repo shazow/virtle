@@ -2,6 +2,7 @@ package manifest
 
 import (
 	"testing"
+	"time"
 
 	"github.com/shazow/virtle/internal/balloon"
 )
@@ -30,11 +31,11 @@ func TestValidateAppliesBalloonDefaults(t *testing.T) {
 	if got, want := manifest.QEMU.Devices.Balloon.Controller.Step.Int(), 256; got != want {
 		t.Fatalf("unexpected balloon controller step default: got %d want %d", got, want)
 	}
-	if got, want := manifest.QEMU.Devices.Balloon.Controller.PollIntervalSeconds, 5; got != want {
-		t.Fatalf("unexpected balloon controller poll interval default: got %d want %d", got, want)
+	if got, want := manifest.QEMU.Devices.Balloon.Controller.PollInterval, 5*time.Second; got != want {
+		t.Fatalf("unexpected balloon controller poll interval default: got %s want %s", got, want)
 	}
-	if got, want := manifest.QEMU.Devices.Balloon.Controller.ReclaimHoldoffSeconds, 30; got != want {
-		t.Fatalf("unexpected balloon controller reclaim holdoff default: got %d want %d", got, want)
+	if got, want := manifest.QEMU.Devices.Balloon.Controller.ReclaimHoldoff, 30*time.Second; got != want {
+		t.Fatalf("unexpected balloon controller reclaim holdoff default: got %s want %s", got, want)
 	}
 }
 

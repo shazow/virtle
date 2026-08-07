@@ -24,12 +24,12 @@
           "type": "integer",
           "description": "Memory adjustment step size in MiB."
         },
-        "poll_interval_seconds": {
-          "type": "integer",
+        "poll_interval": {
+          "type": "number",
           "description": "Seconds between balloon controller polling cycles."
         },
-        "reclaim_holdoff_seconds": {
-          "type": "integer",
+        "reclaim_holdoff": {
+          "type": "number",
           "description": "Seconds to wait after growing memory before reclaiming again."
         }
       },

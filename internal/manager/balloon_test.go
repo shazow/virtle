@@ -30,8 +30,8 @@ func TestManagerLaunchStartsBalloonControllerAndStopsItBeforeQuit(t *testing.T) 
 	manifest := validManifestWithBalloon(tmpDir)
 	manifest.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
 	manifest.QEMU.Devices.Balloon.Controller = &balloon.ControllerConfig{
-		PollIntervalSeconds:   1,
-		ReclaimHoldoffSeconds: 1,
+		PollInterval:   1 * time.Second,
+		ReclaimHoldoff: 1 * time.Second,
 	}
 
 	cancelCtx, cancel := context.WithCancel(context.Background())
@@ -164,8 +164,8 @@ func TestBalloonControllerTaskWithNilLoggerDoesNotPanicOnFailure(t *testing.T) {
 			GrowBelowAvailable:    256,
 			ReclaimAboveAvailable: 512,
 			Step:                  256,
-			PollIntervalSeconds:   1,
-			ReclaimHoldoffSeconds: 1,
+			PollInterval:          1 * time.Second,
+			ReclaimHoldoff:        1 * time.Second,
 		},
 	}, nil)
 	if task == nil {
@@ -197,8 +197,8 @@ func TestBalloonControllerTaskWithNilLoggerDoesNotPanicOnAdjustment(t *testing.T
 			GrowBelowAvailable:    600,
 			ReclaimAboveAvailable: 900,
 			Step:                  256,
-			PollIntervalSeconds:   1,
-			ReclaimHoldoffSeconds: 1,
+			PollInterval:          1 * time.Second,
+			ReclaimHoldoff:        1 * time.Second,
 		},
 	}, nil)
 	if task == nil {

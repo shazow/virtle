@@ -298,7 +298,7 @@
         },
         "vcpu": {
           "type": "integer",
-          "description": "Number of virtual CPUs to expose to the guest."
+          "description": "Number of virtual CPUs to expose to the guest; zero derives the count."
         },
         "id": {
           "type": "string",
@@ -462,7 +462,7 @@
         },
         "retry_delay": {
           "type": "number",
-          "description": "Seconds to wait between SSH readiness or connection retry attempts."
+          "description": "Seconds to wait between SSH readiness or connection retry attempts; zero retries immediately and omitting the key uses the default of 0.5 seconds."
         },
         "autoprovision": {
           "type": "boolean",

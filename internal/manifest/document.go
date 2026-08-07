@@ -51,10 +51,9 @@ type HostInput struct {
 }
 
 type QEMUInput struct {
-	Exec          []string `json:"exec,omitempty" toml:"exec" jsonschema:"description=Command template used to launch QEMU; the first element is the QEMU binary."`
-	FwdTunnelExec []string `json:"fwd_tunnel_exec,omitempty" toml:"fwd_tunnel_exec" jsonschema:"description=Command template QEMU uses to forward host or guest ports."`
-	// Pointer preserves omitted vs explicitly empty input until resolution.
-	User                *string           `json:"user,omitempty" toml:"user" jsonschema:"description=Host user used for QEMU-related process policy when supported."`
+	Exec                []string          `json:"exec,omitempty" toml:"exec" jsonschema:"description=Command template used to launch QEMU; the first element is the QEMU binary."`
+	FwdTunnelExec       []string          `json:"fwd_tunnel_exec,omitempty" toml:"fwd_tunnel_exec" jsonschema:"description=Command template QEMU uses to forward host or guest ports."`
+	User                string            `json:"user,omitempty" toml:"user" jsonschema:"description=Host user used for QEMU-related process policy when supported."`
 	Seccomp             bool              `json:"seccomp,omitempty" toml:"seccomp" jsonschema:"description=Enable QEMU seccomp sandboxing."`
 	MachineOptions      map[string]string `json:"machine_options,omitempty" toml:"machine_options" jsonschema:"description=Additional QEMU machine options merged into the resolved machine option list."`
 	QMPSocket           string            `json:"qmp_socket,omitempty" toml:"qmp_socket" jsonschema:"description=Path to the QEMU Machine Protocol socket relative to the runtime state directory unless absolute."`
@@ -63,11 +62,9 @@ type QEMUInput struct {
 }
 
 type MachineInput struct {
-	Type string `json:"type,omitempty" toml:"type" jsonschema:"description=QEMU machine type to use when resolving device transports."`
-	// Pointer preserves omitted vs explicitly zero input until resolution.
-	VCPU *int `json:"vcpu,omitempty" toml:"vcpu" jsonschema:"description=Number of virtual CPUs to expose to the guest."`
-	// Pointer preserves omitted vs explicitly empty input until resolution.
-	ID     *string   `json:"id,omitempty" toml:"id" jsonschema:"description=Optional machine identifier passed through to QEMU."`
+	Type   string    `json:"type,omitempty" toml:"type" jsonschema:"description=QEMU machine type to use when resolving device transports."`
+	VCPU   int       `json:"vcpu,omitempty" toml:"vcpu" jsonschema:"description=Number of virtual CPUs to expose to the guest; zero derives the count."`
+	ID     string    `json:"id,omitempty" toml:"id" jsonschema:"description=Optional machine identifier passed through to QEMU."`
 	Memory units.MiB `json:"memory,omitempty" toml:"memory" jsonschema:"description=Guest memory size in MiB."`
 	CPU    string    `json:"cpu,omitempty" toml:"cpu" jsonschema:"description=QEMU CPU model string."`
 	// Pointer preserves omitted vs explicitly false input until resolution.
@@ -255,11 +252,10 @@ type BalloonControllerInput struct {
 }
 
 type SSHInput struct {
-	Exec        []string `json:"exec,omitempty" toml:"exec" jsonschema:"description=SSH command template used to attach to the guest."`
-	User        string   `json:"user,omitempty" toml:"user" jsonschema:"description=Guest SSH username."`
-	ReadySocket string   `json:"ready_socket,omitempty" toml:"ready_socket" jsonschema:"description=Guest readiness socket path relative to the runtime state directory unless absolute."`
-	// Pointer preserves omitted vs explicitly zero input until resolution.
-	RetryDelay    *float64 `json:"retry_delay,omitempty" toml:"retry_delay" jsonschema:"description=Seconds to wait between SSH readiness or connection retry attempts."`
+	Exec          []string `json:"exec,omitempty" toml:"exec" jsonschema:"description=SSH command template used to attach to the guest."`
+	User          string   `json:"user,omitempty" toml:"user" jsonschema:"description=Guest SSH username."`
+	ReadySocket   string   `json:"ready_socket,omitempty" toml:"ready_socket" jsonschema:"description=Guest readiness socket path relative to the runtime state directory unless absolute."`
+	RetryDelay    float64  `json:"retry_delay,omitempty" toml:"retry_delay" jsonschema:"description=Seconds to wait between SSH readiness or connection retry attempts; zero retries immediately and omitting the key uses the default of 0.5 seconds."`
 	Autoprovision bool     `json:"autoprovision,omitempty" toml:"autoprovision" jsonschema:"description=Automatically provision an SSH key after authentication failure."`
 }
 

@@ -101,14 +101,13 @@ func (d Document) ManifestWithOptions(options ResolveOptions) (*Manifest, error)
 	return m, nil
 }
 
-func resolveRetryDelay(seconds *float64) (time.Duration, error) {
-	if seconds == nil {
-		return time.Duration(defaultSSHRetryDelaySeconds * float64(time.Second)), nil
-	}
-	if math.IsNaN(*seconds) || math.IsInf(*seconds, 0) || *seconds < 0 {
+// resolveRetryDelay converts manifest seconds where zero retries immediately;
+// the default for omitted keys is seeded at decode time.
+func resolveRetryDelay(seconds float64) (time.Duration, error) {
+	if math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds < 0 {
 		return 0, fmt.Errorf("manifest.ssh.retry_delay must be a finite number greater than or equal to zero")
 	}
-	return time.Duration(*seconds * float64(time.Second)), nil
+	return time.Duration(seconds * float64(time.Second)), nil
 }
 
 // resolveGuestDefaultTimeout converts manifest seconds where zero disables the
@@ -246,17 +245,17 @@ func (d Document) resolveQEMU(host HostInput, hostName string, workingDir string
 				Transport: transport,
 			},
 		},
-		MachineID:       stringValue(d.Machine.ID),
+		MachineID:       d.Machine.ID,
 		PassthroughArgs: qemuPassthroughArgs(d.QEMU, qemuExec),
 	}
 	return qemu, nil
 }
 
-func resolveCPUCount(cpus *int) CPUCount {
-	if cpus == nil {
+func resolveCPUCount(cpus int) CPUCount {
+	if cpus == 0 {
 		return CPUCount{}
 	}
-	return ExplicitCPUs(*cpus)
+	return ExplicitCPUs(cpus)
 }
 
 func (d Document) hotplugCount() int {
@@ -1094,8 +1093,8 @@ func qemuPassthroughArgs(qemu QEMUInput, exec []string) []string {
 		extraArgs = exec[1:]
 	}
 	args := make([]string, 0, len(extraArgs)+2)
-	if qemu.User != nil && *qemu.User != "" {
-		args = append(args, "-user", *qemu.User)
+	if qemu.User != "" {
+		args = append(args, "-user", qemu.User)
 	}
 	args = append(args, extraArgs...)
 	return args

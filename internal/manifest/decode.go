@@ -48,6 +48,7 @@ func DecodeDocumentBytes(data []byte, name string) (Document, error) {
 func decodeDefaults() Document {
 	var doc Document
 	doc.QEMU.GuestDefaultTimeout = defaultGuestDefaultTimeoutSeconds
+	doc.SSH.RetryDelay = defaultSSHRetryDelaySeconds
 	return doc
 }
 

@@ -701,7 +701,16 @@ initrd_path = "/tmp/initrd"
 }
 
 func TestManifestSSHRetryDelayDefaultsAndValidation(t *testing.T) {
+	decoded, err := DecodeDocumentBytes([]byte("[ssh]\n"), "manifest.toml")
+	if err != nil {
+		t.Fatalf("decode omitted ssh retry delay: %v", err)
+	}
+	if got, want := decoded.SSH.RetryDelay, defaultSSHRetryDelaySeconds; got != want {
+		t.Fatalf("omitted ssh retry delay: got %v want %v", got, want)
+	}
+
 	document := validDocument()
+	document.SSH.RetryDelay = 0.5
 	manifest, err := document.Manifest()
 	if err != nil {
 		t.Fatalf("resolve manifest: %v", err)
@@ -725,7 +734,7 @@ func TestManifestSSHRetryDelayDefaultsAndValidation(t *testing.T) {
 	}
 
 	customDoc := validDocument()
-	customDoc.SSH.RetryDelay = float64Ptr(0.25)
+	customDoc.SSH.RetryDelay = 0.25
 	custom, err := customDoc.Manifest()
 	if err != nil {
 		t.Fatalf("resolve custom retry delay: %v", err)
@@ -734,8 +743,18 @@ func TestManifestSSHRetryDelayDefaultsAndValidation(t *testing.T) {
 		t.Fatalf("unexpected custom ssh retry delay: got %s want %s", got, want)
 	}
 
+	zeroDoc := validDocument()
+	zeroDoc.SSH.RetryDelay = 0
+	zero, err := zeroDoc.Manifest()
+	if err != nil {
+		t.Fatalf("resolve zero retry delay: %v", err)
+	}
+	if got := zero.SSHRetryDelay(time.Second); got != 0 {
+		t.Fatalf("unexpected zero ssh retry delay: got %s want 0", got)
+	}
+
 	invalid := validDocument()
-	invalid.SSH.RetryDelay = float64Ptr(-1)
+	invalid.SSH.RetryDelay = -1
 	_, err = invalid.Manifest()
 	if err == nil || !strings.Contains(err.Error(), "manifest.ssh.retry_delay must be a finite number greater than or equal to zero") {
 		t.Fatalf("expected retry delay validation error, got %v", err)
@@ -2581,7 +2600,7 @@ func validDocument() Document {
 		},
 		Machine: MachineInput{
 			Type:   "microvm",
-			VCPU:   intPtr(2),
+			VCPU:   2,
 			CPU:    "host",
 			Memory: 1024,
 		},

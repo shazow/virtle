@@ -44,13 +44,8 @@ func (f managerGuestFeature) GuestExec(ctx context.Context, req controlpkg.Guest
 	if req.Path == "" {
 		return controlpkg.GuestExecResponse{}, &controlpkg.RPCError{Code: controlpkg.ErrInvalidParams, Message: "guest exec path is required"}
 	}
-	var timeout time.Duration
-	if req.Timeout != "" {
-		parsed, err := time.ParseDuration(req.Timeout)
-		if err != nil || parsed < 0 {
-			return controlpkg.GuestExecResponse{}, &controlpkg.RPCError{Code: controlpkg.ErrInvalidParams, Message: fmt.Sprintf("guest exec timeout must be a non-negative duration such as %q, got %q", "30s", req.Timeout)}
-		}
-		timeout = parsed
+	if req.Timeout < 0 {
+		return controlpkg.GuestExecResponse{}, &controlpkg.RPCError{Code: controlpkg.ErrInvalidParams, Message: "guest exec timeout must not be negative"}
 	}
 	client, err := f.guestClient(ctx)
 	if err != nil {
@@ -58,7 +53,7 @@ func (f managerGuestFeature) GuestExec(ctx context.Context, req controlpkg.Guest
 	}
 	defer client.Disconnect()
 
-	ctx, cancel := withGuestContext(ctx, timeout)
+	ctx, cancel := withGuestContext(ctx, time.Duration(req.Timeout))
 	defer cancel()
 	status, err := qga.RunCommandStatus(ctx, client, qga.ExecWait{
 		PollDelay:     defaultMigrationPollDelay,

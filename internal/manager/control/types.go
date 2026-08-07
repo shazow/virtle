@@ -7,6 +7,31 @@ import (
 	"time"
 )
 
+// Duration is a time.Duration that travels over the control socket as a Go
+// duration string such as "30s" or "5m".
+type Duration time.Duration
+
+func (d Duration) MarshalJSON() ([]byte, error) {
+	return json.Marshal(time.Duration(d).String())
+}
+
+func (d *Duration) UnmarshalJSON(data []byte) error {
+	var value string
+	if err := json.Unmarshal(data, &value); err != nil {
+		return fmt.Errorf("duration must be a string such as %q: %w", "30s", err)
+	}
+	if value == "" {
+		*d = 0
+		return nil
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil {
+		return fmt.Errorf("invalid duration %q: %w", value, err)
+	}
+	*d = Duration(parsed)
+	return nil
+}
+
 // RuntimeState is the lifecycle state reported by the control socket.
 type RuntimeState string
 
@@ -106,9 +131,8 @@ type GuestExecRequest struct {
 	Path          string   `json:"path"`
 	Args          []string `json:"args,omitempty"`
 	CaptureOutput bool     `json:"captureOutput,omitempty"`
-	// Timeout bounds the guest command as a Go duration string such as "30s"
-	// or "5m"; empty waits indefinitely.
-	Timeout string `json:"timeout,omitempty"`
+	// Timeout bounds the guest command; zero or omitted waits indefinitely.
+	Timeout Duration `json:"timeout,omitempty"`
 }
 
 // GuestExecResponse reports the completed guest process status.

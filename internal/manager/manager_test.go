@@ -3828,14 +3828,12 @@ func TestWithGuestContextBoundsOperations(t *testing.T) {
 	}
 }
 
-func TestGuestExecRejectsInvalidTimeout(t *testing.T) {
+func TestGuestExecRejectsNegativeTimeout(t *testing.T) {
 	feature := (&manager{}).guestFeature("qga.sock", nil, 0)
-	for _, timeout := range []string{"nope", "-5s", "30"} {
-		_, err := feature.GuestExec(context.Background(), control.GuestExecRequest{Path: "/bin/true", Timeout: timeout})
-		var rpcErr *control.RPCError
-		if !errors.As(err, &rpcErr) || rpcErr.Code != control.ErrInvalidParams {
-			t.Fatalf("timeout %q: expected invalid params error, got %v", timeout, err)
-		}
+	_, err := feature.GuestExec(context.Background(), control.GuestExecRequest{Path: "/bin/true", Timeout: control.Duration(-5 * time.Second)})
+	var rpcErr *control.RPCError
+	if !errors.As(err, &rpcErr) || rpcErr.Code != control.ErrInvalidParams {
+		t.Fatalf("expected invalid params error, got %v", err)
 	}
 }
 
@@ -3906,7 +3904,7 @@ func TestLaunchRuntimeRegistersGuestRPCsAtControlPeriphery(t *testing.T) {
 		Path:          "/bin/sh",
 		Args:          []string{"-c", "echo hi"},
 		CaptureOutput: true,
-		Timeout:       "300s",
+		Timeout:       control.Duration(300 * time.Second),
 	})
 	if err != nil {
 		t.Fatalf("control guest exec: %v", err)

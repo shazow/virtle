@@ -3810,26 +3810,8 @@ func TestLaunchRuntimeRegistersHotplugAtControlPeriphery(t *testing.T) {
 	}
 }
 
-func TestWithGuestContextBoundsOperations(t *testing.T) {
-	ctx, cancel := withGuestContext(context.Background(), 2500*time.Millisecond)
-	defer cancel()
-	deadline, ok := ctx.Deadline()
-	if !ok {
-		t.Fatal("expected guest context deadline")
-	}
-	if remaining := time.Until(deadline); remaining <= 0 || remaining > 2500*time.Millisecond {
-		t.Fatalf("unexpected guest context deadline: %s remaining", remaining)
-	}
-
-	ctx, cancel = withGuestContext(context.Background(), 0)
-	defer cancel()
-	if _, ok := ctx.Deadline(); ok {
-		t.Fatal("expected no deadline for zero guest timeout")
-	}
-}
-
 func TestGuestExecRejectsNegativeTimeout(t *testing.T) {
-	feature := (&manager{}).guestFeature("qga.sock", nil, 0)
+	feature := (&manager{}).guestFeature("qga.sock", nil, nil)
 	_, err := feature.GuestExec(context.Background(), control.GuestExecRequest{Path: "/bin/true", Timeout: control.Duration(-5 * time.Second)})
 	var rpcErr *control.RPCError
 	if !errors.As(err, &rpcErr) || rpcErr.Code != control.ErrInvalidParams {

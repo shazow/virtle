@@ -165,7 +165,7 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 	}
 	runtime.SetReady()
 	if _, err := runtime.StartControl(launchCtx, controlpkg.Handlers{
-		Guest:   m.guestFeature(plan.Paths.GuestAgentSocket, processes, plan.Manifest.QEMU.GuestAgent.CommandTimeout),
+		Guest:   m.guestFeature(plan.Paths.GuestAgentSocket, processes, plan.Manifest),
 		Hotplug: m.hotplugFeature(plan.Manifest, runtime.QMP()),
 	}); err != nil {
 		return nil, launch.WrapFixedStage("control startup")(err)

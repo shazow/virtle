@@ -11,24 +11,6 @@ import (
 	"github.com/shazow/virtle/internal/qga"
 )
 
-// withGuestContext bounds one guest-agent operation with the given command
-// timeout. Zero means the operation is bounded only by ctx.
-func withGuestContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
-	if timeout <= 0 {
-		return context.WithCancel(ctx)
-	}
-	return context.WithTimeoutCause(ctx, timeout, fmt.Errorf("guest command timed out after %s", timeout))
-}
-
-// guestContextFor binds withGuestContext to the manifest's guest command
-// timeout for call sites that wrap several operations.
-func guestContextFor(launchManifest *manifest.Manifest) func(context.Context) (context.Context, context.CancelFunc) {
-	timeout := launchManifest.QEMU.GuestAgent.CommandTimeout
-	return func(ctx context.Context) (context.Context, context.CancelFunc) {
-		return withGuestContext(ctx, timeout)
-	}
-}
-
 func (m *manager) writeGuestFiles(ctx context.Context, launchManifest *manifest.Manifest, stats *launch.Stats, watchers executor.Group) error {
 	files := launchManifest.ResolvedWriteFiles()
 	mountCWD := launchManifest.Workspace.MountCWD
@@ -57,30 +39,29 @@ func (m *manager) writeGuestFiles(ctx context.Context, launchManifest *manifest.
 		}
 	}
 
-	guestCtx := guestContextFor(launchManifest)
 	return launch.WriteGuestFiles(ctx, files, launch.GuestFileWriter{
 		PathExists: func(ctx context.Context, guestPath string) (bool, error) {
-			ctx, cancel := guestCtx(ctx)
+			ctx, cancel := launchManifest.GuestCommandContext(ctx)
 			defer cancel()
 			return m.guestPathExists(ctx, client, guestPath)
 		},
 		InstallDirectory: func(ctx context.Context, file manifest.ResolvedWriteFile) error {
-			ctx, cancel := guestCtx(ctx)
+			ctx, cancel := launchManifest.GuestCommandContext(ctx)
 			defer cancel()
 			return m.installGuestFileDirectory(ctx, client, file.GuestPath, file.Chown, file.Mode)
 		},
 		WriteFile: func(ctx context.Context, guestPath string, payloadBase64 string) error {
-			ctx, cancel := guestCtx(ctx)
+			ctx, cancel := launchManifest.GuestCommandContext(ctx)
 			defer cancel()
 			return qga.WriteFile(ctx, client, guestPath, payloadBase64)
 		},
 		Chown: func(ctx context.Context, guestPath string, owner string) error {
-			ctx, cancel := guestCtx(ctx)
+			ctx, cancel := launchManifest.GuestCommandContext(ctx)
 			defer cancel()
 			return m.chownGuestFile(ctx, client, guestPath, owner)
 		},
 		Chmod: func(ctx context.Context, guestPath string, mode string) error {
-			ctx, cancel := guestCtx(ctx)
+			ctx, cancel := launchManifest.GuestCommandContext(ctx)
 			defer cancel()
 			return m.chmodGuestFile(ctx, client, guestPath, mode)
 		},
@@ -111,10 +92,9 @@ func (m *manager) writeBackGuestFiles(ctx context.Context, launchManifest *manif
 	}
 	defer client.Disconnect()
 
-	guestCtx := guestContextFor(launchManifest)
 	return launch.WriteBackGuestFiles(ctx, writeBackFiles, launch.GuestFileWriteBacker{
 		ReadFile: func(ctx context.Context, guestPath string) ([]byte, error) {
-			ctx, cancel := guestCtx(ctx)
+			ctx, cancel := launchManifest.GuestCommandContext(ctx)
 			defer cancel()
 			return qga.ReadFile(ctx, client, guestPath, qga.DefaultFileReadChunkSize)
 		},
@@ -135,15 +115,14 @@ const (
 )
 
 func (m *manager) mountWorkspaceCWD(ctx context.Context, client qga.Client, launchManifest *manifest.Manifest) error {
-	guestCtx := guestContextFor(launchManifest)
 	return launch.MountWorkspaceCWD(ctx, launchManifest, launch.WorkspaceCWDMounter{
 		InstallDir: func(ctx context.Context, target string, args []string) error {
-			ctx, cancel := guestCtx(ctx)
+			ctx, cancel := launchManifest.GuestCommandContext(ctx)
 			defer cancel()
 			return m.runGuestFileCommand(ctx, client, "install -d", guestInstallPath, args, target)
 		},
 		MountBind: func(ctx context.Context, source string, target string, args []string) error {
-			ctx, cancel := guestCtx(ctx)
+			ctx, cancel := launchManifest.GuestCommandContext(ctx)
 			defer cancel()
 			return m.runGuestFileCommand(ctx, client, "mount --bind", guestMountPath, args, target)
 		},

@@ -9,22 +9,19 @@ import (
 	"github.com/shazow/virtle/internal/executor"
 	controlpkg "github.com/shazow/virtle/internal/manager/control"
 	"github.com/shazow/virtle/internal/manager/launch"
+	"github.com/shazow/virtle/internal/manifest"
 	"github.com/shazow/virtle/internal/qga"
 )
 
 type managerGuestFeature struct {
-	manager           *manager
-	socketPath        string
-	processes         *launch.ProcessSet
-	guestAgentTimeout time.Duration
+	manager        *manager
+	socketPath     string
+	processes      *launch.ProcessSet
+	launchManifest *manifest.Manifest
 }
 
-func (m *manager) guestFeature(socketPath string, processes *launch.ProcessSet, guestAgentTimeout time.Duration) managerGuestFeature {
-	return managerGuestFeature{manager: m, socketPath: socketPath, processes: processes, guestAgentTimeout: guestAgentTimeout}
-}
-
-func (f managerGuestFeature) guestContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	return withGuestContext(ctx, f.guestAgentTimeout)
+func (m *manager) guestFeature(socketPath string, processes *launch.ProcessSet, launchManifest *manifest.Manifest) managerGuestFeature {
+	return managerGuestFeature{manager: m, socketPath: socketPath, processes: processes, launchManifest: launchManifest}
 }
 
 func (f managerGuestFeature) GuestPS(ctx context.Context, req controlpkg.GuestPSRequest) (controlpkg.GuestPSResponse, error) {
@@ -53,7 +50,7 @@ func (f managerGuestFeature) GuestExec(ctx context.Context, req controlpkg.Guest
 	}
 	defer client.Disconnect()
 
-	ctx, cancel := withGuestContext(ctx, time.Duration(req.Timeout))
+	ctx, cancel := manifest.GuestCommandContext(ctx, time.Duration(req.Timeout))
 	defer cancel()
 	status, err := qga.RunCommandStatus(ctx, client, qga.ExecWait{
 		PollDelay:     defaultMigrationPollDelay,
@@ -84,7 +81,7 @@ func (f managerGuestFeature) GuestRead(ctx context.Context, req controlpkg.Guest
 	}
 	defer client.Disconnect()
 
-	ctx, cancel := f.guestContext(ctx)
+	ctx, cancel := f.launchManifest.GuestCommandContext(ctx)
 	defer cancel()
 	data, err := qga.ReadFile(ctx, client, req.Path, qga.DefaultFileReadChunkSize)
 	if err != nil {
@@ -106,7 +103,7 @@ func (f managerGuestFeature) GuestWrite(ctx context.Context, req controlpkg.Gues
 	}
 	defer client.Disconnect()
 
-	ctx, cancel := f.guestContext(ctx)
+	ctx, cancel := f.launchManifest.GuestCommandContext(ctx)
 	defer cancel()
 	if err := qga.WriteFile(ctx, client, req.Path, req.DataBase64); err != nil {
 		return controlpkg.GuestWriteResponse{}, controlpkg.FailedPrecondition(err)

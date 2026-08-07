@@ -701,6 +701,23 @@ initrd_path = "/tmp/initrd"
 	}
 }
 
+func TestDecodeDocumentBareNumberDurationsMeanSeconds(t *testing.T) {
+	bare, err := DecodeDocumentBytes([]byte("[ssh]\nretry_delay = 5\n[qemu]\nguest_default_timeout = 2.5\n"), "manifest.toml")
+	if err != nil {
+		t.Fatalf("decode bare number durations: %v", err)
+	}
+	strings, err := DecodeDocumentBytes([]byte("[ssh]\nretry_delay = \"5s\"\n[qemu]\nguest_default_timeout = \"2.5s\"\n"), "manifest.toml")
+	if err != nil {
+		t.Fatalf("decode duration strings: %v", err)
+	}
+	if bare.SSH.RetryDelay != strings.SSH.RetryDelay || bare.SSH.RetryDelay != units.Duration(5*time.Second) {
+		t.Fatalf("retry delay: bare %s string %s want 5s", bare.SSH.RetryDelay, strings.SSH.RetryDelay)
+	}
+	if bare.QEMU.GuestDefaultTimeout != strings.QEMU.GuestDefaultTimeout || bare.QEMU.GuestDefaultTimeout != units.Duration(2500*time.Millisecond) {
+		t.Fatalf("guest default timeout: bare %s string %s want 2.5s", bare.QEMU.GuestDefaultTimeout, strings.QEMU.GuestDefaultTimeout)
+	}
+}
+
 func TestManifestSSHRetryDelayDefaultsAndValidation(t *testing.T) {
 	decoded, err := DecodeDocumentBytes([]byte("[ssh]\n"), "manifest.toml")
 	if err != nil {

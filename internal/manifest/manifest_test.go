@@ -16,6 +16,7 @@ import (
 
 	"github.com/adrg/xdg"
 	"github.com/shazow/virtle/internal/hotplug"
+	"github.com/shazow/virtle/internal/units"
 )
 
 func writeFileText(text string) WriteFile {
@@ -700,17 +701,34 @@ initrd_path = "/tmp/initrd"
 	}
 }
 
+func TestDecodeDocumentBareNumberDurationsMeanSeconds(t *testing.T) {
+	bare, err := DecodeDocumentBytes([]byte("[ssh]\nretry_delay = 5\n[qemu]\nguest_default_timeout = 2.5\n"), "manifest.toml")
+	if err != nil {
+		t.Fatalf("decode bare number durations: %v", err)
+	}
+	strings, err := DecodeDocumentBytes([]byte("[ssh]\nretry_delay = \"5s\"\n[qemu]\nguest_default_timeout = \"2.5s\"\n"), "manifest.toml")
+	if err != nil {
+		t.Fatalf("decode duration strings: %v", err)
+	}
+	if bare.SSH.RetryDelay != strings.SSH.RetryDelay || bare.SSH.RetryDelay != units.Duration(5*time.Second) {
+		t.Fatalf("retry delay: bare %s string %s want 5s", bare.SSH.RetryDelay, strings.SSH.RetryDelay)
+	}
+	if bare.QEMU.GuestDefaultTimeout != strings.QEMU.GuestDefaultTimeout || bare.QEMU.GuestDefaultTimeout != units.Duration(2500*time.Millisecond) {
+		t.Fatalf("guest default timeout: bare %s string %s want 2.5s", bare.QEMU.GuestDefaultTimeout, strings.QEMU.GuestDefaultTimeout)
+	}
+}
+
 func TestManifestSSHRetryDelayDefaultsAndValidation(t *testing.T) {
 	decoded, err := DecodeDocumentBytes([]byte("[ssh]\n"), "manifest.toml")
 	if err != nil {
 		t.Fatalf("decode omitted ssh retry delay: %v", err)
 	}
-	if got, want := decoded.SSH.RetryDelay, 0.5; got != want {
+	if got, want := decoded.SSH.RetryDelay, units.Duration(500*time.Millisecond); got != want {
 		t.Fatalf("omitted ssh retry delay: got %v want %v", got, want)
 	}
 
 	document := validDocument()
-	document.SSH.RetryDelay = 0.5
+	document.SSH.RetryDelay = units.Duration(500 * time.Millisecond)
 	manifest, err := document.Manifest()
 	if err != nil {
 		t.Fatalf("resolve manifest: %v", err)
@@ -734,7 +752,7 @@ func TestManifestSSHRetryDelayDefaultsAndValidation(t *testing.T) {
 	}
 
 	customDoc := validDocument()
-	customDoc.SSH.RetryDelay = 0.25
+	customDoc.SSH.RetryDelay = units.Duration(250 * time.Millisecond)
 	custom, err := customDoc.Manifest()
 	if err != nil {
 		t.Fatalf("resolve custom retry delay: %v", err)
@@ -754,9 +772,9 @@ func TestManifestSSHRetryDelayDefaultsAndValidation(t *testing.T) {
 	}
 
 	invalid := validDocument()
-	invalid.SSH.RetryDelay = -1
+	invalid.SSH.RetryDelay = units.Duration(-time.Second)
 	_, err = invalid.Manifest()
-	if err == nil || !strings.Contains(err.Error(), "manifest.ssh.retry_delay must be a finite number greater than or equal to zero") {
+	if err == nil || !strings.Contains(err.Error(), "manifest.ssh.retryDelay must be greater than or equal to zero") {
 		t.Fatalf("expected retry delay validation error, got %v", err)
 	}
 }
@@ -766,7 +784,7 @@ func TestDecodeDocumentGuestDefaultTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode omitted guest default timeout: %v", err)
 	}
-	if got, want := omitted.QEMU.GuestDefaultTimeout, 30.0; got != want {
+	if got, want := omitted.QEMU.GuestDefaultTimeout, units.Duration(30*time.Second); got != want {
 		t.Fatalf("omitted guest default timeout: got %v want %v", got, want)
 	}
 
@@ -782,14 +800,14 @@ func TestDecodeDocumentGuestDefaultTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode custom guest default timeout: %v", err)
 	}
-	if got, want := custom.QEMU.GuestDefaultTimeout, 2.5; got != want {
+	if got, want := custom.QEMU.GuestDefaultTimeout, units.Duration(2500*time.Millisecond); got != want {
 		t.Fatalf("custom guest default timeout: got %v want %v", got, want)
 	}
 }
 
 func TestManifestGuestDefaultTimeoutResolutionAndValidation(t *testing.T) {
 	document := validDocument()
-	document.QEMU.GuestDefaultTimeout = 2.5
+	document.QEMU.GuestDefaultTimeout = units.Duration(2500 * time.Millisecond)
 	resolved, err := document.Manifest()
 	if err != nil {
 		t.Fatalf("resolve custom guest agent timeout: %v", err)
@@ -809,9 +827,9 @@ func TestManifestGuestDefaultTimeoutResolutionAndValidation(t *testing.T) {
 	}
 
 	invalid := validDocument()
-	invalid.QEMU.GuestDefaultTimeout = -1
+	invalid.QEMU.GuestDefaultTimeout = units.Duration(-time.Second)
 	_, err = invalid.Manifest()
-	if err == nil || !strings.Contains(err.Error(), "manifest.qemu.guest_default_timeout must be a finite number greater than or equal to zero") {
+	if err == nil || !strings.Contains(err.Error(), "manifest.qemu.guestAgent.commandTimeout must be greater than or equal to zero") {
 		t.Fatalf("expected guest agent timeout validation error, got %v", err)
 	}
 }

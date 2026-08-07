@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	govmmQemu "github.com/kata-containers/govmm/qemu"
 )
@@ -42,18 +41,17 @@ func AppendQEMUArgs(
 	return append(args, "-device", strings.Join(deviceParams, ",")), nil
 }
 
-func ControllerTask(qmpTimeout time.Duration, session MonitorSession, device *Device, notificationSink notifier) func(context.Context) error {
+func ControllerTask(session MonitorSession, device *Device, notificationSink notifier) func(context.Context) error {
 	if device == nil || device.Controller == nil || session == nil {
 		return nil
 	}
 
 	controller := &controller{
-		Session:    sessionFromMonitor(session),
-		Logger:     logger,
-		DeviceID:   device.ID,
-		Config:     *device.Controller,
-		QMPTimeout: qmpTimeout,
-		Notifier:   notificationSink,
+		Session:  sessionFromMonitor(session),
+		Logger:   logger,
+		DeviceID: device.ID,
+		Config:   *device.Controller,
+		Notifier: notificationSink,
 	}
 
 	return func(ctx context.Context) error {

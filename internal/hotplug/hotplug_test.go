@@ -11,7 +11,6 @@ import (
 	"strings"
 	"syscall"
 	"testing"
-	"time"
 
 	"github.com/shazow/virtle/internal/executor"
 	"github.com/shazow/virtle/internal/executor/executortest"
@@ -19,7 +18,7 @@ import (
 
 func TestQMPDeviceAdapterAttachesVirtioFSWithoutCallerRawJSON(t *testing.T) {
 	client := &fakeQMPClient{}
-	adapter := QMPDeviceAdapter{Client: client, Timeout: time.Second}
+	adapter := QMPDeviceAdapter{Client: client}
 	device := testVirtioFSDevice(t.TempDir())
 
 	rollback, err := adapter.AttachDevice(context.Background(), device, "pcie.hotplug.0")
@@ -37,7 +36,7 @@ func TestQMPDeviceAdapterAttachesVirtioFSWithoutCallerRawJSON(t *testing.T) {
 func TestQMPDeviceAdapterAttachStopsBeforeNextCommandWhenContextCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	client := &fakeQMPClient{afterRun: cancel}
-	adapter := QMPDeviceAdapter{Client: client, Timeout: time.Second}
+	adapter := QMPDeviceAdapter{Client: client}
 
 	rollback, err := adapter.AttachDevice(ctx, testVirtioFSDevice(t.TempDir()), "pcie.hotplug.0")
 	if !errors.Is(err, context.Canceled) {
@@ -53,7 +52,7 @@ func TestQMPDeviceAdapterAttachStopsBeforeNextCommandWhenContextCanceled(t *test
 
 func TestQMPDeviceAdapterDetachWaitsBeforeCleanup(t *testing.T) {
 	client := &fakeQMPClient{}
-	adapter := QMPDeviceAdapter{Client: client, Timeout: time.Second}
+	adapter := QMPDeviceAdapter{Client: client}
 
 	if err := adapter.DetachDevice(context.Background(), testVirtioFSDevice(t.TempDir())); err != nil {
 		t.Fatalf("detach device: %v", err)
@@ -66,7 +65,7 @@ func TestQMPDeviceAdapterDetachWaitsBeforeCleanup(t *testing.T) {
 func TestQMPDeviceAdapterDetachFinishesCleanupAfterDeviceDelCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	client := &fakeQMPClient{afterDeviceDel: cancel}
-	adapter := QMPDeviceAdapter{Client: client, Timeout: time.Second}
+	adapter := QMPDeviceAdapter{Client: client}
 
 	err := adapter.DetachDevice(ctx, testVirtioFSDevice(t.TempDir()))
 	if err != nil {
@@ -344,7 +343,7 @@ func testRunnerDevices(tmpDir string, devices []Device) (Runner, *fakeStarter, *
 		Devices:  devices,
 		Start:    starter,
 		Sockets:  fakeSockets{},
-		QMP:      QMPDeviceAdapter{Client: client, Timeout: time.Second},
+		QMP:      QMPDeviceAdapter{Client: client},
 		Guest:    guest,
 	}, starter, client, guest
 }
@@ -427,7 +426,7 @@ type fakeQMPClient struct {
 	afterDeviceDel func()
 }
 
-func (q *fakeQMPClient) RunRaw(timeout time.Duration, command string) error {
+func (q *fakeQMPClient) RunRaw(ctx context.Context, command string) error {
 	q.commands = append(q.commands, command)
 	var message struct {
 		Execute string `json:"execute"`
@@ -443,7 +442,7 @@ func (q *fakeQMPClient) RunRaw(timeout time.Duration, command string) error {
 	return nil
 }
 
-func (q *fakeQMPClient) DeviceDelAndWait(timeout time.Duration, id string) error {
+func (q *fakeQMPClient) DeviceDelAndWait(ctx context.Context, id string) error {
 	q.deviceDels = append(q.deviceDels, id)
 	q.events = append(q.events, "device_del:"+id)
 	if q.afterDeviceDel != nil {

@@ -19,7 +19,7 @@ func TestQMPSessionQueryBalloon(t *testing.T) {
 		}
 	})
 
-	info, err := session.QueryBalloon(time.Second)
+	info, err := session.QueryBalloon(context.Background())
 	if err != nil {
 		t.Fatalf("query balloon: %v", err)
 	}
@@ -35,7 +35,7 @@ func TestQMPSessionSetBalloonLogicalSize(t *testing.T) {
 		return map[string]any{"return": map[string]any{}}
 	})
 
-	if err := session.SetBalloonLogicalSize(time.Second, int64(640)*bytesPerMiB); err != nil {
+	if err := session.SetBalloonLogicalSize(context.Background(), int64(640)*bytesPerMiB); err != nil {
 		t.Fatalf("set balloon logical size: %v", err)
 	}
 
@@ -51,7 +51,7 @@ func TestQMPSessionEnableBalloonStatsPolling(t *testing.T) {
 		return map[string]any{"return": map[string]any{}}
 	})
 
-	if err := session.EnableBalloonStatsPolling(time.Second, "/machine/peripheral/balloon0", 5); err != nil {
+	if err := session.EnableBalloonStatsPolling(context.Background(), "/machine/peripheral/balloon0", 5); err != nil {
 		t.Fatalf("enable balloon stats polling: %v", err)
 	}
 
@@ -81,7 +81,7 @@ func TestQMPSessionReadBalloonStats(t *testing.T) {
 		}
 	})
 
-	stats, err := session.ReadBalloonStats(time.Second, "/machine/peripheral/balloon0")
+	stats, err := session.ReadBalloonStats(context.Background(), "/machine/peripheral/balloon0")
 	if err != nil {
 		t.Fatalf("read balloon stats: %v", err)
 	}
@@ -117,7 +117,7 @@ type fakeRawSession struct {
 	monitor *rawQMP.Monitor
 }
 
-func (s *fakeRawSession) WithRaw(timeout time.Duration, fn func(*rawQMP.Monitor) error) error {
+func (s *fakeRawSession) WithRaw(ctx context.Context, fn func(*rawQMP.Monitor) error) error {
 	return fn(s.monitor)
 }
 

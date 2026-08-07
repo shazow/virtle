@@ -28,11 +28,11 @@ type notifier interface {
 }
 
 type session interface {
-	QueryBalloon(timeout time.Duration) (info, error)
-	SetBalloonLogicalSize(timeout time.Duration, logicalSizeBytes int64) error
-	EnableBalloonStatsPolling(timeout time.Duration, qomPath string, pollIntervalSeconds int) error
-	ReadBalloonStats(timeout time.Duration, qomPath string) (stats, error)
-	ListQOMProperties(timeout time.Duration, path string) ([]objectPropertyInfo, error)
+	QueryBalloon(ctx context.Context) (info, error)
+	SetBalloonLogicalSize(ctx context.Context, logicalSizeBytes int64) error
+	EnableBalloonStatsPolling(ctx context.Context, qomPath string, pollIntervalSeconds int) error
+	ReadBalloonStats(ctx context.Context, qomPath string) (stats, error)
+	ListQOMProperties(ctx context.Context, path string) ([]objectPropertyInfo, error)
 }
 
 type info struct {
@@ -50,16 +50,12 @@ type objectPropertyInfo struct {
 }
 
 type controller struct {
-	Session    session
-	Logger     *slog.Logger
-	DeviceID   string
-	Config     ControllerConfig
-	QMPTimeout time.Duration
-	Now        func() time.Time
-	Notifier   notifier
-	// PollInterval overrides Config.PollIntervalSeconds for the host-side
-	// sampling ticker; tests use it for sub-second cycles.
-	PollInterval time.Duration
+	Session  session
+	Logger   *slog.Logger
+	DeviceID string
+	Config   ControllerConfig
+	Now      func() time.Time
+	Notifier notifier
 }
 
 type controllerState struct {
@@ -80,12 +76,12 @@ func (c *controller) Run(ctx context.Context) error {
 
 	now := c.nowFunc()
 	state := controllerState{startedAt: now()}
-	qomPath, err := c.resolveQOMPath()
+	qomPath, err := c.resolveQOMPath(ctx)
 	if err != nil {
 		return err
 	}
 
-	if err := c.Session.EnableBalloonStatsPolling(c.QMPTimeout, qomPath, c.Config.PollIntervalSeconds); err != nil {
+	if err := c.Session.EnableBalloonStatsPolling(ctx, qomPath, statsPollSeconds(c.Config.PollInterval)); err != nil {
 		return err
 	}
 
@@ -113,7 +109,7 @@ func (c *controller) Run(ctx context.Context) error {
 }
 
 func (c *controller) tick(ctx context.Context, qomPath string, state *controllerState, now func() time.Time) error {
-	actual, stats, err := c.readSample(qomPath)
+	actual, stats, err := c.readSample(ctx, qomPath)
 	if err != nil {
 		return err
 	}
@@ -126,7 +122,7 @@ func (c *controller) tick(ctx context.Context, qomPath string, state *controller
 		return nil
 	}
 
-	if err := c.Session.SetBalloonLogicalSize(c.QMPTimeout, target); err != nil {
+	if err := c.Session.SetBalloonLogicalSize(ctx, target); err != nil {
 		return err
 	}
 	c.notifyResize(ctx, actual.ActualBytes, target)
@@ -171,15 +167,15 @@ func availableMemory(stats stats) (int64, bool) {
 	return 0, false
 }
 
-func (c *controller) resolveQOMPath() (string, error) {
+func (c *controller) resolveQOMPath(ctx context.Context) (string, error) {
 	expected := "/machine/peripheral/" + c.DeviceID
-	if c.qomPathSupportsGuestStats(expected) {
+	if c.qomPathSupportsGuestStats(ctx, expected) {
 		return expected, nil
 	}
 
 	candidates := []string{expected}
 	for _, root := range []string{"/machine/peripheral", "/machine/peripheral-anon"} {
-		props, err := c.Session.ListQOMProperties(c.QMPTimeout, root)
+		props, err := c.Session.ListQOMProperties(ctx, root)
 		if err != nil {
 			continue
 		}
@@ -202,7 +198,7 @@ func (c *controller) resolveQOMPath() (string, error) {
 			continue
 		}
 		seen[candidate] = struct{}{}
-		if c.qomPathSupportsGuestStats(candidate) {
+		if c.qomPathSupportsGuestStats(ctx, candidate) {
 			return candidate, nil
 		}
 	}
@@ -210,21 +206,21 @@ func (c *controller) resolveQOMPath() (string, error) {
 	return "", fmt.Errorf("%w for %q", errQOMPathNotFound, c.DeviceID)
 }
 
-func (c *controller) qomPathSupportsGuestStats(path string) bool {
-	props, err := c.Session.ListQOMProperties(c.QMPTimeout, path)
+func (c *controller) qomPathSupportsGuestStats(ctx context.Context, path string) bool {
+	props, err := c.Session.ListQOMProperties(ctx, path)
 	if err != nil {
 		return false
 	}
 	return hasQOMProperty(props, "guest-stats") && hasQOMProperty(props, "guest-stats-polling-interval")
 }
 
-func (c *controller) readSample(qomPath string) (info, guestStatsSample, error) {
-	stats, err := c.Session.ReadBalloonStats(c.QMPTimeout, qomPath)
+func (c *controller) readSample(ctx context.Context, qomPath string) (info, guestStatsSample, error) {
+	stats, err := c.Session.ReadBalloonStats(ctx, qomPath)
 	if err != nil {
 		return info{}, guestStatsSample{}, err
 	}
 
-	actual, err := c.Session.QueryBalloon(c.QMPTimeout)
+	actual, err := c.Session.QueryBalloon(ctx)
 	if err != nil {
 		return info{}, guestStatsSample{}, err
 	}
@@ -238,10 +234,17 @@ func (c *controller) readSample(qomPath string) (info, guestStatsSample, error) 
 }
 
 func (c *controller) pollInterval() time.Duration {
-	if c.PollInterval > 0 {
-		return c.PollInterval
+	return c.Config.PollInterval
+}
+
+// statsPollSeconds converts the poll interval for QEMU's integer-second
+// guest-stats-polling-interval property, keeping at least one second.
+func statsPollSeconds(interval time.Duration) int {
+	seconds := int(interval / time.Second)
+	if seconds < 1 {
+		return 1
 	}
-	return time.Duration(c.Config.PollIntervalSeconds) * time.Second
+	return seconds
 }
 
 func (c *controller) nowFunc() func() time.Time {
@@ -258,8 +261,7 @@ func evaluate(
 	actualBytes int64,
 	stats guestStatsSample,
 ) (int64, bool, error) {
-	pollInterval := time.Duration(config.PollIntervalSeconds) * time.Second
-	staleAfter := 2 * pollInterval
+	staleAfter := 2 * config.PollInterval
 
 	if stats.LastUpdate.IsZero() {
 		if now.Sub(state.startedAt) >= staleAfter {
@@ -306,7 +308,7 @@ func evaluate(
 			state.aboveThresholdSince = now
 			return 0, false, nil
 		}
-		if now.Sub(state.aboveThresholdSince) < time.Duration(config.ReclaimHoldoffSeconds)*time.Second {
+		if now.Sub(state.aboveThresholdSince) < config.ReclaimHoldoff {
 			return 0, false, nil
 		}
 

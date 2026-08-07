@@ -38,7 +38,7 @@ func (m *manager) hotplugRunner(client qmpclient.Client) hotplug.Runner {
 		Devices:  launchManifest.Hotplug,
 		Start:    managedProcessStarter{m: m},
 		Sockets:  socketReadinessWaiter{m: m},
-		QMP:      hotplug.QMPDeviceAdapter{Client: client, Timeout: m.effectiveQMPCommandTimeout()},
+		QMP:      hotplug.QMPDeviceAdapter{Client: client},
 		Guest:    guestCommandRunner{m: m},
 	}
 }

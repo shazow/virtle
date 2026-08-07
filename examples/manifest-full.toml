@@ -64,8 +64,9 @@ guest_agent_socket = "qga.sock"  # Default: "qga.sock"
 
 # Guest agent operations such as guest-exec and file transfer use an independent
 # timeout so slow guest commands are not constrained by the short QMP socket
-# timeout. Set this to zero to wait indefinitely.
-guest_default_timeout = 30  # Default: 30 seconds; 0 disables the timeout
+# timeout. Durations are Go duration strings such as "30s" or "5m". Set this
+# to "0" to wait indefinitely.
+guest_default_timeout = "30s"  # Default: "30s"; "0" disables the timeout
 
 # Hotplugged PCI devices need root ports created when QEMU starts. virtle
 # automatically allocates one port for each entry under [hotplug].
@@ -145,7 +146,7 @@ ready_socket = "ready.sock"  # Default: "" (disabled)
 # (ready.sock) carrying the SSH-READY token. When exec is non-empty and SSH
 # attach is requested, virtle retries the host-side SSH command at this
 # interval until it starts or fails with a non-transient error.
-retry_delay = 0.5  # Default: 0.5 seconds
+retry_delay = "500ms"  # Default: "500ms"
 
 # When enabled, virtle can recover from public-key authentication failure by
 # generating a state-dir key, appending its public key to authorized_keys through
@@ -308,8 +309,8 @@ max_actual = 1024  # MiB
 grow_below_available = 256  # MiB
 reclaim_above_available = 512  # MiB
 step = 256  # MiB
-poll_interval_seconds = 5
-reclaim_holdoff_seconds = 30
+poll_interval = "5s"  # Delay between polling cycles
+reclaim_holdoff = "30s"  # Wait after growing before reclaiming
 
 [[write_files]]
 # Guest file writes depend on the QEMU guest agent. They belong in the manifest

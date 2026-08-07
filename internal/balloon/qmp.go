@@ -1,6 +1,7 @@
 package balloon
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -9,7 +10,7 @@ import (
 )
 
 type MonitorSession interface {
-	WithRaw(timeout time.Duration, fn func(*rawQMP.Monitor) error) error
+	WithRaw(ctx context.Context, fn func(*rawQMP.Monitor) error) error
 }
 
 type qmpSession struct {
@@ -20,9 +21,9 @@ func newQMPSession(session MonitorSession) session {
 	return &qmpSession{session: session}
 }
 
-func (s *qmpSession) QueryBalloon(timeout time.Duration) (info, error) {
+func (s *qmpSession) QueryBalloon(ctx context.Context) (info, error) {
 	var balloonInfo rawQMP.BalloonInfo
-	err := s.session.WithRaw(timeout, func(monitor *rawQMP.Monitor) error {
+	err := s.session.WithRaw(ctx, func(monitor *rawQMP.Monitor) error {
 		var err error
 		balloonInfo, err = monitor.QueryBalloon()
 		if err != nil {
@@ -36,8 +37,8 @@ func (s *qmpSession) QueryBalloon(timeout time.Duration) (info, error) {
 	return info{ActualBytes: balloonInfo.Actual}, nil
 }
 
-func (s *qmpSession) SetBalloonLogicalSize(timeout time.Duration, logicalSizeBytes int64) error {
-	return s.session.WithRaw(timeout, func(monitor *rawQMP.Monitor) error {
+func (s *qmpSession) SetBalloonLogicalSize(ctx context.Context, logicalSizeBytes int64) error {
+	return s.session.WithRaw(ctx, func(monitor *rawQMP.Monitor) error {
 		if err := monitor.Balloon(logicalSizeBytes); err != nil {
 			return fmt.Errorf("qmp balloon: %w", err)
 		}
@@ -45,8 +46,8 @@ func (s *qmpSession) SetBalloonLogicalSize(timeout time.Duration, logicalSizeByt
 	})
 }
 
-func (s *qmpSession) EnableBalloonStatsPolling(timeout time.Duration, qomPath string, pollIntervalSeconds int) error {
-	return s.session.WithRaw(timeout, func(monitor *rawQMP.Monitor) error {
+func (s *qmpSession) EnableBalloonStatsPolling(ctx context.Context, qomPath string, pollIntervalSeconds int) error {
+	return s.session.WithRaw(ctx, func(monitor *rawQMP.Monitor) error {
 		if err := monitor.QomSet(qomPath, "guest-stats-polling-interval", int64(pollIntervalSeconds)); err != nil {
 			return fmt.Errorf("qmp qom-set guest-stats-polling-interval: %w", err)
 		}
@@ -54,9 +55,9 @@ func (s *qmpSession) EnableBalloonStatsPolling(timeout time.Duration, qomPath st
 	})
 }
 
-func (s *qmpSession) ReadBalloonStats(timeout time.Duration, qomPath string) (stats, error) {
+func (s *qmpSession) ReadBalloonStats(ctx context.Context, qomPath string) (stats, error) {
 	var value interface{}
-	err := s.session.WithRaw(timeout, func(monitor *rawQMP.Monitor) error {
+	err := s.session.WithRaw(ctx, func(monitor *rawQMP.Monitor) error {
 		var err error
 		value, err = monitor.QomGet(qomPath, "guest-stats")
 		if err != nil {
@@ -99,9 +100,9 @@ func (s *qmpSession) ReadBalloonStats(timeout time.Duration, qomPath string) (st
 	}, nil
 }
 
-func (s *qmpSession) ListQOMProperties(timeout time.Duration, path string) ([]objectPropertyInfo, error) {
+func (s *qmpSession) ListQOMProperties(ctx context.Context, path string) ([]objectPropertyInfo, error) {
 	var props []rawQMP.ObjectPropertyInfo
-	err := s.session.WithRaw(timeout, func(monitor *rawQMP.Monitor) error {
+	err := s.session.WithRaw(ctx, func(monitor *rawQMP.Monitor) error {
 		var err error
 		props, err = monitor.QomList(path)
 		if err != nil {

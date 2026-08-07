@@ -10,20 +10,6 @@ const (
 // kernel.path and kernel.initrd_path, are intentionally left unset.
 func DefaultDocument() Document {
 	doc := Document{
-		HostName:   defaultHostName,
-		WorkingDir: defaultWorkingDir,
-		StateDir:   defaultBaseDir,
-		QEMU: QEMUInput{
-			QMPSocket:        defaultQMP,
-			GuestAgentSocket: defaultGuestAgent,
-		},
-		Machine: MachineInput{
-			Type:   defaultMachineType,
-			Memory: defaultMemorySize,
-		},
-		Kernel: KernelInput{
-			Serial: KernelSerialOff,
-		},
 		Graphics: &GraphicsInput{
 			Backend: defaultGraphicsBackend,
 		},
@@ -36,7 +22,6 @@ func DefaultDocument() Document {
 		},
 		SSH: SSHInput{
 			Exec: []string{defaultSSHCommand},
-			User: defaultSSHUser,
 		},
 		VSock: VSockInput{
 			CIDRange: RangeInput{

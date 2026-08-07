@@ -3,7 +3,6 @@ package manifest
 import (
 	"errors"
 	"fmt"
-	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -34,14 +33,8 @@ func (d Document) ManifestWithOptions(options ResolveOptions) (*Manifest, error)
 	if d.Kernel.InitrdPath == "" {
 		return nil, fmt.Errorf("manifest.kernel.initrd_path is required")
 	}
-	retryDelay, err := resolveRetryDelay(d.SSH.RetryDelay)
-	if err != nil {
-		return nil, err
-	}
-	guestDefaultTimeout, err := resolveGuestDefaultTimeout(d.QEMU.GuestDefaultTimeout)
-	if err != nil {
-		return nil, err
-	}
+	retryDelay := d.SSH.RetryDelay.Duration()
+	guestDefaultTimeout := d.QEMU.GuestDefaultTimeout.Duration()
 
 	host := d.Host.withDefaults()
 	m := &Manifest{
@@ -99,24 +92,6 @@ func (d Document) ManifestWithOptions(options ResolveOptions) (*Manifest, error)
 		return nil, err
 	}
 	return m, nil
-}
-
-// resolveRetryDelay converts manifest seconds where zero retries immediately;
-// the default for omitted keys is seeded at decode time.
-func resolveRetryDelay(seconds float64) (time.Duration, error) {
-	if math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds < 0 {
-		return 0, fmt.Errorf("manifest.ssh.retry_delay must be a finite number greater than or equal to zero")
-	}
-	return time.Duration(seconds * float64(time.Second)), nil
-}
-
-// resolveGuestDefaultTimeout converts manifest seconds where zero disables the
-// timeout; the default for omitted keys is seeded at decode time.
-func resolveGuestDefaultTimeout(seconds float64) (time.Duration, error) {
-	if math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds < 0 {
-		return 0, fmt.Errorf("manifest.qemu.guest_default_timeout must be a finite number greater than or equal to zero")
-	}
-	return time.Duration(seconds * float64(time.Second)), nil
 }
 
 func (h HostInput) withDefaults() HostInput {
@@ -941,8 +916,8 @@ func resolveBalloon(facts *BalloonInput, transport string) *balloon.Device {
 			GrowBelowAvailable:    facts.Controller.GrowBelowAvailable,
 			ReclaimAboveAvailable: facts.Controller.ReclaimAboveAvailable,
 			Step:                  facts.Controller.Step,
-			PollIntervalSeconds:   facts.Controller.PollIntervalSeconds,
-			ReclaimHoldoffSeconds: facts.Controller.ReclaimHoldoffSeconds,
+			PollInterval:          facts.Controller.PollInterval.Duration(),
+			ReclaimHoldoff:        facts.Controller.ReclaimHoldoff.Duration(),
 		}
 	}
 	return device

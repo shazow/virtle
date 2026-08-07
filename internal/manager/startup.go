@@ -120,7 +120,9 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 	}
 	stats.Timer(launch.TimerQMPReady, time.Now())
 	qemu.SetShutdown(func() error {
-		return qmp.Quit(m.effectiveQMPQuitTimeout())
+		ctx, cancel := context.WithTimeout(context.Background(), m.effectiveQMPQuitTimeout())
+		defer cancel()
+		return qmp.Quit(ctx)
 	})
 
 	if plan.ResumeState != nil {

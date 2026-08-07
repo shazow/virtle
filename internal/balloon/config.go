@@ -2,14 +2,15 @@ package balloon
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/shazow/virtle/internal/units"
 )
 
 const (
-	DefaultControllerStep             = units.MiB(256)
-	DefaultControllerPollIntervalSecs = 5
-	DefaultControllerReclaimHoldoff   = 30
+	DefaultControllerStep           = units.MiB(256)
+	DefaultControllerPollInterval   = 5 * time.Second
+	DefaultControllerReclaimHoldoff = 30 * time.Second
 )
 
 type Device struct {
@@ -21,13 +22,13 @@ type Device struct {
 }
 
 type ControllerConfig struct {
-	MinActual             units.MiB `json:"minActualMiB" toml:"minActualMiB"`
-	MaxActual             units.MiB `json:"maxActualMiB,omitempty" toml:"maxActualMiB"`
-	GrowBelowAvailable    units.MiB `json:"growBelowAvailableMiB" toml:"growBelowAvailableMiB"`
-	ReclaimAboveAvailable units.MiB `json:"reclaimAboveAvailableMiB" toml:"reclaimAboveAvailableMiB"`
-	Step                  units.MiB `json:"stepMiB,omitempty" toml:"stepMiB"`
-	PollIntervalSeconds   int       `json:"pollIntervalSeconds,omitempty" toml:"pollIntervalSeconds"`
-	ReclaimHoldoffSeconds int       `json:"reclaimHoldoffSeconds,omitempty" toml:"reclaimHoldoffSeconds"`
+	MinActual             units.MiB     `json:"minActualMiB" toml:"minActualMiB"`
+	MaxActual             units.MiB     `json:"maxActualMiB,omitempty" toml:"maxActualMiB"`
+	GrowBelowAvailable    units.MiB     `json:"growBelowAvailableMiB" toml:"growBelowAvailableMiB"`
+	ReclaimAboveAvailable units.MiB     `json:"reclaimAboveAvailableMiB" toml:"reclaimAboveAvailableMiB"`
+	Step                  units.MiB     `json:"stepMiB,omitempty" toml:"stepMiB"`
+	PollInterval          time.Duration `json:"pollInterval,omitempty" toml:"pollInterval"`
+	ReclaimHoldoff        time.Duration `json:"reclaimHoldoff,omitempty" toml:"reclaimHoldoff"`
 }
 
 func ApplyDefaults(memory units.MiB, device *Device) {
@@ -59,11 +60,11 @@ func ApplyDefaults(memory units.MiB, device *Device) {
 	if controller.Step == 0 {
 		controller.Step = DefaultControllerStep
 	}
-	if controller.PollIntervalSeconds == 0 {
-		controller.PollIntervalSeconds = DefaultControllerPollIntervalSecs
+	if controller.PollInterval == 0 {
+		controller.PollInterval = DefaultControllerPollInterval
 	}
-	if controller.ReclaimHoldoffSeconds == 0 {
-		controller.ReclaimHoldoffSeconds = DefaultControllerReclaimHoldoff
+	if controller.ReclaimHoldoff == 0 {
+		controller.ReclaimHoldoff = DefaultControllerReclaimHoldoff
 	}
 }
 
@@ -111,10 +112,10 @@ func ValidateController(memory units.MiB, controller *ControllerConfig) error {
 		return fmt.Errorf("growBelowAvailableMiB must be less than reclaimAboveAvailableMiB")
 	case controller.Step <= 0:
 		return fmt.Errorf("stepMiB must be greater than zero")
-	case controller.PollIntervalSeconds <= 0:
-		return fmt.Errorf("pollIntervalSeconds must be greater than zero")
-	case controller.ReclaimHoldoffSeconds <= 0:
-		return fmt.Errorf("reclaimHoldoffSeconds must be greater than zero")
+	case controller.PollInterval <= 0:
+		return fmt.Errorf("pollInterval must be greater than zero")
+	case controller.ReclaimHoldoff <= 0:
+		return fmt.Errorf("reclaimHoldoff must be greater than zero")
 	}
 
 	return nil

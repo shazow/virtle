@@ -16,16 +16,19 @@ const defaultLaunchSignalTimeout = 5 * time.Second
 
 // Suspend saves the running VM state to disk and exits the launch process.
 func Suspend(ctx context.Context, manifest *manifest.Manifest) error {
-	return newManager().suspend(ctx, manifest)
+	m := newManager()
+	m.launchManifest = manifest
+	return m.suspend(ctx)
 }
 
-func (m *manager) suspend(ctx context.Context, manifest *manifest.Manifest) error {
+func (m *manager) suspend(ctx context.Context) error {
+	manifest := m.launchManifest
 	controlSocketPath, err := manifest.ResolvedControlSocketPath()
 	if err == nil && controlSocketPath != "" {
 		resp, err := controlpkg.Dial(controlSocketPath).Suspend(ctx, controlpkg.SuspendRequest{})
 		if err == nil {
 			if resp.Saved {
-				timeout := m.effectiveSuspendSignalTimeout(manifest)
+				timeout := m.effectiveSuspendSignalTimeout()
 				waitCtx, cancel := context.WithTimeout(ctx, timeout)
 				defer cancel()
 				if err := launch.WaitForLaunchExited(waitCtx, manifest, timeout); err != nil {
@@ -40,7 +43,7 @@ func (m *manager) suspend(ctx context.Context, manifest *manifest.Manifest) erro
 		}
 	}
 
-	pid, err := m.launchPID(manifest)
+	pid, err := m.launchPID()
 	if err != nil {
 		if saved, stateErr := launch.HasSavedSuspendState(manifest); stateErr != nil {
 			return &launch.StageError{Stage: "qmp suspend", Err: stateErr}
@@ -54,20 +57,20 @@ func (m *manager) suspend(ctx context.Context, manifest *manifest.Manifest) erro
 		return &launch.StageError{Stage: "launch signal", Err: err}
 	}
 
-	waitCtx, cancel := context.WithTimeout(ctx, m.effectiveSuspendSignalTimeout(manifest))
+	waitCtx, cancel := context.WithTimeout(ctx, m.effectiveSuspendSignalTimeout())
 	defer cancel()
 
-	if err := launch.WaitForSavedSuspendState(waitCtx, manifest, m.effectiveSuspendSignalTimeout(manifest)); err != nil {
+	if err := launch.WaitForSavedSuspendState(waitCtx, manifest, m.effectiveSuspendSignalTimeout()); err != nil {
 		return err
 	}
-	if err := launch.WaitForLaunchExited(waitCtx, manifest, m.effectiveSuspendSignalTimeout(manifest)); err != nil {
+	if err := launch.WaitForLaunchExited(waitCtx, manifest, m.effectiveSuspendSignalTimeout()); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (m *manager) launchPID(manifest *manifest.Manifest) (int, error) {
-	return launch.ResolveLaunchPID(manifest, m.effectivePIDSignaler())
+func (m *manager) launchPID() (int, error) {
+	return launch.ResolveLaunchPID(m.launchManifest, m.effectivePIDSignaler())
 }
 
 func (m *manager) signalLaunchPID(pid int, sig os.Signal) error {
@@ -87,13 +90,13 @@ func (m *manager) effectivePIDSignaler() launch.PIDSignaler {
 	return syscallPIDSignaler{}
 }
 
-func (m *manager) effectiveSuspendSignalTimeout(manifest *manifest.Manifest) time.Duration {
+func (m *manager) effectiveSuspendSignalTimeout() time.Duration {
 	shutdownDelay := m.shutdownDelay
 	if shutdownDelay <= 0 {
 		shutdownDelay = defaultShutdownDelay
 	}
 
-	teardownProcesses := 2 + len(manifest.Run) // qemu, active ssh session when present, plus run processes.
+	teardownProcesses := 2 + len(m.launchManifest.Run) // qemu, active ssh session when present, plus run processes.
 
 	return defaultLaunchSignalTimeout +
 		m.effectiveQMPMigrationTimeout() +

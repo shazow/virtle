@@ -14,14 +14,13 @@ import (
 )
 
 type managerGuestFeature struct {
-	manager        *manager
-	socketPath     string
-	processes      *launch.ProcessSet
-	launchManifest *manifest.Manifest
+	manager    *manager
+	socketPath string
+	processes  *launch.ProcessSet
 }
 
-func (m *manager) guestFeature(socketPath string, processes *launch.ProcessSet, launchManifest *manifest.Manifest) managerGuestFeature {
-	return managerGuestFeature{manager: m, socketPath: socketPath, processes: processes, launchManifest: launchManifest}
+func (m *manager) guestFeature(socketPath string, processes *launch.ProcessSet) managerGuestFeature {
+	return managerGuestFeature{manager: m, socketPath: socketPath, processes: processes}
 }
 
 func (f managerGuestFeature) GuestPS(ctx context.Context, req controlpkg.GuestPSRequest) (controlpkg.GuestPSResponse, error) {
@@ -81,7 +80,7 @@ func (f managerGuestFeature) GuestRead(ctx context.Context, req controlpkg.Guest
 	}
 	defer client.Disconnect()
 
-	ctx, cancel := f.launchManifest.GuestCommandContext(ctx)
+	ctx, cancel := f.manager.launchManifest.GuestCommandContext(ctx)
 	defer cancel()
 	data, err := qga.ReadFile(ctx, client, req.Path, qga.DefaultFileReadChunkSize)
 	if err != nil {
@@ -103,7 +102,7 @@ func (f managerGuestFeature) GuestWrite(ctx context.Context, req controlpkg.Gues
 	}
 	defer client.Disconnect()
 
-	ctx, cancel := f.launchManifest.GuestCommandContext(ctx)
+	ctx, cancel := f.manager.launchManifest.GuestCommandContext(ctx)
 	defer cancel()
 	if err := qga.WriteFile(ctx, client, req.Path, req.DataBase64); err != nil {
 		return controlpkg.GuestWriteResponse{}, controlpkg.FailedPrecondition(err)

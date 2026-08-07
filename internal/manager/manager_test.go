@@ -1440,7 +1440,8 @@ func TestManagerMountsWorkspaceCWD(t *testing.T) {
 		qmpConnectTimeout: time.Second,
 	}
 
-	if err := manager.writeGuestFiles(context.Background(), cfg, nil, executor.Group{}); err != nil {
+	manager.launchManifest = cfg
+	if err := manager.writeGuestFiles(context.Background(), nil, executor.Group{}); err != nil {
 		t.Fatalf("mount workspace cwd: %v", err)
 	}
 
@@ -1715,7 +1716,8 @@ func TestLaunchSuspendHandlerWritesBackGuestFilesBeforeSuspend(t *testing.T) {
 		qmpConnectTimeout:   time.Millisecond,
 		qmpMigrationTimeout: time.Second,
 	}
-	handler := newLaunchSuspendHandler(manager, cfg, filepath.Join(tmpDir, "qmp.sock"), qmpClient, 7, nil, func() bool {
+	manager.launchManifest = cfg
+	handler := newLaunchSuspendHandler(manager, filepath.Join(tmpDir, "qmp.sock"), qmpClient, 7, nil, func() bool {
 		return true
 	})
 
@@ -1763,7 +1765,8 @@ func TestWriteBackGuestFilesDoesNotReplaceHostOnGuestReadError(t *testing.T) {
 		qmpConnectTimeout: time.Millisecond,
 	}
 
-	err := manager.writeBackGuestFiles(context.Background(), cfg, executor.Group{})
+	manager.launchManifest = cfg
+	err := manager.writeBackGuestFiles(context.Background(), executor.Group{})
 	if err == nil || !strings.Contains(err.Error(), "guest file write-back") {
 		t.Fatalf("expected staged write-back error, got %v", err)
 	}
@@ -1805,7 +1808,8 @@ func TestWriteBackGuestFilesFollowsHostSymlinkWhenFollowLinksEnabled(t *testing.
 		qmpConnectTimeout: time.Millisecond,
 	}
 
-	if err := manager.writeBackGuestFiles(context.Background(), cfg, executor.Group{}); err != nil {
+	manager.launchManifest = cfg
+	if err := manager.writeBackGuestFiles(context.Background(), executor.Group{}); err != nil {
 		t.Fatalf("write back guest files: %v", err)
 	}
 	targetData, err := os.ReadFile(targetPath)
@@ -2949,7 +2953,8 @@ func TestSaveSuspendStateConnectedStopsMigratesAndWritesSavedState(t *testing.T)
 	manager := &manager{qmpConnectTimeout: time.Millisecond}
 
 	qmpSocketPath := filepath.Join(tmpDir, "qmp.sock")
-	if err := manager.saveSuspendStateConnected(context.Background(), cfg, qmpSocketPath, qmpClient, 7, nil); err != nil {
+	manager.launchManifest = cfg
+	if err := manager.saveSuspendStateConnected(context.Background(), qmpSocketPath, qmpClient, 7, nil); err != nil {
 		t.Fatalf("suspend: %v", err)
 	}
 
@@ -3018,7 +3023,8 @@ func TestLaunchSuspendHandlerSaveAndExitIsIdempotent(t *testing.T) {
 		qmpConnectTimeout:   time.Millisecond,
 		qmpMigrationTimeout: time.Second,
 	}
-	handler := newLaunchSuspendHandler(manager, cfg, filepath.Join(tmpDir, "qmp.sock"), qmpClient, 7, nil, nil)
+	manager.launchManifest = cfg
+	handler := newLaunchSuspendHandler(manager, filepath.Join(tmpDir, "qmp.sock"), qmpClient, 7, nil, nil)
 
 	if err := handler.saveAndExit(context.Background()); !errors.Is(err, launch.ErrSavedSuspendExit) {
 		t.Fatalf("first suspend returned %v, want launch.ErrSavedSuspendExit", err)
@@ -3086,7 +3092,7 @@ func TestManagerSuspendControlSocketWaitsForLaunchExit(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- (&manager{}).suspend(context.Background(), cfg)
+		done <- manifestBoundManager(&manager{}, cfg).suspend(context.Background())
 	}()
 
 	select {
@@ -3159,7 +3165,8 @@ func TestManagerSuspendSignalsLaunchAndWaitsForSavedStateAndExit(t *testing.T) {
 		pidSignaler:         signaler,
 	}
 
-	if err := manager.suspend(context.Background(), cfg); err != nil {
+	manager.launchManifest = cfg
+	if err := manager.suspend(context.Background()); err != nil {
 		t.Fatalf("suspend: %v", err)
 	}
 
@@ -3212,7 +3219,8 @@ func TestManagerSuspendSignalsActiveLaunchWhenSavedStateAlreadyExists(t *testing
 		pidSignaler:         signaler,
 	}
 
-	if err := manager.suspend(context.Background(), cfg); err != nil {
+	manager.launchManifest = cfg
+	if err := manager.suspend(context.Background()); err != nil {
 		t.Fatalf("suspend: %v", err)
 	}
 
@@ -3240,7 +3248,8 @@ func TestManagerSuspendPreservesExistingSavedStateWithoutSignal(t *testing.T) {
 		pidSignaler: signaler,
 	}
 
-	if err := manager.suspend(context.Background(), cfg); err != nil {
+	manager.launchManifest = cfg
+	if err := manager.suspend(context.Background()); err != nil {
 		t.Fatalf("suspend: %v", err)
 	}
 
@@ -3263,7 +3272,8 @@ func TestEffectiveSuspendSignalTimeoutIncludesMigrationAndTeardown(t *testing.T)
 		qmpMigrationTimeout: 2 * time.Second,
 	}
 
-	got := manager.effectiveSuspendSignalTimeout(cfg)
+	manager.launchManifest = cfg
+	got := manager.effectiveSuspendSignalTimeout()
 	want := defaultLaunchSignalTimeout + 2*time.Second + 3*time.Second + 4*4*time.Second
 	if got != want {
 		t.Fatalf("unexpected suspend signal timeout: got %s want %s", got, want)
@@ -3274,7 +3284,7 @@ func TestManagerSuspendMissingPIDReportsLaunchError(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
 
-	err := (&manager{pidSignaler: &fakePIDSignaler{}}).suspend(context.Background(), cfg)
+	err := manifestBoundManager(&manager{pidSignaler: &fakePIDSignaler{}}, cfg).suspend(context.Background())
 	if err == nil {
 		t.Fatal("expected missing pid error")
 	}
@@ -3757,7 +3767,7 @@ func TestManagerHotplugUsesControlSocket(t *testing.T) {
 	handler := &testHotplugControlHandler{}
 	startTestControlServerAt(t, controlSocketPath, handler)
 
-	if err := (&manager{}).hotplug(context.Background(), cfg, "cache", true); err != nil {
+	if err := manifestBoundManager(&manager{}, cfg).hotplug(context.Background(), "cache", true); err != nil {
 		t.Fatalf("hotplug: %v", err)
 	}
 	if got, want := handler.requests, []control.HotplugRequest{{ID: "cache", Detach: true}}; !reflect.DeepEqual(got, want) {
@@ -3811,7 +3821,7 @@ func TestLaunchRuntimeRegistersHotplugAtControlPeriphery(t *testing.T) {
 }
 
 func TestGuestExecRejectsNegativeTimeout(t *testing.T) {
-	feature := (&manager{}).guestFeature("qga.sock", nil, nil)
+	feature := (&manager{}).guestFeature("qga.sock", nil)
 	_, err := feature.GuestExec(context.Background(), control.GuestExecRequest{Path: "/bin/true", Timeout: control.Duration(-5 * time.Second)})
 	var rpcErr *control.RPCError
 	if !errors.As(err, &rpcErr) || rpcErr.Code != control.ErrInvalidParams {
@@ -4303,7 +4313,8 @@ func TestStartRunsUsesNamedVirtioFSRunEnv(t *testing.T) {
 		runner: runner,
 	}
 
-	if _, err := manager.startRuns(3, cfg); err != nil {
+	manager.launchManifest = cfg
+	if _, err := manager.startRuns(3); err != nil {
 		t.Fatalf("start runs: %v", err)
 	}
 
@@ -4976,6 +4987,11 @@ func (c *fakeGuestAgentClient) Disconnect() error {
 	defer c.mu.Unlock()
 	c.disconnects++
 	return nil
+}
+
+func manifestBoundManager(m *manager, cfg *manifest.Manifest) *manager {
+	m.launchManifest = cfg
+	return m
 }
 
 type pidSignal struct {

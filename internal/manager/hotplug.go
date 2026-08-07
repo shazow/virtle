@@ -17,10 +17,13 @@ import (
 )
 
 func Hotplug(ctx context.Context, manifest *manifest.Manifest, id string, detach bool) error {
-	return newManager().hotplug(ctx, manifest, id, detach)
+	m := newManager()
+	m.launchManifest = manifest
+	return m.hotplug(ctx, id, detach)
 }
 
-func (m *manager) hotplug(ctx context.Context, launchManifest *manifest.Manifest, id string, detach bool) error {
+func (m *manager) hotplug(ctx context.Context, id string, detach bool) error {
+	launchManifest := m.launchManifest
 	if err := launchManifest.Validate(); err != nil {
 		return &launch.StageError{Stage: "preflight", Err: err}
 	}
@@ -75,8 +78,7 @@ func (w socketReadinessWaiter) Wait(ctx context.Context, stage string, socketPat
 }
 
 type guestCommandRunner struct {
-	m        *manager
-	manifest *manifest.Manifest
+	m *manager
 }
 
 func (g guestCommandRunner) Run(ctx context.Context, command []string) error {
@@ -86,7 +88,7 @@ func (g guestCommandRunner) Run(ctx context.Context, command []string) error {
 	if command[0] == "" {
 		return fmt.Errorf("guest command path is required")
 	}
-	socketPath, err := g.manifest.ResolvedGuestAgentSocketPath()
+	socketPath, err := g.m.launchManifest.ResolvedGuestAgentSocketPath()
 	if err != nil {
 		return err
 	}
@@ -95,7 +97,7 @@ func (g guestCommandRunner) Run(ctx context.Context, command []string) error {
 		return err
 	}
 	defer client.Disconnect()
-	ctx, cancel := g.manifest.GuestCommandContext(ctx)
+	ctx, cancel := g.m.launchManifest.GuestCommandContext(ctx)
 	defer cancel()
 	status, err := g.m.runGuestCommandStatus(ctx, client, filepath.Base(command[0]), command[0], command[1:], strings.Join(command, " "))
 	if err != nil {

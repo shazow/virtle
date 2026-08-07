@@ -5,12 +5,12 @@ import (
 
 	"github.com/shazow/virtle/internal/executor"
 	"github.com/shazow/virtle/internal/manager/launch"
-	"github.com/shazow/virtle/internal/manifest"
 	"github.com/shazow/virtle/internal/qga"
 	"github.com/shazow/virtle/internal/sshtools"
 )
 
-func (m *manager) ensureSSHAutoprovisionKey(launchManifest *manifest.Manifest) (launch.SSHAutoprovisionKey, error) {
+func (m *manager) ensureSSHAutoprovisionKey() (launch.SSHAutoprovisionKey, error) {
+	launchManifest := m.launchManifest
 	key, err := (sshtools.KeyStore{
 		Dir:     launchManifest.ResolvedPersistenceStateDir(),
 		Comment: "virtle-autoprovision-" + launchManifest.Identity.HostName,
@@ -25,7 +25,8 @@ func (m *manager) ensureSSHAutoprovisionKey(launchManifest *manifest.Manifest) (
 	}, nil
 }
 
-func (m *manager) installSSHAutoprovisionKey(ctx context.Context, launchManifest *manifest.Manifest, key launch.SSHAutoprovisionKey, watchers executor.Group) error {
+func (m *manager) installSSHAutoprovisionKey(ctx context.Context, key launch.SSHAutoprovisionKey, watchers executor.Group) error {
+	launchManifest := m.launchManifest
 	socketPath, err := launchManifest.ResolvedGuestAgentSocketPath()
 	if err != nil {
 		return &launch.StageError{Stage: "ssh autoprovision", Err: err}

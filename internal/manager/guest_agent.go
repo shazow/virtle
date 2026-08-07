@@ -11,7 +11,8 @@ import (
 	"github.com/shazow/virtle/internal/qga"
 )
 
-func (m *manager) writeGuestFiles(ctx context.Context, launchManifest *manifest.Manifest, stats *launch.Stats, watchers executor.Group) error {
+func (m *manager) writeGuestFiles(ctx context.Context, stats *launch.Stats, watchers executor.Group) error {
+	launchManifest := m.launchManifest
 	files := launchManifest.ResolvedWriteFiles()
 	mountCWD := launchManifest.Workspace.MountCWD
 	if len(files) == 0 && !mountCWD {
@@ -34,7 +35,7 @@ func (m *manager) writeGuestFiles(ctx context.Context, launchManifest *manifest.
 	defer client.Disconnect()
 
 	if mountCWD {
-		if err := m.mountWorkspaceCWD(ctx, client, launchManifest); err != nil {
+		if err := m.mountWorkspaceCWD(ctx, client); err != nil {
 			return err
 		}
 	}
@@ -74,7 +75,8 @@ func (m *manager) writeGuestFiles(ctx context.Context, launchManifest *manifest.
 	})
 }
 
-func (m *manager) writeBackGuestFiles(ctx context.Context, launchManifest *manifest.Manifest, watchers executor.Group) error {
+func (m *manager) writeBackGuestFiles(ctx context.Context, watchers executor.Group) error {
+	launchManifest := m.launchManifest
 	writeBackFiles := launch.GuestWriteBackFiles(launchManifest.ResolvedWriteFiles())
 	if len(writeBackFiles) == 0 {
 		return nil
@@ -114,7 +116,8 @@ const (
 	guestTestPath    = "test"
 )
 
-func (m *manager) mountWorkspaceCWD(ctx context.Context, client qga.Client, launchManifest *manifest.Manifest) error {
+func (m *manager) mountWorkspaceCWD(ctx context.Context, client qga.Client) error {
+	launchManifest := m.launchManifest
 	return launch.MountWorkspaceCWD(ctx, launchManifest, launch.WorkspaceCWDMounter{
 		InstallDir: func(ctx context.Context, target string, args []string) error {
 			ctx, cancel := launchManifest.GuestCommandContext(ctx)

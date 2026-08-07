@@ -67,11 +67,11 @@ func TestRunSSHSessionAutoprovisionsAfterAuthenticationFailure(t *testing.T) {
 		Wait: func(ctx context.Context, process *executor.Process, watchers executor.Group) error {
 			return process.Wait()
 		},
-		EnsureKey: func(*manifest.Manifest) (SSHAutoprovisionKey, error) {
+		EnsureKey: func() (SSHAutoprovisionKey, error) {
 			ensured = true
 			return SSHAutoprovisionKey{IdentityFile: "/tmp/id", PublicKeyFile: "/tmp/id.pub"}, nil
 		},
-		InstallKey: func(context.Context, *manifest.Manifest, SSHAutoprovisionKey, executor.Group) error {
+		InstallKey: func(context.Context, SSHAutoprovisionKey, executor.Group) error {
 			installed = true
 			return nil
 		},

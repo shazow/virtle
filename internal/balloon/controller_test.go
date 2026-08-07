@@ -225,13 +225,12 @@ func TestControllerResolveQOMPathFallsBackToQOMList(t *testing.T) {
 	}
 
 	controller := &controller{
-		Session:    session,
-		Logger:     slog.New(slog.DiscardHandler),
-		DeviceID:   "balloon0",
-		QMPTimeout: time.Second,
+		Session:  session,
+		Logger:   slog.New(slog.DiscardHandler),
+		DeviceID: "balloon0",
 	}
 
-	path, err := controller.resolveQOMPath()
+	path, err := controller.resolveQOMPath(context.Background())
 	if err != nil {
 		t.Fatalf("resolve balloon qom path: %v", err)
 	}
@@ -262,10 +261,9 @@ func TestControllerNotifiesAfterSuccessfulResize(t *testing.T) {
 		},
 	}
 	controller := &controller{
-		Session:    session,
-		Logger:     slog.New(slog.DiscardHandler),
-		DeviceID:   "balloon0",
-		QMPTimeout: time.Second,
+		Session:  session,
+		Logger:   slog.New(slog.DiscardHandler),
+		DeviceID: "balloon0",
 		Config: ControllerConfig{
 			MinActual:             1024,
 			MaxActual:             8192,
@@ -329,10 +327,9 @@ func TestControllerSurvivesTransientFailures(t *testing.T) {
 		},
 	}
 	controller := &controller{
-		Session:    session,
-		Logger:     slog.New(slog.DiscardHandler),
-		DeviceID:   "balloon0",
-		QMPTimeout: time.Second,
+		Session:  session,
+		Logger:   slog.New(slog.DiscardHandler),
+		DeviceID: "balloon0",
 		Config: ControllerConfig{
 			MinActual:             1024,
 			MaxActual:             8192,
@@ -374,10 +371,9 @@ func TestControllerStopsAfterConsecutiveFailures(t *testing.T) {
 		},
 	}
 	controller := &controller{
-		Session:    session,
-		Logger:     slog.New(slog.DiscardHandler),
-		DeviceID:   "balloon0",
-		QMPTimeout: time.Second,
+		Session:  session,
+		Logger:   slog.New(slog.DiscardHandler),
+		DeviceID: "balloon0",
 		Config: ControllerConfig{
 			MinActual:             1024,
 			MaxActual:             8192,
@@ -425,10 +421,9 @@ func TestControllerDoesNotNotifyWhenResizeIsNotApplied(t *testing.T) {
 		},
 	}
 	controller := &controller{
-		Session:    session,
-		Logger:     slog.New(slog.DiscardHandler),
-		DeviceID:   "balloon0",
-		QMPTimeout: time.Second,
+		Session:  session,
+		Logger:   slog.New(slog.DiscardHandler),
+		DeviceID: "balloon0",
 		Config: ControllerConfig{
 			MinActual:             1024,
 			MaxActual:             8192,
@@ -473,19 +468,19 @@ type fakeSession struct {
 	listQOMPropertiesErr   map[string]error
 }
 
-func (f *fakeSession) QueryBalloon(timeout time.Duration) (info, error) {
+func (f *fakeSession) QueryBalloon(ctx context.Context) (info, error) {
 	if f.queryBalloonErr != nil {
 		return info{}, f.queryBalloonErr
 	}
 	return f.queryBalloonInfo, nil
 }
 
-func (f *fakeSession) SetBalloonLogicalSize(timeout time.Duration, logicalSizeBytes int64) error {
+func (f *fakeSession) SetBalloonLogicalSize(ctx context.Context, logicalSizeBytes int64) error {
 	f.setBalloonLogicalSizes = append(f.setBalloonLogicalSizes, logicalSizeBytes)
 	return f.setBalloonErr
 }
 
-func (f *fakeSession) EnableBalloonStatsPolling(timeout time.Duration, qomPath string, pollIntervalSeconds int) error {
+func (f *fakeSession) EnableBalloonStatsPolling(ctx context.Context, qomPath string, pollIntervalSeconds int) error {
 	return f.enableBalloonStatsErr
 }
 
@@ -507,7 +502,7 @@ func (f *fakeNotifier) Notify(ctx context.Context, state string, message string,
 	})
 }
 
-func (f *fakeSession) ReadBalloonStats(timeout time.Duration, qomPath string) (stats, error) {
+func (f *fakeSession) ReadBalloonStats(ctx context.Context, qomPath string) (stats, error) {
 	if f.readBalloonStatsFails > 0 {
 		f.readBalloonStatsFails--
 		return stats{}, errors.New("transient qmp failure")
@@ -518,7 +513,7 @@ func (f *fakeSession) ReadBalloonStats(timeout time.Duration, qomPath string) (s
 	return f.readBalloonStats, nil
 }
 
-func (f *fakeSession) ListQOMProperties(timeout time.Duration, path string) ([]objectPropertyInfo, error) {
+func (f *fakeSession) ListQOMProperties(ctx context.Context, path string) ([]objectPropertyInfo, error) {
 	if err, ok := f.listQOMPropertiesErr[path]; ok {
 		return nil, err
 	}

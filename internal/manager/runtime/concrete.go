@@ -122,7 +122,7 @@ func (r *Core) Suspend(ctx context.Context, req control.SuspendRequest) (control
 }
 
 func (r *Core) Balloon(ctx context.Context, req control.BalloonRequest) (control.BalloonResponse, error) {
-	resp, err := balloon(ctx, r.manifest.QEMU.Devices.Balloon, r.qmp, r.qmpTimeout, req)
+	resp, err := balloon(ctx, r.manifest.QEMU.Devices.Balloon, r.qmp, req)
 	if errors.Is(err, errBalloonNotConfigured) {
 		return control.BalloonResponse{}, control.FailedPrecondition(err)
 	}

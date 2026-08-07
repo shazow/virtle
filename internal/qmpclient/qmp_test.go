@@ -18,7 +18,7 @@ func TestQMPClientQuit(t *testing.T) {
 	})
 	defer cleanup()
 
-	if err := client.Quit(time.Second); err != nil {
+	if err := client.Quit(context.Background()); err != nil {
 		t.Fatalf("quit: %v", err)
 	}
 
@@ -38,7 +38,7 @@ func TestQMPClientWithRawRunsGenericQMPCommand(t *testing.T) {
 	})
 	defer cleanup()
 
-	err := client.WithRaw(time.Second, func(monitor *rawQMP.Monitor) error {
+	err := client.WithRaw(context.Background(), func(monitor *rawQMP.Monitor) error {
 		_, err := monitor.QueryStatus()
 		return err
 	})
@@ -74,24 +74,24 @@ func TestQMPClientStopContAndQueryStatus(t *testing.T) {
 	})
 	defer cleanup()
 
-	gotStatus, err := client.QueryStatus(time.Second)
+	gotStatus, err := client.QueryStatus(context.Background())
 	if err != nil {
 		t.Fatalf("query status: %v", err)
 	}
 	if gotStatus != "running" {
 		t.Fatalf("unexpected status: got %q want running", gotStatus)
 	}
-	if err := client.Stop(time.Second); err != nil {
+	if err := client.Stop(context.Background()); err != nil {
 		t.Fatalf("stop: %v", err)
 	}
-	gotStatus, err = client.QueryStatus(time.Second)
+	gotStatus, err = client.QueryStatus(context.Background())
 	if err != nil {
 		t.Fatalf("query status after stop: %v", err)
 	}
 	if gotStatus != "paused" {
 		t.Fatalf("unexpected status after stop: got %q want paused", gotStatus)
 	}
-	if err := client.Cont(time.Second); err != nil {
+	if err := client.Cont(context.Background()); err != nil {
 		t.Fatalf("cont: %v", err)
 	}
 
@@ -113,17 +113,17 @@ func TestQMPClientMigrationCommands(t *testing.T) {
 	})
 	defer cleanup()
 
-	if err := client.MigrateToFile(time.Second, "/tmp/vm.state"); err != nil {
+	if err := client.MigrateToFile(context.Background(), "/tmp/vm.state"); err != nil {
 		t.Fatalf("migrate to file: %v", err)
 	}
-	status, err := client.QueryMigrate(time.Second)
+	status, err := client.QueryMigrate(context.Background())
 	if err != nil {
 		t.Fatalf("query migrate: %v", err)
 	}
 	if status != "completed" {
 		t.Fatalf("unexpected migration status: got %q want completed", status)
 	}
-	if err := client.MigrateIncoming(time.Second, "/tmp/vm.state"); err != nil {
+	if err := client.MigrateIncoming(context.Background(), "/tmp/vm.state"); err != nil {
 		t.Fatalf("migrate incoming: %v", err)
 	}
 
@@ -239,17 +239,18 @@ func newTestQMPClient(t *testing.T, handler func(message map[string]any) map[str
 	}()
 
 	monitor := &deadlineSocketMonitor{
-		conn:    clientConn,
-		decoder: json.NewDecoder(clientConn),
-		timeout: time.Second,
+		conn:     clientConn,
+		decoder:  json.NewDecoder(clientConn),
+		deadline: time.Now().Add(time.Second),
 	}
 	if err := monitor.Connect(); err != nil {
 		t.Fatalf("connect qmp test monitor: %v", err)
 	}
 
 	client := &socketMonitorClient{
-		monitor: monitor,
-		raw:     rawQMP.NewMonitor(monitor),
+		monitor:    monitor,
+		raw:        rawQMP.NewMonitor(monitor),
+		rpcTimeout: time.Second,
 	}
 
 	cleanup := func() {

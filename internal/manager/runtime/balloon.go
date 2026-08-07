@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	rawQMP "github.com/digitalocean/go-qemu/qmp/raw"
 	balloonpkg "github.com/shazow/virtle/internal/balloon"
@@ -14,16 +13,15 @@ import (
 var errBalloonNotConfigured = errors.New("balloon device is not configured")
 
 type balloonQMP interface {
-	WithRaw(timeout time.Duration, fn func(*rawQMP.Monitor) error) error
+	WithRaw(ctx context.Context, fn func(*rawQMP.Monitor) error) error
 }
 
-func balloon(ctx context.Context, device *balloonpkg.Device, qmp balloonQMP, timeout time.Duration, req control.BalloonRequest) (control.BalloonResponse, error) {
-	_ = ctx
+func balloon(ctx context.Context, device *balloonpkg.Device, qmp balloonQMP, req control.BalloonRequest) (control.BalloonResponse, error) {
 	if device == nil {
 		return control.BalloonResponse{}, errBalloonNotConfigured
 	}
 	var actual int64
-	if err := qmp.WithRaw(timeout, func(monitor *rawQMP.Monitor) error {
+	if err := qmp.WithRaw(ctx, func(monitor *rawQMP.Monitor) error {
 		info, err := monitor.QueryBalloon()
 		if err != nil {
 			return fmt.Errorf("qmp query-balloon: %w", err)

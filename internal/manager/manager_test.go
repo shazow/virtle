@@ -5090,14 +5090,14 @@ type fakeQMPClient struct {
 	setBalloonErr            error
 }
 
-func (c *fakeQMPClient) RunRaw(timeout time.Duration, command string) error {
+func (c *fakeQMPClient) RunRaw(ctx context.Context, command string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.rawCommands = append(c.rawCommands, command)
 	return nil
 }
 
-func (c *fakeQMPClient) DeviceDelAndWait(timeout time.Duration, id string) error {
+func (c *fakeQMPClient) DeviceDelAndWait(ctx context.Context, id string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.rawCommands = append(c.rawCommands, `{"execute":"device_del","arguments":{"id":"`+id+`"}}`)
@@ -5105,7 +5105,7 @@ func (c *fakeQMPClient) DeviceDelAndWait(timeout time.Duration, id string) error
 	return nil
 }
 
-func (c *fakeQMPClient) Quit(timeout time.Duration) error {
+func (c *fakeQMPClient) Quit(ctx context.Context) error {
 	c.mu.Lock()
 	c.quitCalls++
 	onQuit := c.onQuit
@@ -5117,7 +5117,7 @@ func (c *fakeQMPClient) Quit(timeout time.Duration) error {
 	return nil
 }
 
-func (c *fakeQMPClient) Stop(timeout time.Duration) error {
+func (c *fakeQMPClient) Stop(ctx context.Context) error {
 	c.mu.Lock()
 	c.stopCalls++
 	c.status = "paused"
@@ -5129,7 +5129,7 @@ func (c *fakeQMPClient) Stop(timeout time.Duration) error {
 	return nil
 }
 
-func (c *fakeQMPClient) Cont(timeout time.Duration) error {
+func (c *fakeQMPClient) Cont(ctx context.Context) error {
 	c.mu.Lock()
 	c.contCalls++
 	c.status = "running"
@@ -5141,7 +5141,7 @@ func (c *fakeQMPClient) Cont(timeout time.Duration) error {
 	return nil
 }
 
-func (c *fakeQMPClient) QueryStatus(timeout time.Duration) (string, error) {
+func (c *fakeQMPClient) QueryStatus(ctx context.Context) (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -5152,7 +5152,7 @@ func (c *fakeQMPClient) QueryStatus(timeout time.Duration) (string, error) {
 	return c.status, nil
 }
 
-func (c *fakeQMPClient) MigrateToFile(timeout time.Duration, path string) error {
+func (c *fakeQMPClient) MigrateToFile(ctx context.Context, path string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.migrateCalls++
@@ -5161,7 +5161,7 @@ func (c *fakeQMPClient) MigrateToFile(timeout time.Duration, path string) error 
 	return nil
 }
 
-func (c *fakeQMPClient) MigrateIncoming(timeout time.Duration, path string) error {
+func (c *fakeQMPClient) MigrateIncoming(ctx context.Context, path string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.migrateIncomingCalls++
@@ -5170,7 +5170,7 @@ func (c *fakeQMPClient) MigrateIncoming(timeout time.Duration, path string) erro
 	return nil
 }
 
-func (c *fakeQMPClient) QueryMigrate(timeout time.Duration) (string, error) {
+func (c *fakeQMPClient) QueryMigrate(ctx context.Context) (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.queryMigrateCalls++
@@ -5209,7 +5209,7 @@ func (c *fakeQMPClient) withDefaultBalloonPath(path string) *fakeQMPClient {
 	return c
 }
 
-func (c *fakeQMPClient) WithRaw(timeout time.Duration, fn func(*rawQMP.Monitor) error) error {
+func (c *fakeQMPClient) WithRaw(ctx context.Context, fn func(*rawQMP.Monitor) error) error {
 	return fn(rawQMP.NewMonitor(&fakeMonitor{handler: c.handleQMP}))
 }
 
@@ -5257,7 +5257,7 @@ func (c *fakeQMPClient) handleQMP(message map[string]any) (map[string]any, error
 
 	switch command {
 	case "query-status":
-		status, err := c.QueryStatus(time.Second)
+		status, err := c.QueryStatus(context.Background())
 		if err != nil {
 			return nil, err
 		}
@@ -5269,12 +5269,12 @@ func (c *fakeQMPClient) handleQMP(message map[string]any) (map[string]any, error
 			},
 		}, nil
 	case "stop":
-		if err := c.Stop(time.Second); err != nil {
+		if err := c.Stop(context.Background()); err != nil {
 			return nil, err
 		}
 		return map[string]any{"return": map[string]any{}}, nil
 	case "cont":
-		if err := c.Cont(time.Second); err != nil {
+		if err := c.Cont(context.Background()); err != nil {
 			return nil, err
 		}
 		return map[string]any{"return": map[string]any{}}, nil
@@ -5304,7 +5304,7 @@ func (c *fakeQMPClient) handleQMP(message map[string]any) (map[string]any, error
 		c.mu.Unlock()
 		return map[string]any{"return": map[string]any{}}, nil
 	case "query-migrate":
-		status, err := c.QueryMigrate(time.Second)
+		status, err := c.QueryMigrate(context.Background())
 		if err != nil {
 			return nil, err
 		}

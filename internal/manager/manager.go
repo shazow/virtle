@@ -154,10 +154,10 @@ func (m *manager) restoreLaunchRuntime(ctx context.Context, plan *launch.Plan, c
 	if m.logger != nil {
 		m.logger.Info("restoring vm state", "path", plan.ResumeState.VMStatePath)
 	}
-	if err := qmpclient.RestoreFromFile(ctx, client, plan.ResumeState.VMStatePath, qmpclient.RestoreWait{
-		MigrationTimeout: m.effectiveQMPMigrationTimeout(),
-		CommandTimeout:   m.effectiveQMPCommandTimeout(),
-		PollDelay:        defaultMigrationPollDelay,
+	migrateCtx, cancel := m.migrationContext(ctx)
+	defer cancel()
+	if err := qmpclient.RestoreFromFile(migrateCtx, client, plan.ResumeState.VMStatePath, qmpclient.MigrationWait{
+		PollDelay: defaultMigrationPollDelay,
 	}); err != nil {
 		return launch.WrapFixedStage("restore")(err)
 	}
@@ -181,7 +181,7 @@ func (m *manager) waitForLaunchForeground(
 	suspendHandler suspendHandler,
 	processes *launch.ProcessSet,
 ) error {
-	if task := balloon.ControllerTask(m.effectiveQMPCommandTimeout(), qmpClient, plan.Manifest.QEMU.Devices.Balloon, plan.Notifier); task != nil {
+	if task := balloon.ControllerTask(qmpClient, plan.Manifest.QEMU.Devices.Balloon, plan.Notifier); task != nil {
 		processes.StartTasks(ctx, task)
 	}
 
@@ -317,6 +317,13 @@ func (m *manager) effectiveQMPMigrationTimeout() time.Duration {
 		return m.qmpMigrationTimeout
 	}
 	return defaultQMPMigrationTimeout
+}
+
+// migrationContext bounds a QMP migration with the configured migration
+// timeout.
+func (m *manager) migrationContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	timeout := m.effectiveQMPMigrationTimeout()
+	return context.WithTimeoutCause(ctx, timeout, fmt.Errorf("migration timed out after %s", timeout))
 }
 
 func (m *manager) effectiveQMPCommandTimeout() time.Duration {
@@ -463,10 +470,10 @@ func (m *manager) saveSuspendStateConnected(ctx context.Context, qmpSocketPath s
 	if err := os.Remove(statePath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return launch.WrapFixedStage("qmp suspend")(fmt.Errorf("remove stale vm state %q: %w", statePath, err))
 	}
-	if err := qmpclient.SaveToFile(ctx, client, statePath, qmpclient.SaveWait{
-		MigrationTimeout: m.effectiveQMPMigrationTimeout(),
-		CommandTimeout:   m.effectiveQMPCommandTimeout(),
-		PollDelay:        defaultMigrationPollDelay,
+	migrateCtx, cancel := m.migrationContext(ctx)
+	defer cancel()
+	if err := qmpclient.SaveToFile(migrateCtx, client, statePath, qmpclient.MigrationWait{
+		PollDelay: defaultMigrationPollDelay,
 	}); err != nil {
 		return launch.WrapFixedStage("qmp suspend")(err)
 	}

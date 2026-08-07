@@ -2,16 +2,14 @@ package hotplug
 
 import (
 	"context"
-	"time"
 )
 
 // QMPDeviceAdapter adapts a generic QMP client to hotplug device operations.
 type QMPDeviceAdapter struct {
 	Client interface {
-		RunRaw(time.Duration, string) error
-		DeviceDelAndWait(time.Duration, string) error
+		RunRaw(context.Context, string) error
+		DeviceDelAndWait(context.Context, string) error
 	}
-	Timeout time.Duration
 }
 
 func (a QMPDeviceAdapter) AttachDevice(ctx context.Context, device Device, bus string) (func(context.Context), error) {
@@ -25,7 +23,7 @@ func (a QMPDeviceAdapter) AttachDevice(ctx context.Context, device Device, bus s
 			return
 		}
 		for _, command := range plan.release {
-			_ = a.Client.RunRaw(a.Timeout, command)
+			_ = a.Client.RunRaw(ctx, command)
 		}
 	}
 	for _, command := range plan.backend {
@@ -34,7 +32,7 @@ func (a QMPDeviceAdapter) AttachDevice(ctx context.Context, device Device, bus s
 			return nil, err
 		}
 		started = true
-		if err := a.Client.RunRaw(a.Timeout, command); err != nil {
+		if err := a.Client.RunRaw(ctx, command); err != nil {
 			rollback()
 			return nil, err
 		}
@@ -43,7 +41,7 @@ func (a QMPDeviceAdapter) AttachDevice(ctx context.Context, device Device, bus s
 		rollback()
 		return nil, err
 	}
-	if err := a.Client.RunRaw(a.Timeout, plan.deviceAdd); err != nil {
+	if err := a.Client.RunRaw(ctx, plan.deviceAdd); err != nil {
 		rollback()
 		return nil, err
 	}
@@ -59,11 +57,11 @@ func (a QMPDeviceAdapter) DetachDevice(ctx context.Context, device Device) error
 		return err
 	}
 	deviceID := qemuDeviceID(device.ID)
-	if err := a.Client.DeviceDelAndWait(a.Timeout, deviceID); err != nil {
+	if err := a.Client.DeviceDelAndWait(ctx, deviceID); err != nil {
 		return err
 	}
 	for _, command := range planFor(device, "").release {
-		if err := a.Client.RunRaw(a.Timeout, command); err != nil {
+		if err := a.Client.RunRaw(ctx, command); err != nil {
 			return err
 		}
 	}

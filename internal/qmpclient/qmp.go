@@ -14,30 +14,34 @@ import (
 	"github.com/shazow/virtle/internal/qmpwire"
 )
 
+// DefaultRPCTimeout bounds a single QMP operation when the dialer does not
+// configure one.
+const DefaultRPCTimeout = 5 * time.Second
+
 // RawRunner runs raw QMP monitor commands.
 type RawRunner interface {
-	WithRaw(timeout time.Duration, fn func(*rawQMP.Monitor) error) error
-	RunRaw(timeout time.Duration, command string) error
+	WithRaw(ctx context.Context, fn func(*rawQMP.Monitor) error) error
+	RunRaw(ctx context.Context, command string) error
 }
 
 // DeviceController removes QEMU devices and waits for completion.
 type DeviceController interface {
-	DeviceDelAndWait(timeout time.Duration, id string) error
+	DeviceDelAndWait(ctx context.Context, id string) error
 }
 
 // Lifecycle controls the VM run state.
 type Lifecycle interface {
-	Stop(timeout time.Duration) error
-	Cont(timeout time.Duration) error
-	QueryStatus(timeout time.Duration) (string, error)
-	Quit(timeout time.Duration) error
+	Stop(ctx context.Context) error
+	Cont(ctx context.Context) error
+	QueryStatus(ctx context.Context) (string, error)
+	Quit(ctx context.Context) error
 }
 
 // MigrationController runs QMP migration commands and queries their status.
 type MigrationController interface {
-	MigrateToFile(timeout time.Duration, path string) error
-	MigrateIncoming(timeout time.Duration, path string) error
-	QueryMigrate(timeout time.Duration) (string, error)
+	MigrateToFile(ctx context.Context, path string) error
+	MigrateIncoming(ctx context.Context, path string) error
+	QueryMigrate(ctx context.Context) (string, error)
 }
 
 // Disconnecter closes an open QMP connection.
@@ -45,7 +49,9 @@ type Disconnecter interface {
 	Disconnect() error
 }
 
-// Client is a full QMP monitor connection.
+// Client is a full QMP monitor connection. Operation deadlines are carried by
+// ctx; each operation is additionally bounded by the transport's RPC timeout
+// so a wedged monitor fails fast even when ctx has no deadline.
 type Client interface {
 	RawRunner
 	DeviceController
@@ -60,23 +66,28 @@ type Dialer interface {
 }
 
 // SocketMonitorDialer opens QMP monitor connections over Unix sockets.
-type SocketMonitorDialer struct{}
+type SocketMonitorDialer struct {
+	// RPCTimeout bounds each QMP operation regardless of the caller's ctx
+	// deadline. Zero uses DefaultRPCTimeout.
+	RPCTimeout time.Duration
+}
 
 type socketMonitorClient struct {
-	monitor *deadlineSocketMonitor
-	raw     *rawQMP.Monitor
-	mu      sync.Mutex
+	monitor    *deadlineSocketMonitor
+	raw        *rawQMP.Monitor
+	rpcTimeout time.Duration
+	mu         sync.Mutex
 }
 
 func (d *SocketMonitorDialer) Dial(ctx context.Context, socketPath string, timeout time.Duration) (Client, error) {
 	if ctx.Err() != nil {
-		return nil, ctx.Err()
+		return nil, context.Cause(ctx)
 	}
 
 	monitor, err := newDeadlineSocketMonitor(ctx, "unix", socketPath, timeout)
 	if err != nil {
 		if ctx.Err() != nil {
-			return nil, ctx.Err()
+			return nil, context.Cause(ctx)
 		}
 		if qmpwire.IsTimeout(err) {
 			return nil, fmt.Errorf("qmp connect timed out after %s", timeout)
@@ -84,16 +95,17 @@ func (d *SocketMonitorDialer) Dial(ctx context.Context, socketPath string, timeo
 		return nil, err
 	}
 
-	monitor.setTimeout(timeout)
+	monitor.setDeadline(time.Now().Add(timeout))
 	// Cancel a blocked Connect by expiring the socket deadline; the ctx.Err
 	// checks below own the case where cancellation raced a successful connect.
 	stopInterrupt := context.AfterFunc(ctx, func() { _ = monitor.interrupt() })
 	err = monitor.Connect()
 	stopInterrupt()
+	monitor.setDeadline(time.Time{})
 	if err != nil {
 		_ = monitor.Disconnect()
 		if ctx.Err() != nil {
-			return nil, ctx.Err()
+			return nil, context.Cause(ctx)
 		}
 		if qmpwire.IsTimeout(err) {
 			return nil, fmt.Errorf("qmp connect timed out after %s", timeout)
@@ -102,36 +114,38 @@ func (d *SocketMonitorDialer) Dial(ctx context.Context, socketPath string, timeo
 	}
 	if ctx.Err() != nil {
 		_ = monitor.Disconnect()
-		return nil, ctx.Err()
+		return nil, context.Cause(ctx)
 	}
 
+	rpcTimeout := d.RPCTimeout
+	if rpcTimeout <= 0 {
+		rpcTimeout = DefaultRPCTimeout
+	}
 	return &socketMonitorClient{
-		monitor: monitor,
-		raw:     rawQMP.NewMonitor(monitor),
+		monitor:    monitor,
+		raw:        rawQMP.NewMonitor(monitor),
+		rpcTimeout: rpcTimeout,
 	}, nil
 }
 
-func (c *socketMonitorClient) WithRaw(timeout time.Duration, fn func(*rawQMP.Monitor) error) error {
-	return c.withTimeout(timeout, func() error {
+func (c *socketMonitorClient) WithRaw(ctx context.Context, fn func(*rawQMP.Monitor) error) error {
+	return c.withDeadline(ctx, func() error {
 		return fn(c.raw)
 	})
 }
 
-func (c *socketMonitorClient) RunRaw(timeout time.Duration, command string) error {
-	err := c.withTimeout(timeout, func() error {
+func (c *socketMonitorClient) RunRaw(ctx context.Context, command string) error {
+	err := c.withDeadline(ctx, func() error {
 		if !json.Valid([]byte(command)) {
 			return fmt.Errorf("invalid qmp json")
 		}
 		_, err := c.monitor.Run([]byte(command))
 		return err
 	})
-	if qmpwire.IsTimeout(err) {
-		return fmt.Errorf("qmp command timed out after %s", timeout)
-	}
-	return err
+	return c.opError(ctx, "qmp command", err)
 }
 
-func (c *socketMonitorClient) DeviceDelAndWait(timeout time.Duration, id string) error {
+func (c *socketMonitorClient) DeviceDelAndWait(ctx context.Context, id string) error {
 	command, err := json.Marshal(map[string]any{
 		"execute":   "device_del",
 		"arguments": map[string]any{"id": id},
@@ -139,70 +153,55 @@ func (c *socketMonitorClient) DeviceDelAndWait(timeout time.Duration, id string)
 	if err != nil {
 		return err
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.monitor.setTimeout(timeout)
-	defer c.monitor.setTimeout(0)
-
-	c.monitor.mu.Lock()
-	defer c.monitor.mu.Unlock()
-	err = c.monitor.withDeadline(func() error {
-		if _, err := c.monitor.conn.Write(qmpwire.AppendDelimiter(command)); err != nil {
-			return err
-		}
-		if _, err := c.monitor.readResponseLocked(); err != nil {
-			return err
-		}
-		return c.monitor.waitDeviceDeletedLocked(id)
+	err = c.withDeadline(ctx, func() error {
+		c.monitor.mu.Lock()
+		defer c.monitor.mu.Unlock()
+		return c.monitor.withDeadline(func() error {
+			if _, err := c.monitor.conn.Write(qmpwire.AppendDelimiter(command)); err != nil {
+				return err
+			}
+			if _, err := c.monitor.readResponseLocked(); err != nil {
+				return err
+			}
+			return c.monitor.waitDeviceDeletedLocked(id)
+		})
 	})
-	if qmpwire.IsTimeout(err) {
-		return fmt.Errorf("qmp device_del %q timed out after %s", id, timeout)
-	}
-	return err
+	return c.opError(ctx, fmt.Sprintf("qmp device_del %q", id), err)
 }
 
-func (c *socketMonitorClient) Quit(timeout time.Duration) error {
-	err := c.WithRaw(timeout, func(monitor *rawQMP.Monitor) error {
+func (c *socketMonitorClient) Quit(ctx context.Context) error {
+	err := c.WithRaw(ctx, func(monitor *rawQMP.Monitor) error {
 		if err := monitor.Quit(); err != nil {
 			return fmt.Errorf("qmp quit: %w", err)
 		}
 		return nil
 	})
-	if qmpwire.IsTimeout(err) {
-		return fmt.Errorf("qmp quit timed out after %s", timeout)
-	}
-	return err
+	return c.opError(ctx, "qmp quit", err)
 }
 
-func (c *socketMonitorClient) Stop(timeout time.Duration) error {
-	err := c.WithRaw(timeout, func(monitor *rawQMP.Monitor) error {
+func (c *socketMonitorClient) Stop(ctx context.Context) error {
+	err := c.WithRaw(ctx, func(monitor *rawQMP.Monitor) error {
 		if err := monitor.Stop(); err != nil {
 			return fmt.Errorf("qmp stop: %w", err)
 		}
 		return nil
 	})
-	if qmpwire.IsTimeout(err) {
-		return fmt.Errorf("qmp stop timed out after %s", timeout)
-	}
-	return err
+	return c.opError(ctx, "qmp stop", err)
 }
 
-func (c *socketMonitorClient) Cont(timeout time.Duration) error {
-	err := c.WithRaw(timeout, func(monitor *rawQMP.Monitor) error {
+func (c *socketMonitorClient) Cont(ctx context.Context) error {
+	err := c.WithRaw(ctx, func(monitor *rawQMP.Monitor) error {
 		if err := monitor.Cont(); err != nil {
 			return fmt.Errorf("qmp cont: %w", err)
 		}
 		return nil
 	})
-	if qmpwire.IsTimeout(err) {
-		return fmt.Errorf("qmp cont timed out after %s", timeout)
-	}
-	return err
+	return c.opError(ctx, "qmp cont", err)
 }
 
-func (c *socketMonitorClient) QueryStatus(timeout time.Duration) (string, error) {
+func (c *socketMonitorClient) QueryStatus(ctx context.Context) (string, error) {
 	var status string
-	err := c.WithRaw(timeout, func(monitor *rawQMP.Monitor) error {
+	err := c.WithRaw(ctx, func(monitor *rawQMP.Monitor) error {
 		info, err := monitor.QueryStatus()
 		if err != nil {
 			return fmt.Errorf("qmp query-status: %w", err)
@@ -210,43 +209,37 @@ func (c *socketMonitorClient) QueryStatus(timeout time.Duration) (string, error)
 		status = info.Status.String()
 		return nil
 	})
-	if qmpwire.IsTimeout(err) {
-		return "", fmt.Errorf("qmp query-status timed out after %s", timeout)
+	if err != nil {
+		return "", c.opError(ctx, "qmp query-status", err)
 	}
-	return status, err
+	return status, nil
 }
 
-func (c *socketMonitorClient) MigrateToFile(timeout time.Duration, path string) error {
+func (c *socketMonitorClient) MigrateToFile(ctx context.Context, path string) error {
 	uri := "file:" + path
-	err := c.WithRaw(timeout, func(monitor *rawQMP.Monitor) error {
+	err := c.WithRaw(ctx, func(monitor *rawQMP.Monitor) error {
 		if err := monitor.Migrate(uri, nil, nil, nil); err != nil {
 			return fmt.Errorf("qmp migrate %q: %w", uri, err)
 		}
 		return nil
 	})
-	if qmpwire.IsTimeout(err) {
-		return fmt.Errorf("qmp migrate %q timed out after %s", uri, timeout)
-	}
-	return err
+	return c.opError(ctx, fmt.Sprintf("qmp migrate %q", uri), err)
 }
 
-func (c *socketMonitorClient) MigrateIncoming(timeout time.Duration, path string) error {
+func (c *socketMonitorClient) MigrateIncoming(ctx context.Context, path string) error {
 	uri := "file:" + path
-	err := c.WithRaw(timeout, func(monitor *rawQMP.Monitor) error {
+	err := c.WithRaw(ctx, func(monitor *rawQMP.Monitor) error {
 		if err := monitor.MigrateIncoming(uri); err != nil {
 			return fmt.Errorf("qmp migrate-incoming %q: %w", uri, err)
 		}
 		return nil
 	})
-	if qmpwire.IsTimeout(err) {
-		return fmt.Errorf("qmp migrate-incoming %q timed out after %s", uri, timeout)
-	}
-	return err
+	return c.opError(ctx, fmt.Sprintf("qmp migrate-incoming %q", uri), err)
 }
 
-func (c *socketMonitorClient) QueryMigrate(timeout time.Duration) (string, error) {
+func (c *socketMonitorClient) QueryMigrate(ctx context.Context) (string, error) {
 	var status string
-	err := c.WithRaw(timeout, func(monitor *rawQMP.Monitor) error {
+	err := c.WithRaw(ctx, func(monitor *rawQMP.Monitor) error {
 		info, err := monitor.QueryMigrate()
 		if err != nil {
 			return fmt.Errorf("qmp query-migrate: %w", err)
@@ -256,10 +249,10 @@ func (c *socketMonitorClient) QueryMigrate(timeout time.Duration) (string, error
 		}
 		return nil
 	})
-	if qmpwire.IsTimeout(err) {
-		return "", fmt.Errorf("qmp query-migrate timed out after %s", timeout)
+	if err != nil {
+		return "", c.opError(ctx, "qmp query-migrate", err)
 	}
-	return status, err
+	return status, nil
 }
 
 func (c *socketMonitorClient) Disconnect() error {
@@ -269,21 +262,56 @@ func (c *socketMonitorClient) Disconnect() error {
 	return c.monitor.Disconnect()
 }
 
-func (c *socketMonitorClient) withTimeout(timeout time.Duration, fn func() error) error {
+// withDeadline runs one QMP operation. The connection deadline is the earlier
+// of the RPC timeout and the ctx deadline; ctx cancellation interrupts an
+// in-flight read by yanking the deadline.
+func (c *socketMonitorClient) withDeadline(ctx context.Context, fn func() error) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	c.monitor.setTimeout(timeout)
-	defer c.monitor.setTimeout(0)
+	deadline := time.Now().Add(c.rpcTimeout)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	c.monitor.setDeadline(deadline)
+	defer c.monitor.setDeadline(time.Time{})
+
+	stopc := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() {
+		_ = c.monitor.interrupt()
+		close(stopc)
+	})
+	// Wait for a fired AfterFunc before releasing the mutex so it cannot
+	// clobber the deadline set by the next operation.
+	defer func() {
+		if !stop() {
+			<-stopc
+		}
+	}()
 
 	return fn()
 }
 
+// opError maps an operation failure to its cause: the caller's ctx ending,
+// the RPC liveness bound expiring, or the raw error.
+func (c *socketMonitorClient) opError(ctx context.Context, name string, err error) error {
+	if err == nil {
+		return nil
+	}
+	if ctx.Err() != nil {
+		return fmt.Errorf("%s: %w", name, context.Cause(ctx))
+	}
+	if qmpwire.IsTimeout(err) {
+		return fmt.Errorf("%s timed out after %s", name, c.rpcTimeout)
+	}
+	return err
+}
+
 type deadlineSocketMonitor struct {
-	conn    net.Conn
-	decoder *json.Decoder
-	timeout time.Duration
-	mu      sync.Mutex
+	conn     net.Conn
+	decoder  *json.Decoder
+	deadline time.Time
+	mu       sync.Mutex
 }
 
 func newDeadlineSocketMonitor(ctx context.Context, network string, addr string, timeout time.Duration) (*deadlineSocketMonitor, error) {
@@ -296,7 +324,6 @@ func newDeadlineSocketMonitor(ctx context.Context, network string, addr string, 
 	return &deadlineSocketMonitor{
 		conn:    conn,
 		decoder: json.NewDecoder(conn),
-		timeout: timeout,
 	}, nil
 }
 
@@ -359,8 +386,11 @@ func (m *deadlineSocketMonitor) Events(context.Context) (<-chan doQMP.Event, err
 	return nil, doQMP.ErrEventsNotSupported
 }
 
-func (m *deadlineSocketMonitor) setTimeout(timeout time.Duration) {
-	m.timeout = timeout
+// setDeadline stores the absolute deadline applied to subsequent operations;
+// the raw go-qemu monitor calls Run without a ctx, so the deadline travels
+// through this field. Zero clears it.
+func (m *deadlineSocketMonitor) setDeadline(deadline time.Time) {
+	m.deadline = deadline
 }
 
 func (m *deadlineSocketMonitor) interrupt() error {
@@ -371,8 +401,8 @@ func (m *deadlineSocketMonitor) interrupt() error {
 }
 
 func (m *deadlineSocketMonitor) withDeadline(fn func() error) error {
-	if m.timeout > 0 {
-		if err := m.conn.SetDeadline(time.Now().Add(m.timeout)); err != nil {
+	if !m.deadline.IsZero() {
+		if err := m.conn.SetDeadline(m.deadline); err != nil {
 			return err
 		}
 		defer m.conn.SetDeadline(time.Time{})

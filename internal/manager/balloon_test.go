@@ -155,7 +155,7 @@ func TestBalloonControllerTaskWithNilLoggerDoesNotPanicOnFailure(t *testing.T) {
 	qmpClient := (&fakeQMPClient{
 		enableBalloonStatsErr: errors.New("guest stats unavailable"),
 	}).withDefaultBalloonPath("/machine/peripheral/balloon0")
-	task := balloon.ControllerTask(time.Second, qmpClient, &balloon.Device{
+	task := balloon.ControllerTask(qmpClient, &balloon.Device{
 		ID:        "balloon0",
 		Transport: "pci",
 		Controller: &balloon.ControllerConfig{
@@ -188,7 +188,7 @@ func TestBalloonControllerTaskWithNilLoggerDoesNotPanicOnAdjustment(t *testing.T
 		readBalloonStatsUpdated: time.Now(),
 		queryBalloonActualBytes: 512 * testMiB,
 	}).withDefaultBalloonPath("/machine/peripheral/balloon0")
-	task := balloon.ControllerTask(time.Second, qmpClient, &balloon.Device{
+	task := balloon.ControllerTask(qmpClient, &balloon.Device{
 		ID:        "balloon0",
 		Transport: "pci",
 		Controller: &balloon.ControllerConfig{

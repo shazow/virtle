@@ -1,6 +1,10 @@
 package manifest
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/shazow/virtle/internal/units"
+)
 
 func TestDocumentWithDefaultsPreservesExplicitEmptyNetworks(t *testing.T) {
 	document := validDocument()
@@ -49,38 +53,38 @@ func TestDocumentWithDefaultsPreservesKeyResolvedDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve manifest: %v", err)
 	}
-	if got := manifest.Identity.HostName; got != defaultHostName {
-		t.Fatalf("host name = %q, want %q", got, defaultHostName)
+	if got := manifest.Identity.HostName; got != "virtle" {
+		t.Fatalf("host name = %q, want %q", got, "virtle")
 	}
-	if got := manifest.Paths.WorkingDir; got != defaultWorkingDir {
-		t.Fatalf("working dir = %q, want %q", got, defaultWorkingDir)
+	if got := manifest.Paths.WorkingDir; got != "." {
+		t.Fatalf("working dir = %q, want %q", got, ".")
 	}
-	if got := manifest.Persistence.BaseDir; got != defaultBaseDir {
-		t.Fatalf("base dir = %q, want %q", got, defaultBaseDir)
+	if got := manifest.Persistence.BaseDir; got != ".virtle" {
+		t.Fatalf("base dir = %q, want %q", got, ".virtle")
 	}
-	if got := manifest.Persistence.StateDir; got != defaultBaseDir {
-		t.Fatalf("state dir = %q, want %q", got, defaultBaseDir)
+	if got := manifest.Persistence.StateDir; got != ".virtle" {
+		t.Fatalf("state dir = %q, want %q", got, ".virtle")
 	}
 	if got, want := manifest.Paths.LockPath, ".virtle/virtle.lock"; got != want {
 		t.Fatalf("lock path = %q, want %q", got, want)
 	}
-	if got := manifest.QEMU.Machine.Type; got != defaultMachineType {
-		t.Fatalf("machine type = %q, want %q", got, defaultMachineType)
+	if got := manifest.QEMU.Machine.Type; got != "microvm" {
+		t.Fatalf("machine type = %q, want %q", got, "microvm")
 	}
-	if got := manifest.QEMU.Memory.Size; got != defaultMemorySize {
-		t.Fatalf("memory = %d, want %d", got, defaultMemorySize)
+	if got := manifest.QEMU.Memory.Size; got != units.MiB(1024) {
+		t.Fatalf("memory = %d, want %d", got, units.MiB(1024))
 	}
-	if got := manifest.QEMU.QMP.SocketPath; got != defaultQMP {
-		t.Fatalf("qmp socket = %q, want %q", got, defaultQMP)
+	if got := manifest.QEMU.QMP.SocketPath; got != "qmp.sock" {
+		t.Fatalf("qmp socket = %q, want %q", got, "qmp.sock")
 	}
-	if got := manifest.QEMU.GuestAgent.SocketPath; got != defaultGuestAgent {
-		t.Fatalf("guest agent socket = %q, want %q", got, defaultGuestAgent)
+	if got := manifest.QEMU.GuestAgent.SocketPath; got != "qga.sock" {
+		t.Fatalf("guest agent socket = %q, want %q", got, "qga.sock")
 	}
 	if got := manifest.QEMU.SSHReady.SocketPath; got != defaultSSHReadySocket {
 		t.Fatalf("ssh ready socket = %q, want %q", got, defaultSSHReadySocket)
 	}
-	if got := manifest.SSH.User; got != defaultSSHUser {
-		t.Fatalf("ssh user = %q, want %q", got, defaultSSHUser)
+	if got := manifest.SSH.User; got != "agent" {
+		t.Fatalf("ssh user = %q, want %q", got, "agent")
 	}
 	if got := manifest.VSock.CIDRange.Start; got != defaultVSockCIDStart {
 		t.Fatalf("cid start = %d, want %d", got, defaultVSockCIDStart)

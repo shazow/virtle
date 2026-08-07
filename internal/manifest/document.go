@@ -10,23 +10,15 @@ const (
 	KernelSerialPrint   = "print"
 	KernelSerialConsole = "console"
 
-	defaultHostName    = "virtle"
-	defaultWorkingDir  = "."
-	defaultBaseDir     = ".virtle"
-	defaultMachineType = "microvm"
-	defaultMemorySize  = units.MiB(1024)
-	defaultQMP         = "qmp.sock"
-	defaultGuestAgent  = "qga.sock"
-	defaultSSHCommand  = "ssh"
-	defaultSSHUser     = "agent"
-	defaultNetworkID   = "microvm1"
-	defaultNetworkMAC  = "02:02:00:00:00:01"
+	defaultSSHCommand = "ssh"
+	defaultNetworkID  = "microvm1"
+	defaultNetworkMAC = "02:02:00:00:00:01"
 )
 
 type Document struct {
-	HostName      string             `json:"host_name,omitempty" toml:"host_name" jsonschema:"description=Guest-visible VM name used for QEMU naming and derived runtime files."`
-	WorkingDir    string             `json:"working_dir,omitempty" toml:"working_dir" jsonschema:"description=Host working directory used to resolve relative paths in the manifest."`
-	StateDir      string             `json:"state_dir,omitempty" toml:"state_dir" jsonschema:"description=Host directory used for runtime state such as locks sockets and generated files."`
+	HostName      string             `json:"host_name,omitempty" toml:"host_name" default:"virtle" jsonschema:"description=Guest-visible VM name used for QEMU naming and derived runtime files."`
+	WorkingDir    string             `json:"working_dir,omitempty" toml:"working_dir" default:"." jsonschema:"description=Host working directory used to resolve relative paths in the manifest."`
+	StateDir      string             `json:"state_dir,omitempty" toml:"state_dir" default:".virtle" jsonschema:"description=Host directory used for runtime state such as locks sockets and generated files."`
 	Host          HostInput          `json:"host,omitempty" toml:"host" jsonschema:"description=Host platform facts used while resolving QEMU defaults."`
 	QEMU          QEMUInput          `json:"qemu,omitempty" toml:"qemu" jsonschema:"description=QEMU executable and host-side socket settings."`
 	Machine       MachineInput       `json:"machine,omitempty" toml:"machine" jsonschema:"description=Virtual machine type CPU memory and acceleration settings."`
@@ -56,16 +48,16 @@ type QEMUInput struct {
 	User                string            `json:"user,omitempty" toml:"user" jsonschema:"description=Host user used for QEMU-related process policy when supported."`
 	Seccomp             bool              `json:"seccomp,omitempty" toml:"seccomp" jsonschema:"description=Enable QEMU seccomp sandboxing."`
 	MachineOptions      map[string]string `json:"machine_options,omitempty" toml:"machine_options" jsonschema:"description=Additional QEMU machine options merged into the resolved machine option list."`
-	QMPSocket           string            `json:"qmp_socket,omitempty" toml:"qmp_socket" jsonschema:"description=Path to the QEMU Machine Protocol socket relative to the runtime state directory unless absolute."`
-	GuestAgentSocket    string            `json:"guest_agent_socket,omitempty" toml:"guest_agent_socket" jsonschema:"description=Path to the QEMU guest agent socket relative to the runtime state directory unless absolute."`
+	QMPSocket           string            `json:"qmp_socket,omitempty" toml:"qmp_socket" default:"qmp.sock" jsonschema:"description=Path to the QEMU Machine Protocol socket relative to the runtime state directory unless absolute."`
+	GuestAgentSocket    string            `json:"guest_agent_socket,omitempty" toml:"guest_agent_socket" default:"qga.sock" jsonschema:"description=Path to the QEMU guest agent socket relative to the runtime state directory unless absolute."`
 	GuestDefaultTimeout float64           `json:"guest_default_timeout,omitempty" toml:"guest_default_timeout" default:"30" jsonschema:"description=Seconds allowed for each QEMU guest agent command; zero disables the timeout and omitting the key uses the default of 30 seconds."`
 }
 
 type MachineInput struct {
-	Type   string    `json:"type,omitempty" toml:"type" jsonschema:"description=QEMU machine type to use when resolving device transports."`
+	Type   string    `json:"type,omitempty" toml:"type" default:"microvm" jsonschema:"description=QEMU machine type to use when resolving device transports."`
 	VCPU   int       `json:"vcpu,omitempty" toml:"vcpu" jsonschema:"description=Number of virtual CPUs to expose to the guest; zero derives the count."`
 	ID     string    `json:"id,omitempty" toml:"id" jsonschema:"description=Optional machine identifier passed through to QEMU."`
-	Memory units.MiB `json:"memory,omitempty" toml:"memory" jsonschema:"description=Guest memory size in MiB."`
+	Memory units.MiB `json:"memory,omitempty" toml:"memory" default:"1024" jsonschema:"description=Guest memory size in MiB."`
 	CPU    string    `json:"cpu,omitempty" toml:"cpu" jsonschema:"description=QEMU CPU model string."`
 	// Pointer preserves omitted vs explicitly false input until resolution.
 	KVM *bool `json:"kvm,omitempty" toml:"kvm" jsonschema:"description=Whether QEMU should enable KVM acceleration when supported."`
@@ -75,7 +67,7 @@ type KernelInput struct {
 	Path       string   `json:"path" toml:"path" jsonschema:"description=Path to the guest kernel image."`
 	InitrdPath string   `json:"initrd_path" toml:"initrd_path" jsonschema:"description=Path to the guest initrd image."`
 	Params     []string `json:"params,omitempty" toml:"params" jsonschema:"description=Additional kernel command-line parameters appended after virtle defaults."`
-	Serial     string   `json:"serial,omitempty" toml:"serial" jsonschema:"description=Serial console mode: off print or console."`
+	Serial     string   `json:"serial,omitempty" toml:"serial" default:"off" jsonschema:"description=Serial console mode: off print or console."`
 }
 
 type GraphicsInput struct {
@@ -253,7 +245,7 @@ type BalloonControllerInput struct {
 
 type SSHInput struct {
 	Exec          []string `json:"exec,omitempty" toml:"exec" jsonschema:"description=SSH command template used to attach to the guest."`
-	User          string   `json:"user,omitempty" toml:"user" jsonschema:"description=Guest SSH username."`
+	User          string   `json:"user,omitempty" toml:"user" default:"agent" jsonschema:"description=Guest SSH username."`
 	ReadySocket   string   `json:"ready_socket,omitempty" toml:"ready_socket" jsonschema:"description=Guest readiness socket path relative to the runtime state directory unless absolute."`
 	RetryDelay    float64  `json:"retry_delay,omitempty" toml:"retry_delay" default:"0.5" jsonschema:"description=Seconds to wait between SSH readiness or connection retry attempts; zero retries immediately and omitting the key uses the default of 0.5 seconds."`
 	Autoprovision bool     `json:"autoprovision,omitempty" toml:"autoprovision" jsonschema:"description=Automatically provision an SSH key after authentication failure."`

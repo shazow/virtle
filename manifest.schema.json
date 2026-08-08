@@ -417,7 +417,7 @@
         },
         "shutdown_timeout": {
           "type": "string",
-          "description": "Wait for graceful guest shutdown before forcing QEMU to quit as a duration such as 90s. Zero disables the wait and omitting the key uses the default of 90s."
+          "description": "Duration to wait for graceful shutdown before forcing QEMU to quit"
         }
       },
       "additionalProperties": false,

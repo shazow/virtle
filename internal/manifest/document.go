@@ -52,7 +52,7 @@ type QEMUInput struct {
 	GuestAgentSocket    string            `json:"guest_agent_socket,omitempty" toml:"guest_agent_socket" default:"qga.sock" jsonschema:"description=Path to the QEMU guest agent socket relative to the runtime state directory unless absolute."`
 	GuestDefaultTimeout units.Duration    `json:"guest_default_timeout,omitempty" toml:"guest_default_timeout" default:"30s" jsonschema:"description=Timeout for guest agent commands virtle issues itself such as file writes and workspace mounts as a duration like 30s. Guest-exec requests sent through the control socket carry their own timeout and are not affected. Zero disables the timeout and omitting the key uses the default of 30s."`
 	ShutdownExec        []string          `json:"shutdown_exec,omitempty" toml:"shutdown_exec" jsonschema:"description=Optional guest command tuple invoked through QGA to shut down the VM gracefully."`
-	ShutdownTimeout     units.Duration    `json:"shutdown_timeout,omitempty" toml:"shutdown_timeout" default:"90s" jsonschema:"description=Wait for graceful guest shutdown before forcing QEMU to quit as a duration such as 90s. Zero disables the wait and omitting the key uses the default of 90s."`
+	ShutdownTimeout     units.Duration    `json:"shutdown_timeout,omitempty" toml:"shutdown_timeout" default:"90s" jsonschema:"description=Duration to wait for graceful shutdown before forcing QEMU to quit"`
 }
 
 type MachineInput struct {

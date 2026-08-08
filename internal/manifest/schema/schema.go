@@ -5,104 +5,139 @@ import (
 	"encoding/json"
 	"reflect"
 	"strconv"
-	"strings"
 
-	"github.com/invopop/jsonschema"
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/shazow/virtle/internal/manifest"
 	"github.com/shazow/virtle/internal/units"
 )
 
 // Generate returns the JSON Schema for the virtle manifest input format.
-func Generate() *jsonschema.Schema {
-	var reflector jsonschema.Reflector
-	reflector = jsonschema.Reflector{
-		BaseSchemaID:               jsonschema.ID("https://shazow.github.io/virtle/manifest.schema.json"),
-		Anonymous:                  true,
-		ExpandedStruct:             true,
-		DoNotReference:             false,
-		RequiredFromJSONSchemaTags: true,
-		AllowAdditionalProperties:  false,
-		Mapper: func(t reflect.Type) *jsonschema.Schema {
-			if t == reflect.TypeOf(units.Duration(0)) {
-				// Durations are documented as Go duration strings; the decoder
-				// also accepts bare numbers of seconds for backward
-				// compatibility, deliberately left out of the schema.
-				return &jsonschema.Schema{Type: "string"}
-			}
-			if t == reflect.TypeOf(manifest.MountsInput{}) {
-				// MountsInput is a tagged-union slice backed by the MountEntry interface.
-				// Reflection only sees []MountEntry and would emit "items: true", so map it
-				// to the same concrete mount variants accepted by the manifest decoder.
-				return mountSchema(&reflector)
-			}
-			return nil
+func Generate() (*jsonschema.Schema, error) {
+	opts := &jsonschema.ForOptions{
+		TypeSchemas: map[reflect.Type]*jsonschema.Schema{
+			// Durations are documented as Go duration strings; the decoder
+			// also accepts bare numbers of seconds for backward
+			// compatibility, deliberately left out of the schema.
+			reflect.TypeOf(units.Duration(0)): {Type: "string"},
 		},
 	}
-	schema := reflector.Reflect(&manifest.Document{})
-	schema.ID = jsonschema.ID("https://shazow.github.io/virtle/manifest.schema.json")
+
+	// MountsInput is a tagged-union slice backed by the MountEntry interface.
+	// Reflection only sees []MountEntry, so map it to the concrete mount
+	// variants accepted by the manifest decoder.
+	mounts, err := mountSchema(opts)
+	if err != nil {
+		return nil, err
+	}
+	opts.TypeSchemas[reflect.TypeOf(manifest.MountsInput{})] = mounts
+
+	schema, err := jsonschema.ForType(reflect.TypeOf(manifest.Document{}), opts)
+	if err != nil {
+		return nil, err
+	}
+	schema.Schema = "https://json-schema.org/draft/2020-12/schema"
+	schema.ID = "https://shazow.github.io/virtle/manifest.schema.json"
 	schema.Title = "Virtle manifest"
 	schema.Description = "JSON Schema for the virtle manifest input format emitted by virtle."
-	applyDefaultTags(schema, schema, reflect.TypeOf(manifest.Document{}), map[reflect.Type]bool{})
-	return schema
+	if err := applyDefaultTags(schema, reflect.TypeOf(manifest.Document{})); err != nil {
+		return nil, err
+	}
+	return schema, nil
+}
+
+// GenerateJSON returns the indented JSON encoding of Generate.
+func GenerateJSON() ([]byte, error) {
+	schema, err := Generate()
+	if err != nil {
+		return nil, err
+	}
+	data, err := json.MarshalIndent(schema, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(data, '\n'), nil
+}
+
+func mountSchema(opts *jsonschema.ForOptions) (*jsonschema.Schema, error) {
+	var variants []*jsonschema.Schema
+	for _, variant := range []any{
+		manifest.VirtioFSMountInput{},
+		manifest.NinePMountInput{},
+		manifest.ImageMountInput{},
+	} {
+		schema, err := jsonschema.ForType(reflect.TypeOf(variant), opts)
+		if err != nil {
+			return nil, err
+		}
+		variants = append(variants, schema)
+	}
+	return &jsonschema.Schema{
+		Type:  "array",
+		Items: &jsonschema.Schema{OneOf: variants},
+	}, nil
 }
 
 // applyDefaultTags copies each field's `default` struct tag — the same tag the
 // decoder seeds omitted keys from — into the generated schema's default
 // keyword, so defaults are self-documenting without restating them in
 // descriptions.
-func applyDefaultTags(root *jsonschema.Schema, s *jsonschema.Schema, t reflect.Type, visited map[reflect.Type]bool) {
+func applyDefaultTags(s *jsonschema.Schema, t reflect.Type) error {
 	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
-	if t.Kind() != reflect.Struct || s == nil || visited[t] {
-		return
-	}
-	visited[t] = true
-	s = resolveRef(root, s)
-	if s == nil {
-		return
+	if s == nil || t.Kind() != reflect.Struct {
+		return nil
 	}
 
 	for i := 0; i < t.NumField(); i++ {
 		field := t.Field(i)
 		if field.Anonymous {
 			// Embedded fields flatten into the same property set.
-			applyDefaultTags(root, s, field.Type, visited)
+			if err := applyDefaultTags(s, field.Type); err != nil {
+				return err
+			}
 			continue
 		}
-		name, _, _ := strings.Cut(field.Tag.Get("json"), ",")
-		if name == "" || name == "-" || s.Properties == nil {
-			continue
-		}
-		property, ok := s.Properties.Get(name)
-		if !ok || property == nil {
+		property := s.Properties[jsonName(field)]
+		if property == nil {
 			continue
 		}
 		if tag, ok := field.Tag.Lookup("default"); ok {
-			property.Default = defaultValue(field.Type, tag)
+			raw, err := json.Marshal(defaultValue(field.Type, tag))
+			if err != nil {
+				return err
+			}
+			property.Default = raw
 		}
 
 		fieldType := field.Type
-		for fieldType.Kind() == reflect.Pointer || fieldType.Kind() == reflect.Slice {
-			fieldType = fieldType.Elem()
-			if property != nil {
+	deref:
+		for property != nil {
+			switch fieldType.Kind() {
+			case reflect.Pointer:
+				fieldType = fieldType.Elem()
+			case reflect.Slice:
+				fieldType = fieldType.Elem()
 				property = property.Items
+			default:
+				break deref
 			}
 		}
-		applyDefaultTags(root, property, fieldType, visited)
-	}
-}
-
-// resolveRef follows a local $defs reference to its definition.
-func resolveRef(root *jsonschema.Schema, s *jsonschema.Schema) *jsonschema.Schema {
-	if s == nil || s.Ref == "" {
-		return s
-	}
-	name := strings.TrimPrefix(s.Ref, "#/$defs/")
-	if definition, ok := root.Definitions[name]; ok {
-		return definition
+		if err := applyDefaultTags(property, fieldType); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+func jsonName(field reflect.StructField) string {
+	name := field.Tag.Get("json")
+	for i, r := range name {
+		if r == ',' {
+			return name[:i]
+		}
+	}
+	return name
 }
 
 // defaultValue renders a `default` tag with the same type the schema gives the
@@ -130,31 +165,4 @@ func defaultValue(t reflect.Type, tag string) any {
 		}
 	}
 	return tag
-}
-
-// GenerateJSON returns the indented JSON encoding of Generate.
-func GenerateJSON() ([]byte, error) {
-	data, err := json.MarshalIndent(Generate(), "", "  ")
-	if err != nil {
-		return nil, err
-	}
-	return append(data, '\n'), nil
-}
-
-func mountSchema(reflector *jsonschema.Reflector) *jsonschema.Schema {
-	return &jsonschema.Schema{
-		Type: "array",
-		Items: &jsonschema.Schema{OneOf: []*jsonschema.Schema{
-			inlineSchema(reflector, manifest.VirtioFSMountInput{}),
-			inlineSchema(reflector, manifest.NinePMountInput{}),
-			inlineSchema(reflector, manifest.ImageMountInput{}),
-		}},
-	}
-}
-
-func inlineSchema(reflector *jsonschema.Reflector, value any) *jsonschema.Schema {
-	schema := reflector.Reflect(value)
-	schema.Version = ""
-	schema.ID = ""
-	return schema
 }

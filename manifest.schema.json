@@ -1,297 +1,101 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://shazow.github.io/virtle/manifest.schema.json",
-  "$defs": {
-    "BalloonControllerInput": {
-      "properties": {
-        "min_actual": {
-          "type": "integer",
-          "description": "Minimum guest memory target in MiB."
-        },
-        "max_actual": {
-          "type": "integer",
-          "description": "Maximum guest memory target in MiB."
-        },
-        "grow_below_available": {
-          "type": "integer",
-          "description": "Grow guest memory when available guest memory falls below this MiB threshold."
-        },
-        "reclaim_above_available": {
-          "type": "integer",
-          "description": "Reclaim guest memory when available guest memory rises above this MiB threshold."
-        },
-        "step": {
-          "type": "integer",
-          "description": "Memory adjustment step size in MiB."
-        },
-        "poll_interval": {
-          "type": "string",
-          "description": "Delay between balloon controller polling cycles as a duration such as 5s."
-        },
-        "reclaim_holdoff": {
-          "type": "string",
-          "description": "Wait after growing memory before reclaiming again as a duration such as 30s."
-        }
-      },
-      "additionalProperties": false,
-      "type": "object"
+  "type": "object",
+  "properties": {
+    "host_name": {
+      "type": "string",
+      "description": "Guest-visible VM name used for QEMU naming and derived runtime files.",
+      "default": "virtle"
     },
-    "BalloonInput": {
-      "properties": {
-        "enabled": {
-          "type": "boolean",
-          "description": "Enable the virtio memory balloon device."
-        },
-        "deflate_on_oom": {
-          "type": "boolean",
-          "description": "Allow the guest to deflate the balloon under out-of-memory pressure."
-        },
-        "free_page_reporting": {
-          "type": "boolean",
-          "description": "Enable free page reporting for the balloon device; defaults to enabled."
-        },
-        "controller": {
-          "$ref": "#/$defs/BalloonControllerInput",
-          "description": "Optional host-side balloon controller thresholds and polling settings."
-        }
-      },
-      "additionalProperties": false,
-      "type": "object"
+    "working_dir": {
+      "type": "string",
+      "description": "Host working directory used to resolve relative paths in the manifest.",
+      "default": "."
     },
-    "ForwardPort": {
-      "properties": {
-        "proto": {
-          "type": "string",
-          "description": "Transport protocol for the forwarded port."
-        },
-        "from": {
-          "type": "string",
-          "description": "Forwarding direction: host or guest."
-        },
-        "host": {
-          "type": "string",
-          "description": "Host endpoint address in address:port form."
-        },
-        "guest": {
-          "type": "string",
-          "description": "Guest endpoint address in address:port form."
-        }
-      },
-      "additionalProperties": false,
-      "type": "object"
+    "state_dir": {
+      "type": "string",
+      "description": "Host directory used for runtime state such as locks sockets and generated files.",
+      "default": ".virtle"
     },
-    "GraphicsInput": {
-      "properties": {
-        "backend": {
-          "type": "string",
-          "description": "Display backend; headless disables graphical output."
-        }
-      },
-      "additionalProperties": false,
-      "type": "object"
-    },
-    "HostInput": {
+    "host": {
+      "type": "object",
       "properties": {},
-      "additionalProperties": false,
-      "type": "object"
+      "description": "Host platform facts used while resolving QEMU defaults.",
+      "additionalProperties": false
     },
-    "HotplugInput": {
+    "qemu": {
+      "type": "object",
       "properties": {
-        "mounts": {
-          "items": {
-            "oneOf": [
-              {
-                "$defs": {
-                  "VirtioFSInput": {
-                    "properties": {
-                      "socket": {
-                        "type": "string",
-                        "description": "Virtiofs daemon socket path relative to the runtime state directory unless absolute."
-                      },
-                      "bin": {
-                        "type": "string",
-                        "description": "Virtiofs daemon executable path or wrapper script."
-                      },
-                      "args": {
-                        "items": {
-                          "type": "string"
-                        },
-                        "type": "array",
-                        "description": "Arguments for the virtiofs daemon command."
-                      }
-                    },
-                    "additionalProperties": false,
-                    "type": "object"
-                  }
-                },
-                "properties": {
-                  "type": {
-                    "type": "string",
-                    "description": "Mount kind; must be virtiofs for this entry."
-                  },
-                  "tag": {
-                    "type": "string",
-                    "description": "Stable QEMU mount tag or device identifier."
-                  },
-                  "source": {
-                    "type": "string",
-                    "description": "Host path or image path backing this mount."
-                  },
-                  "read_only": {
-                    "type": "boolean",
-                    "description": "Attach the mount or image read-only."
-                  },
-                  "target": {
-                    "type": "string",
-                    "description": "Optional guest mount target used for hotplug guest mount commands."
-                  },
-                  "virtiofs": {
-                    "$ref": "#/$defs/VirtioFSInput",
-                    "description": "Virtiofs daemon socket and command settings."
-                  }
-                },
-                "additionalProperties": false,
-                "type": "object"
-              },
-              {
-                "$defs": {
-                  "NinePInput": {
-                    "properties": {
-                      "security_model": {
-                        "type": "string",
-                        "description": "QEMU 9p security model."
-                      }
-                    },
-                    "additionalProperties": false,
-                    "type": "object"
-                  }
-                },
-                "properties": {
-                  "type": {
-                    "type": "string",
-                    "description": "Mount kind; must be 9p for this entry."
-                  },
-                  "tag": {
-                    "type": "string",
-                    "description": "Stable QEMU mount tag or device identifier."
-                  },
-                  "source": {
-                    "type": "string",
-                    "description": "Host path or image path backing this mount."
-                  },
-                  "read_only": {
-                    "type": "boolean",
-                    "description": "Attach the mount or image read-only."
-                  },
-                  "9p": {
-                    "$ref": "#/$defs/NinePInput",
-                    "description": "9p-specific mount options."
-                  }
-                },
-                "additionalProperties": false,
-                "type": "object"
-              },
-              {
-                "$defs": {
-                  "ImageInput": {
-                    "properties": {
-                      "size": {
-                        "type": "integer",
-                        "description": "Image size in MiB when creating the image."
-                      },
-                      "fs": {
-                        "type": "string",
-                        "description": "Filesystem type used when creating the image."
-                      },
-                      "format": {
-                        "type": "string",
-                        "description": "QEMU image format such as raw or qcow2."
-                      },
-                      "create": {
-                        "type": "boolean",
-                        "description": "Create and format the image if it does not exist."
-                      },
-                      "label": {
-                        "type": "string",
-                        "description": "Optional filesystem label used when creating the image."
-                      },
-                      "direct": {
-                        "type": "boolean",
-                        "description": "Use direct I/O cache settings for the block device."
-                      },
-                      "serial": {
-                        "type": "string",
-                        "description": "Optional disk serial exposed to the guest."
-                      }
-                    },
-                    "additionalProperties": false,
-                    "type": "object"
-                  }
-                },
-                "properties": {
-                  "type": {
-                    "type": "string",
-                    "description": "Mount kind; must be image for this entry."
-                  },
-                  "source": {
-                    "type": "string",
-                    "description": "Host disk image path."
-                  },
-                  "read_only": {
-                    "type": "boolean",
-                    "description": "Attach the image read-only."
-                  },
-                  "image": {
-                    "$ref": "#/$defs/ImageInput",
-                    "description": "Disk image creation and format settings."
-                  }
-                },
-                "additionalProperties": false,
-                "type": "object"
-              }
-            ]
-          },
-          "type": "array",
-          "description": "Mount devices available for later hotplug attach or detach."
-        },
-        "networks": {
-          "items": {
-            "$ref": "#/$defs/NetworkInput"
-          },
-          "type": "array",
-          "description": "Network devices available for later hotplug attach or detach."
-        }
-      },
-      "additionalProperties": false,
-      "type": "object"
-    },
-    "KernelInput": {
-      "properties": {
-        "path": {
-          "type": "string",
-          "description": "Path to the guest kernel image."
-        },
-        "initrd_path": {
-          "type": "string",
-          "description": "Path to the guest initrd image."
-        },
-        "params": {
+        "exec": {
+          "type": [
+            "null",
+            "array"
+          ],
           "items": {
             "type": "string"
           },
-          "type": "array",
-          "description": "Additional kernel command-line parameters appended after virtle defaults."
+          "description": "Command template used to launch QEMU; the first element is the QEMU binary."
         },
-        "serial": {
+        "fwd_tunnel_exec": {
+          "type": [
+            "null",
+            "array"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Command template QEMU uses to forward host or guest ports."
+        },
+        "user": {
           "type": "string",
-          "description": "Serial console mode: off print or console.",
-          "default": "off"
+          "description": "Host user used for QEMU-related process policy when supported."
+        },
+        "seccomp": {
+          "type": "boolean",
+          "description": "Enable QEMU seccomp sandboxing."
+        },
+        "machine_options": {
+          "type": "object",
+          "description": "Additional QEMU machine options merged into the resolved machine option list.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "qmp_socket": {
+          "type": "string",
+          "description": "Path to the QEMU Machine Protocol socket relative to the runtime state directory unless absolute.",
+          "default": "qmp.sock"
+        },
+        "guest_agent_socket": {
+          "type": "string",
+          "description": "Path to the QEMU guest agent socket relative to the runtime state directory unless absolute.",
+          "default": "qga.sock"
+        },
+        "guest_default_timeout": {
+          "type": "string",
+          "description": "Timeout for guest agent commands virtle issues itself such as file writes and workspace mounts. Guest-exec requests sent through the control socket carry their own timeout. Zero disables the timeout.",
+          "default": "30s"
+        },
+        "shutdown_exec": {
+          "type": [
+            "null",
+            "array"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Optional guest command tuple invoked through QGA to shut down the VM gracefully."
+        },
+        "shutdown_timeout": {
+          "type": "string",
+          "description": "Duration to wait for graceful shutdown before forcing QEMU to quit",
+          "default": "90s"
         }
       },
-      "additionalProperties": false,
-      "type": "object"
+      "description": "QEMU executable and host-side socket settings.",
+      "additionalProperties": false
     },
-    "MachineInput": {
+    "machine": {
+      "type": "object",
       "properties": {
         "type": {
           "type": "string",
@@ -316,312 +120,70 @@
           "description": "QEMU CPU model string."
         },
         "kvm": {
-          "type": "boolean",
+          "type": [
+            "null",
+            "boolean"
+          ],
           "description": "Whether QEMU should enable KVM acceleration when supported."
         }
       },
-      "additionalProperties": false,
-      "type": "object"
-    },
-    "NetworkInput": {
-      "properties": {
-        "id": {
-          "type": "string",
-          "description": "QEMU network device identifier."
-        },
-        "type": {
-          "type": "string",
-          "description": "Network backend type."
-        },
-        "mac": {
-          "type": "string",
-          "description": "Guest network interface MAC address."
-        },
-        "forward": {
-          "items": {
-            "$ref": "#/$defs/ForwardPort"
-          },
-          "type": "array",
-          "description": "Port forwarding rules for this network backend."
-        }
-      },
-      "additionalProperties": false,
-      "type": "object"
-    },
-    "NotificationsInput": {
-      "properties": {
-        "exec": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array",
-          "description": "Host command template invoked for enabled notification states."
-        },
-        "states": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array",
-          "description": "Notification state names that should trigger the command."
-        }
-      },
-      "additionalProperties": false,
-      "type": "object"
-    },
-    "QEMUInput": {
-      "properties": {
-        "exec": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array",
-          "description": "Command template used to launch QEMU; the first element is the QEMU binary."
-        },
-        "fwd_tunnel_exec": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array",
-          "description": "Command template QEMU uses to forward host or guest ports."
-        },
-        "user": {
-          "type": "string",
-          "description": "Host user used for QEMU-related process policy when supported."
-        },
-        "seccomp": {
-          "type": "boolean",
-          "description": "Enable QEMU seccomp sandboxing."
-        },
-        "machine_options": {
-          "additionalProperties": {
-            "type": "string"
-          },
-          "type": "object",
-          "description": "Additional QEMU machine options merged into the resolved machine option list."
-        },
-        "qmp_socket": {
-          "type": "string",
-          "description": "Path to the QEMU Machine Protocol socket relative to the runtime state directory unless absolute.",
-          "default": "qmp.sock"
-        },
-        "guest_agent_socket": {
-          "type": "string",
-          "description": "Path to the QEMU guest agent socket relative to the runtime state directory unless absolute.",
-          "default": "qga.sock"
-        },
-        "guest_default_timeout": {
-          "type": "string",
-          "description": "Timeout for guest agent commands virtle issues itself such as file writes and workspace mounts. Guest-exec requests sent through the control socket carry their own timeout. Zero disables the timeout.",
-          "default": "30s"
-        },
-        "shutdown_exec": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array",
-          "description": "Optional guest command tuple invoked through QGA to shut down the VM gracefully."
-        },
-        "shutdown_timeout": {
-          "type": "string",
-          "description": "Duration to wait for graceful shutdown before forcing QEMU to quit",
-          "default": "90s"
-        }
-      },
-      "additionalProperties": false,
-      "type": "object"
-    },
-    "RangeInput": {
-      "properties": {
-        "min": {
-          "type": "integer",
-          "description": "Inclusive minimum value."
-        },
-        "max": {
-          "type": "integer",
-          "description": "Inclusive maximum value."
-        }
-      },
-      "additionalProperties": false,
-      "type": "object"
-    },
-    "RunInput": {
-      "properties": {
-        "exec": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array",
-          "description": "Host command template to start before QEMU."
-        },
-        "vars": {
-          "type": "object",
-          "description": "Template variables made available to this run command."
-        }
-      },
-      "additionalProperties": false,
-      "type": "object"
-    },
-    "SSHInput": {
-      "properties": {
-        "exec": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array",
-          "description": "SSH command template used to attach to the guest."
-        },
-        "user": {
-          "type": "string",
-          "description": "Guest SSH username.",
-          "default": "agent"
-        },
-        "ready_socket": {
-          "type": "string",
-          "description": "Guest readiness socket path relative to the runtime state directory unless absolute."
-        },
-        "retry_delay": {
-          "type": "string",
-          "description": "Delay between SSH readiness or connection retry attempts; must be greater than zero.",
-          "default": "500ms"
-        },
-        "autoprovision": {
-          "type": "boolean",
-          "description": "Automatically provision an SSH key after authentication failure."
-        }
-      },
-      "additionalProperties": false,
-      "type": "object"
-    },
-    "VSockInput": {
-      "properties": {
-        "cid_range": {
-          "$ref": "#/$defs/RangeInput",
-          "description": "Inclusive range of vsock CIDs virtle may allocate at launch."
-        }
-      },
-      "additionalProperties": false,
-      "type": "object"
-    },
-    "WorkspaceInput": {
-      "properties": {
-        "guest_dir": {
-          "type": "string",
-          "description": "Guest workspace directory used in templates."
-        },
-        "host_dir": {
-          "type": "string",
-          "description": "Host workspace directory used in templates."
-        },
-        "mount_cwd": {
-          "type": "boolean",
-          "description": "Mount the current working directory into the guest after launch."
-        }
-      },
-      "additionalProperties": false,
-      "type": "object"
-    },
-    "WriteFileInput": {
-      "properties": {
-        "guest_path": {
-          "type": "string",
-          "description": "Absolute guest path to write."
-        },
-        "chown": {
-          "type": "string",
-          "description": "Optional guest owner and group in owner:group form."
-        },
-        "text": {
-          "type": "string",
-          "description": "Inline text content to write to the guest path."
-        },
-        "mode": {
-          "type": "string",
-          "description": "Optional file mode matching ^0?[0-7]{3}$."
-        },
-        "overwrite": {
-          "type": "boolean",
-          "description": "Overwrite an existing guest file."
-        },
-        "follow_links": {
-          "type": "boolean",
-          "description": "Follow symlinks when reading source content from the host."
-        },
-        "write_back": {
-          "type": "boolean",
-          "description": "Copy guest changes back to the host source path during teardown."
-        },
-        "source": {
-          "type": "string",
-          "description": "Host source path for file content."
-        }
-      },
-      "additionalProperties": false,
-      "type": "object"
-    }
-  },
-  "properties": {
-    "host_name": {
-      "type": "string",
-      "description": "Guest-visible VM name used for QEMU naming and derived runtime files.",
-      "default": "virtle"
-    },
-    "working_dir": {
-      "type": "string",
-      "description": "Host working directory used to resolve relative paths in the manifest.",
-      "default": "."
-    },
-    "state_dir": {
-      "type": "string",
-      "description": "Host directory used for runtime state such as locks sockets and generated files.",
-      "default": ".virtle"
-    },
-    "host": {
-      "$ref": "#/$defs/HostInput",
-      "description": "Host platform facts used while resolving QEMU defaults."
-    },
-    "qemu": {
-      "$ref": "#/$defs/QEMUInput",
-      "description": "QEMU executable and host-side socket settings."
-    },
-    "machine": {
-      "$ref": "#/$defs/MachineInput",
-      "description": "Virtual machine type CPU memory and acceleration settings."
+      "description": "Virtual machine type CPU memory and acceleration settings.",
+      "additionalProperties": false
     },
     "kernel": {
-      "$ref": "#/$defs/KernelInput",
-      "description": "Guest kernel initrd and kernel command-line settings."
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Path to the guest kernel image."
+        },
+        "initrd_path": {
+          "type": "string",
+          "description": "Path to the guest initrd image."
+        },
+        "params": {
+          "type": [
+            "null",
+            "array"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Additional kernel command-line parameters appended after virtle defaults."
+        },
+        "serial": {
+          "type": "string",
+          "description": "Serial console mode: off print or console.",
+          "default": "off"
+        }
+      },
+      "description": "Guest kernel initrd and kernel command-line settings.",
+      "required": [
+        "path",
+        "initrd_path"
+      ],
+      "additionalProperties": false
     },
     "graphics": {
-      "$ref": "#/$defs/GraphicsInput",
-      "description": "Graphical display backend settings."
+      "type": [
+        "null",
+        "object"
+      ],
+      "properties": {
+        "backend": {
+          "type": "string",
+          "description": "Display backend; headless disables graphical output."
+        }
+      },
+      "description": "Graphical display backend settings.",
+      "additionalProperties": false
     },
     "mounts": {
+      "type": "array",
       "items": {
         "oneOf": [
           {
-            "$defs": {
-              "VirtioFSInput": {
-                "properties": {
-                  "socket": {
-                    "type": "string",
-                    "description": "Virtiofs daemon socket path relative to the runtime state directory unless absolute."
-                  },
-                  "bin": {
-                    "type": "string",
-                    "description": "Virtiofs daemon executable path or wrapper script."
-                  },
-                  "args": {
-                    "items": {
-                      "type": "string"
-                    },
-                    "type": "array",
-                    "description": "Arguments for the virtiofs daemon command."
-                  }
-                },
-                "additionalProperties": false,
-                "type": "object"
-              }
-            },
+            "type": "object",
             "properties": {
               "type": {
                 "type": "string",
@@ -644,26 +206,39 @@
                 "description": "Optional guest mount target used for hotplug guest mount commands."
               },
               "virtiofs": {
-                "$ref": "#/$defs/VirtioFSInput",
-                "description": "Virtiofs daemon socket and command settings."
-              }
-            },
-            "additionalProperties": false,
-            "type": "object"
-          },
-          {
-            "$defs": {
-              "NinePInput": {
+                "type": "object",
                 "properties": {
-                  "security_model": {
+                  "socket": {
                     "type": "string",
-                    "description": "QEMU 9p security model."
+                    "description": "Virtiofs daemon socket path relative to the runtime state directory unless absolute."
+                  },
+                  "bin": {
+                    "type": "string",
+                    "description": "Virtiofs daemon executable path or wrapper script."
+                  },
+                  "args": {
+                    "type": [
+                      "null",
+                      "array"
+                    ],
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Arguments for the virtiofs daemon command."
                   }
                 },
-                "additionalProperties": false,
-                "type": "object"
+                "description": "Virtiofs daemon socket and command settings.",
+                "additionalProperties": false
               }
             },
+            "required": [
+              "type",
+              "tag"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
             "properties": {
               "type": {
                 "type": "string",
@@ -682,16 +257,40 @@
                 "description": "Attach the mount or image read-only."
               },
               "9p": {
-                "$ref": "#/$defs/NinePInput",
-                "description": "9p-specific mount options."
+                "type": "object",
+                "properties": {
+                  "security_model": {
+                    "type": "string",
+                    "description": "QEMU 9p security model."
+                  }
+                },
+                "description": "9p-specific mount options.",
+                "additionalProperties": false
               }
             },
-            "additionalProperties": false,
-            "type": "object"
+            "required": [
+              "type",
+              "tag"
+            ],
+            "additionalProperties": false
           },
           {
-            "$defs": {
-              "ImageInput": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "description": "Mount kind; must be image for this entry."
+              },
+              "source": {
+                "type": "string",
+                "description": "Host disk image path."
+              },
+              "read_only": {
+                "type": "boolean",
+                "description": "Attach the image read-only."
+              },
+              "image": {
+                "type": "object",
                 "properties": {
                   "size": {
                     "type": "integer",
@@ -710,7 +309,10 @@
                     "description": "Create and format the image if it does not exist."
                   },
                   "label": {
-                    "type": "string",
+                    "type": [
+                      "null",
+                      "string"
+                    ],
                     "description": "Optional filesystem label used when creating the image."
                   },
                   "direct": {
@@ -718,88 +320,590 @@
                     "description": "Use direct I/O cache settings for the block device."
                   },
                   "serial": {
-                    "type": "string",
+                    "type": [
+                      "null",
+                      "string"
+                    ],
                     "description": "Optional disk serial exposed to the guest."
                   }
                 },
-                "additionalProperties": false,
-                "type": "object"
+                "description": "Disk image creation and format settings.",
+                "additionalProperties": false
               }
             },
-            "properties": {
-              "type": {
-                "type": "string",
-                "description": "Mount kind; must be image for this entry."
-              },
-              "source": {
-                "type": "string",
-                "description": "Host disk image path."
-              },
-              "read_only": {
-                "type": "boolean",
-                "description": "Attach the image read-only."
-              },
-              "image": {
-                "$ref": "#/$defs/ImageInput",
-                "description": "Disk image creation and format settings."
-              }
-            },
-            "additionalProperties": false,
-            "type": "object"
+            "required": [
+              "type",
+              "source"
+            ],
+            "additionalProperties": false
           }
         ]
       },
-      "type": "array",
       "description": "Storage and filesystem devices attached at launch."
     },
     "workspace": {
-      "$ref": "#/$defs/WorkspaceInput",
-      "description": "Workspace directories made available to guest-side templates and helpers."
+      "type": "object",
+      "properties": {
+        "guest_dir": {
+          "type": "string",
+          "description": "Guest workspace directory used in templates."
+        },
+        "host_dir": {
+          "type": "string",
+          "description": "Host workspace directory used in templates."
+        },
+        "mount_cwd": {
+          "type": "boolean",
+          "description": "Mount the current working directory into the guest after launch."
+        }
+      },
+      "description": "Workspace directories made available to guest-side templates and helpers.",
+      "additionalProperties": false
     },
     "networks": {
+      "type": [
+        "null",
+        "array"
+      ],
       "items": {
-        "$ref": "#/$defs/NetworkInput"
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "QEMU network device identifier."
+          },
+          "type": {
+            "type": "string",
+            "description": "Network backend type."
+          },
+          "mac": {
+            "type": "string",
+            "description": "Guest network interface MAC address."
+          },
+          "forward": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "proto": {
+                  "type": "string",
+                  "description": "Transport protocol for the forwarded port."
+                },
+                "from": {
+                  "type": "string",
+                  "description": "Forwarding direction: host or guest."
+                },
+                "host": {
+                  "type": "string",
+                  "description": "Host endpoint address in address:port form."
+                },
+                "guest": {
+                  "type": "string",
+                  "description": "Guest endpoint address in address:port form."
+                }
+              },
+              "required": [
+                "proto",
+                "from",
+                "host",
+                "guest"
+              ],
+              "additionalProperties": false
+            },
+            "description": "Port forwarding rules for this network backend."
+          }
+        },
+        "additionalProperties": false
       },
-      "type": "array",
       "description": "Network devices and port forwards attached at launch."
     },
     "balloon": {
-      "$ref": "#/$defs/BalloonInput",
-      "description": "Virtio memory balloon device and optional controller settings."
+      "type": [
+        "null",
+        "object"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable the virtio memory balloon device."
+        },
+        "deflate_on_oom": {
+          "type": "boolean",
+          "description": "Allow the guest to deflate the balloon under out-of-memory pressure."
+        },
+        "free_page_reporting": {
+          "type": [
+            "null",
+            "boolean"
+          ],
+          "description": "Enable free page reporting for the balloon device; defaults to enabled."
+        },
+        "controller": {
+          "type": [
+            "null",
+            "object"
+          ],
+          "properties": {
+            "min_actual": {
+              "type": "integer",
+              "description": "Minimum guest memory target in MiB."
+            },
+            "max_actual": {
+              "type": "integer",
+              "description": "Maximum guest memory target in MiB."
+            },
+            "grow_below_available": {
+              "type": "integer",
+              "description": "Grow guest memory when available guest memory falls below this MiB threshold."
+            },
+            "reclaim_above_available": {
+              "type": "integer",
+              "description": "Reclaim guest memory when available guest memory rises above this MiB threshold."
+            },
+            "step": {
+              "type": "integer",
+              "description": "Memory adjustment step size in MiB."
+            },
+            "poll_interval": {
+              "type": "string",
+              "description": "Delay between balloon controller polling cycles as a duration such as 5s."
+            },
+            "reclaim_holdoff": {
+              "type": "string",
+              "description": "Wait after growing memory before reclaiming again as a duration such as 30s."
+            }
+          },
+          "description": "Optional host-side balloon controller thresholds and polling settings.",
+          "additionalProperties": false
+        }
+      },
+      "description": "Virtio memory balloon device and optional controller settings.",
+      "additionalProperties": false
     },
     "ssh": {
-      "$ref": "#/$defs/SSHInput",
-      "description": "SSH command and readiness settings for attaching to the guest."
+      "type": "object",
+      "properties": {
+        "exec": {
+          "type": [
+            "null",
+            "array"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "SSH command template used to attach to the guest."
+        },
+        "user": {
+          "type": "string",
+          "description": "Guest SSH username.",
+          "default": "agent"
+        },
+        "ready_socket": {
+          "type": "string",
+          "description": "Guest readiness socket path relative to the runtime state directory unless absolute."
+        },
+        "retry_delay": {
+          "type": "string",
+          "description": "Delay between SSH readiness or connection retry attempts; must be greater than zero.",
+          "default": "500ms"
+        },
+        "autoprovision": {
+          "type": "boolean",
+          "description": "Automatically provision an SSH key after authentication failure."
+        }
+      },
+      "description": "SSH command and readiness settings for attaching to the guest.",
+      "additionalProperties": false
     },
     "vsock": {
-      "$ref": "#/$defs/VSockInput",
-      "description": "Allowed runtime vsock CID allocation range."
+      "type": "object",
+      "properties": {
+        "cid_range": {
+          "type": "object",
+          "properties": {
+            "min": {
+              "type": "integer",
+              "description": "Inclusive minimum value."
+            },
+            "max": {
+              "type": "integer",
+              "description": "Inclusive maximum value."
+            }
+          },
+          "description": "Inclusive range of vsock CIDs virtle may allocate at launch.",
+          "additionalProperties": false
+        }
+      },
+      "description": "Allowed runtime vsock CID allocation range.",
+      "additionalProperties": false
     },
     "write_files": {
+      "type": [
+        "null",
+        "array"
+      ],
       "items": {
-        "$ref": "#/$defs/WriteFileInput"
+        "type": "object",
+        "properties": {
+          "guest_path": {
+            "type": "string",
+            "description": "Absolute guest path to write."
+          },
+          "chown": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "Optional guest owner and group in owner:group form."
+          },
+          "text": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "Inline text content to write to the guest path."
+          },
+          "mode": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "Optional file mode matching ^0?[0-7]{3}$."
+          },
+          "overwrite": {
+            "type": [
+              "null",
+              "boolean"
+            ],
+            "description": "Overwrite an existing guest file."
+          },
+          "follow_links": {
+            "type": [
+              "null",
+              "boolean"
+            ],
+            "description": "Follow symlinks when reading source content from the host."
+          },
+          "write_back": {
+            "type": [
+              "null",
+              "boolean"
+            ],
+            "description": "Copy guest changes back to the host source path during teardown."
+          },
+          "source": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "Host source path for file content."
+          }
+        },
+        "required": [
+          "guest_path"
+        ],
+        "additionalProperties": false
       },
-      "type": "array",
       "description": "Files copied into or synchronized with the guest through qemu guest agent."
     },
     "notifications": {
-      "$ref": "#/$defs/NotificationsInput",
-      "description": "Host command hooks invoked for selected runtime notification states."
+      "type": "object",
+      "properties": {
+        "exec": {
+          "type": [
+            "null",
+            "array"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Host command template invoked for enabled notification states."
+        },
+        "states": {
+          "type": [
+            "null",
+            "array"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Notification state names that should trigger the command."
+        }
+      },
+      "description": "Host command hooks invoked for selected runtime notification states.",
+      "additionalProperties": false
     },
     "run": {
+      "type": [
+        "null",
+        "array"
+      ],
       "items": {
-        "$ref": "#/$defs/RunInput"
+        "type": "object",
+        "properties": {
+          "exec": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Host command template to start before QEMU."
+          },
+          "vars": {
+            "type": "object",
+            "description": "Template variables made available to this run command.",
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "exec"
+        ],
+        "additionalProperties": false
       },
-      "type": "array",
       "description": "Host-side processes started before QEMU and stopped during teardown."
     },
     "hotplug": {
-      "$ref": "#/$defs/HotplugInput",
-      "description": "Devices that may be attached or detached after launch."
+      "type": "object",
+      "properties": {
+        "mounts": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "description": "Mount kind; must be virtiofs for this entry."
+                  },
+                  "tag": {
+                    "type": "string",
+                    "description": "Stable QEMU mount tag or device identifier."
+                  },
+                  "source": {
+                    "type": "string",
+                    "description": "Host path or image path backing this mount."
+                  },
+                  "read_only": {
+                    "type": "boolean",
+                    "description": "Attach the mount or image read-only."
+                  },
+                  "target": {
+                    "type": "string",
+                    "description": "Optional guest mount target used for hotplug guest mount commands."
+                  },
+                  "virtiofs": {
+                    "type": "object",
+                    "properties": {
+                      "socket": {
+                        "type": "string",
+                        "description": "Virtiofs daemon socket path relative to the runtime state directory unless absolute."
+                      },
+                      "bin": {
+                        "type": "string",
+                        "description": "Virtiofs daemon executable path or wrapper script."
+                      },
+                      "args": {
+                        "type": [
+                          "null",
+                          "array"
+                        ],
+                        "items": {
+                          "type": "string"
+                        },
+                        "description": "Arguments for the virtiofs daemon command."
+                      }
+                    },
+                    "description": "Virtiofs daemon socket and command settings.",
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "type",
+                  "tag"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "description": "Mount kind; must be 9p for this entry."
+                  },
+                  "tag": {
+                    "type": "string",
+                    "description": "Stable QEMU mount tag or device identifier."
+                  },
+                  "source": {
+                    "type": "string",
+                    "description": "Host path or image path backing this mount."
+                  },
+                  "read_only": {
+                    "type": "boolean",
+                    "description": "Attach the mount or image read-only."
+                  },
+                  "9p": {
+                    "type": "object",
+                    "properties": {
+                      "security_model": {
+                        "type": "string",
+                        "description": "QEMU 9p security model."
+                      }
+                    },
+                    "description": "9p-specific mount options.",
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "type",
+                  "tag"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "description": "Mount kind; must be image for this entry."
+                  },
+                  "source": {
+                    "type": "string",
+                    "description": "Host disk image path."
+                  },
+                  "read_only": {
+                    "type": "boolean",
+                    "description": "Attach the image read-only."
+                  },
+                  "image": {
+                    "type": "object",
+                    "properties": {
+                      "size": {
+                        "type": "integer",
+                        "description": "Image size in MiB when creating the image."
+                      },
+                      "fs": {
+                        "type": "string",
+                        "description": "Filesystem type used when creating the image."
+                      },
+                      "format": {
+                        "type": "string",
+                        "description": "QEMU image format such as raw or qcow2."
+                      },
+                      "create": {
+                        "type": "boolean",
+                        "description": "Create and format the image if it does not exist."
+                      },
+                      "label": {
+                        "type": [
+                          "null",
+                          "string"
+                        ],
+                        "description": "Optional filesystem label used when creating the image."
+                      },
+                      "direct": {
+                        "type": "boolean",
+                        "description": "Use direct I/O cache settings for the block device."
+                      },
+                      "serial": {
+                        "type": [
+                          "null",
+                          "string"
+                        ],
+                        "description": "Optional disk serial exposed to the guest."
+                      }
+                    },
+                    "description": "Disk image creation and format settings.",
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "type",
+                  "source"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "description": "Mount devices available for later hotplug attach or detach."
+        },
+        "networks": {
+          "type": [
+            "null",
+            "array"
+          ],
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "QEMU network device identifier."
+              },
+              "type": {
+                "type": "string",
+                "description": "Network backend type."
+              },
+              "mac": {
+                "type": "string",
+                "description": "Guest network interface MAC address."
+              },
+              "forward": {
+                "type": [
+                  "null",
+                  "array"
+                ],
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "proto": {
+                      "type": "string",
+                      "description": "Transport protocol for the forwarded port."
+                    },
+                    "from": {
+                      "type": "string",
+                      "description": "Forwarding direction: host or guest."
+                    },
+                    "host": {
+                      "type": "string",
+                      "description": "Host endpoint address in address:port form."
+                    },
+                    "guest": {
+                      "type": "string",
+                      "description": "Guest endpoint address in address:port form."
+                    }
+                  },
+                  "required": [
+                    "proto",
+                    "from",
+                    "host",
+                    "guest"
+                  ],
+                  "additionalProperties": false
+                },
+                "description": "Port forwarding rules for this network backend."
+              }
+            },
+            "additionalProperties": false
+          },
+          "description": "Network devices available for later hotplug attach or detach."
+        }
+      },
+      "description": "Devices that may be attached or detached after launch.",
+      "additionalProperties": false
     }
   },
-  "additionalProperties": false,
-  "type": "object",
+  "$id": "https://shazow.github.io/virtle/manifest.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Virtle manifest",
-  "description": "JSON Schema for the virtle manifest input format emitted by virtle."
+  "description": "JSON Schema for the virtle manifest input format emitted by virtle.",
+  "required": [
+    "kernel"
+  ],
+  "additionalProperties": false
 }

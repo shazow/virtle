@@ -406,7 +406,7 @@
         },
         "guest_default_timeout": {
           "type": "string",
-          "description": "Timeout for each QEMU guest agent command as a duration such as 30s. Zero disables the timeout and omitting the key uses the default of 30s."
+          "description": "Timeout for guest agent commands virtle issues itself such as file writes and workspace mounts as a duration like 30s. Guest-exec requests sent through the control socket carry their own timeout and are not affected. Zero disables the timeout and omitting the key uses the default of 30s."
         },
         "shutdown_exec": {
           "items": {

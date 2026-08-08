@@ -67,9 +67,9 @@ sections onto the new API:
 | `[network]` forwards | `vm.Spec.Ports` |
 | `[write_files]` | `vm.Spec.Files` |
 | volumes / persistence / state dirs | `vm.Spec.Disks`, `vm.Spec.Dir` |
-| `[qemu]` (exec, machine_options, seccomp, sockets, devices, passthrough args) | `qemu.Backend` fields |
+| `[qemu]` (exec, machine_options, seccomp, sockets, devices, passthrough args) | `qemu.Config` fields |
 | `[hotplug]` | CLI-held device set, applied via `backend.DeviceAttacher` |
-| balloon device/controller config | `qemu.Backend` + `backend.MemoryResizer` policy loop in the CLI layer |
+| balloon device/controller config | `qemu.Config` + `backend.MemoryResizer` policy loop in the CLI layer |
 | `[run]` host helper commands | CLI layer (session orchestration, per D5) |
 | `[ssh]`, autoprovision | CLI layer, over `Guest` file operations |
 | `[notifications]` | CLI layer |
@@ -150,12 +150,12 @@ Target: guests run the **virtle guest daemon** (`virtle guest`, package
 `./guest`) over vsock or serial socket; QGA becomes optional and eventually
 unsupported.
 
-Transition (matches D7 in library-api.md):
+Transition (matches the constructor decision in library-api.md):
 
-1. `backend/qemu` ships both `vm.Guest` implementations: the guest-daemon client
-   (preferred) and the QGA adapter (fallback, equivalent to today).
-   `RemoteControl()` returns whichever the spec/backend config selects —
-   default: daemon if configured into the guest, else QGA.
+1. `backend/qemu` ships both `vm.Guest` implementations, selected by
+   constructor: `BackendWithQGA` (the QGA adapter, equivalent to today)
+   first, `BackendWithGuest` (the guest-daemon client) once the daemon
+   lands. `RemoteControl()` returns whichever the chosen constructor wired.
 2. Guest images add the `virtle` binary (or a stripped `virtle-guest`) to
    their init; getting-started docs gain a section on this.
 3. After a deprecation window, the QGA adapter is removed from `backend/qemu` and
@@ -173,9 +173,9 @@ to the supported API:
 | Reached for today | Supported replacement |
 |---|---|
 | `internal/manifest` `DecodeDocumentBytes` → `doc.Manifest()` | `manifest.Load(r) (*vm.Spec, backend.Backend, error)` |
-| `internal/manager` `LaunchWithOptions` | `backend.Start(ctx, spec)` + CLI-layer composition |
+| `internal/manager` `LaunchWithOptions` | `b.Start(ctx, spec)` on a constructed backend + CLI-layer composition |
 | `internal/manager/launch` `BuildPlan` / `AcquireCID` / `WaitForSockets` / `ProcessSet` | `backend/qemu` internals — no longer consumer-facing; the plan/CID/socket dance happens inside `Backend.Start` |
-| `internal/manager/qemu.go` argv building | `qemu.Backend` fields; argv construction is private |
+| `internal/manager/qemu.go` argv building | `qemu.Config` fields; argv construction is private |
 | `internal/executor` `Runner` / `Command` / `Group` | private to backends; consumers hold a `backend.Instance`, not a process |
 | `internal/qga` client | `inst.RemoteControl()` → `vm.Guest` |
 | `internal/qmpclient` (suspend/migration) | `backend.Suspender` |
@@ -192,9 +192,9 @@ readable. No compatibility promise before v1.
 
 | Phase | What lands | Consumer impact |
 |---|---|---|
-| 1 | `vm` core types + `backend/qemu` backend wrapping existing internals; CLI rewired onto them | None intended (CLI/manifest/control byte-compatible); suspend-state version marker introduced |
+| 1 | `vm` + `backend` + `units` core packages, `backend/qemu` wrapping existing internals; CLI rewired onto them | None intended (CLI/manifest/control byte-compatible); suspend-state version marker introduced |
 | 2 | `manifest.Load` public; examples + README library section | New Go API available |
-| 3 | `guest` daemon + client; `virtle guest` subcommand; `RemoteControl` prefers daemon | Additive; image builders may opt in |
+| 3 | `guest` daemon + client; `virtle guest` subcommand; `BackendWithGuest` constructor added | Additive; image builders may opt in |
 | 4 | QGA fallback deprecated, then removed | Image builders must ship the guest daemon |
 | 5 | Control-socket guest-proxying revisited; state relocation if desired | Scripted socket consumers, if any changes are chosen |
 

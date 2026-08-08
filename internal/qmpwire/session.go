@@ -114,24 +114,18 @@ type Session struct {
 	broken error
 }
 
-// Do runs one operation with the connection deadline set to the earlier of
-// the RPC liveness bound and the ctx deadline.
+// Do runs one operation with the connection deadline set to the RPC liveness
+// bound. The ctx deadline is enforced by the cancellation interrupt, which
+// runs strictly after ctx is marked done, so a failure is always attributable
+// to exactly one of the two bounds.
 func (s *Session) Do(ctx context.Context, fn func() error) error {
-	deadline := time.Now().Add(s.RPCTimeout)
-	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
-		deadline = d
-	}
-	return s.do(ctx, deadline, fn)
+	return s.do(ctx, time.Now().Add(s.RPCTimeout), fn)
 }
 
-// DoSlow runs one operation bounded only by the ctx deadline, for commands
-// whose reply legitimately lags past the RPC liveness bound.
+// DoSlow runs one operation bounded only by ctx, for commands whose reply
+// legitimately lags past the RPC liveness bound.
 func (s *Session) DoSlow(ctx context.Context, fn func() error) error {
-	var deadline time.Time
-	if d, ok := ctx.Deadline(); ok {
-		deadline = d
-	}
-	return s.do(ctx, deadline, fn)
+	return s.do(ctx, time.Time{}, fn)
 }
 
 func (s *Session) do(ctx context.Context, deadline time.Time, fn func() error) (err error) {
@@ -150,6 +144,16 @@ func (s *Session) do(ctx context.Context, deadline time.Time, fn func() error) (
 		return err
 	}
 	defer s.Conn.SetDeadline(time.Time{})
+
+	// A ctx that can never end needs no interrupt plumbing.
+	if ctx.Done() == nil {
+		defer func() {
+			if err != nil && IsWireError(err) {
+				s.broken = err
+			}
+		}()
+		return fn()
+	}
 
 	interrupted := false
 	stopc := make(chan struct{})

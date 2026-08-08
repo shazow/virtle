@@ -234,7 +234,6 @@ func (m *manager) runGuestFileCommand(ctx context.Context, client qga.Client, na
 
 func (m *manager) runGuestCommandStatus(ctx context.Context, client qga.Client, name string, path string, args []string, subject string) (qga.ExecStatus, error) {
 	return qga.RunCommandStatus(ctx, client, qga.ExecWait{
-		PollDelay:     defaultGuestExecPollDelay,
 		Name:          name,
 		Path:          path,
 		Args:          args,

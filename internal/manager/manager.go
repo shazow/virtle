@@ -34,7 +34,6 @@ import (
 const (
 	defaultSSHRetryDelay      = 500 * time.Millisecond
 	defaultShutdownDelay      = 15 * time.Second
-	defaultGuestExecPollDelay = 100 * time.Millisecond
 	sshRetryOutputRevealDelay = 250 * time.Millisecond
 )
 

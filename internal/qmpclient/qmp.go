@@ -217,8 +217,12 @@ func (c *socketMonitorClient) QueryStatus(ctx context.Context) (string, error) {
 
 func (c *socketMonitorClient) MigrateToFile(ctx context.Context, path string) error {
 	uri := "file:" + path
-	err := c.WithRaw(ctx, func(monitor *rawQMP.Monitor) error {
-		if err := monitor.Migrate(uri, nil, nil, nil); err != nil {
+	// Deviation from the per-RPC liveness bound: QMP can hold the reply to
+	// migrate until the file-backed state transfer finishes, which takes
+	// longer than an ordinary round trip. The caller's ctx (the migration
+	// timeout) is the only bound here.
+	err := c.withCtxDeadline(ctx, func() error {
+		if err := c.raw.Migrate(uri, nil, nil, nil); err != nil {
 			return fmt.Errorf("qmp migrate %q: %w", uri, err)
 		}
 		return nil
@@ -228,8 +232,10 @@ func (c *socketMonitorClient) MigrateToFile(ctx context.Context, path string) er
 
 func (c *socketMonitorClient) MigrateIncoming(ctx context.Context, path string) error {
 	uri := "file:" + path
-	err := c.WithRaw(ctx, func(monitor *rawQMP.Monitor) error {
-		if err := monitor.MigrateIncoming(uri); err != nil {
+	// Deviation from the per-RPC liveness bound: like migrate, the reply can
+	// lag behind reading the saved state, so only ctx bounds this operation.
+	err := c.withCtxDeadline(ctx, func() error {
+		if err := c.raw.MigrateIncoming(uri); err != nil {
 			return fmt.Errorf("qmp migrate-incoming %q: %w", uri, err)
 		}
 		return nil
@@ -266,13 +272,27 @@ func (c *socketMonitorClient) Disconnect() error {
 // of the RPC timeout and the ctx deadline; ctx cancellation interrupts an
 // in-flight read by yanking the deadline.
 func (c *socketMonitorClient) withDeadline(ctx context.Context, fn func() error) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	deadline := time.Now().Add(c.rpcTimeout)
 	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
 		deadline = d
 	}
+	return c.runOperation(ctx, deadline, fn)
+}
+
+// withCtxDeadline runs one slow QMP operation bounded only by the ctx
+// deadline, skipping the per-RPC liveness bound.
+func (c *socketMonitorClient) withCtxDeadline(ctx context.Context, fn func() error) error {
+	var deadline time.Time
+	if d, ok := ctx.Deadline(); ok {
+		deadline = d
+	}
+	return c.runOperation(ctx, deadline, fn)
+}
+
+func (c *socketMonitorClient) runOperation(ctx context.Context, deadline time.Time, fn func() error) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	c.monitor.setDeadline(deadline)
 	defer c.monitor.setDeadline(time.Time{})
 
@@ -401,12 +421,12 @@ func (m *deadlineSocketMonitor) interrupt() error {
 }
 
 func (m *deadlineSocketMonitor) withDeadline(fn func() error) error {
-	if !m.deadline.IsZero() {
-		if err := m.conn.SetDeadline(m.deadline); err != nil {
-			return err
-		}
-		defer m.conn.SetDeadline(time.Time{})
+	// A zero deadline means no time limit; setting it unconditionally also
+	// clears any deadline left behind by an interrupt.
+	if err := m.conn.SetDeadline(m.deadline); err != nil {
+		return err
 	}
+	defer m.conn.SetDeadline(time.Time{})
 	return fn()
 }
 

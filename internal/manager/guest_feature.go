@@ -52,7 +52,7 @@ func (f managerGuestFeature) GuestExec(ctx context.Context, req controlpkg.Guest
 	ctx, cancel := manifest.GuestCommandContext(ctx, time.Duration(req.Timeout))
 	defer cancel()
 	status, err := qga.RunCommandStatus(ctx, client, qga.ExecWait{
-		PollDelay:     defaultMigrationPollDelay,
+		PollDelay:     defaultGuestExecPollDelay,
 		Name:          "guest-exec",
 		Path:          req.Path,
 		Args:          req.Args,

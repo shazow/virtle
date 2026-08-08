@@ -133,6 +133,42 @@ func TestQMPClientMigrationCommands(t *testing.T) {
 	assertQMPCommand(t, commands, "migrate-incoming")
 }
 
+func TestQMPClientMigrateNotCappedByRPCTimeout(t *testing.T) {
+	responseDelay := 100 * time.Millisecond
+	client, commands, cleanup := newTestQMPClient(t, func(message map[string]any) map[string]any {
+		if message["execute"] == "migrate" {
+			time.Sleep(responseDelay)
+		}
+		return map[string]any{"return": map[string]any{}}
+	})
+	defer cleanup()
+	client.rpcTimeout = 10 * time.Millisecond
+
+	if err := client.MigrateToFile(context.Background(), "/tmp/vm.state"); err != nil {
+		t.Fatalf("migrate held its reply past the rpc timeout and should still succeed: %v", err)
+	}
+
+	assertHandshakeCommand(t, commands)
+	assertQMPCommand(t, commands, "migrate")
+}
+
+func TestQMPClientMigrateHonorsContextDeadline(t *testing.T) {
+	client, _, cleanup := newTestQMPClient(t, func(message map[string]any) map[string]any {
+		if message["execute"] == "migrate" {
+			time.Sleep(200 * time.Millisecond)
+		}
+		return map[string]any{"return": map[string]any{}}
+	})
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	err := client.MigrateToFile(ctx, "/tmp/vm.state")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected ctx deadline to bound migrate, got %v", err)
+	}
+}
+
 func TestQMPDialContextCancelsDuringHandshake(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "qmp.sock")
 	listener, err := net.Listen("unix", socketPath)

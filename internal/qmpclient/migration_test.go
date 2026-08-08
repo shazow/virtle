@@ -10,14 +10,14 @@ import (
 
 func TestWaitForMigrationCompletes(t *testing.T) {
 	client := &migrationClient{statuses: []string{"active", "completed"}}
-	if err := WaitForMigration(context.Background(), client, MigrationWait{PollDelay: time.Millisecond}); err != nil {
+	if err := WaitForMigration(context.Background(), client); err != nil {
 		t.Fatalf("wait migration: %v", err)
 	}
 }
 
 func TestWaitForMigrationReturnsTerminalFailure(t *testing.T) {
 	client := &migrationClient{statuses: []string{"active", "failed"}}
-	err := WaitForMigration(context.Background(), client, MigrationWait{PollDelay: time.Millisecond})
+	err := WaitForMigration(context.Background(), client)
 	if err == nil || !strings.Contains(err.Error(), "migration failed") {
 		t.Fatalf("expected failed migration error, got %v", err)
 	}
@@ -27,7 +27,7 @@ func TestWaitForMigrationDeadlineReportsLastStatus(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
 	defer cancel()
 	client := &migrationClient{statuses: []string{"setup"}}
-	err := WaitForMigration(ctx, client, MigrationWait{PollDelay: time.Millisecond})
+	err := WaitForMigration(ctx, client)
 	if err == nil || !strings.Contains(err.Error(), `last status "setup"`) {
 		t.Fatalf("expected deadline error with last status, got %v", err)
 	}
@@ -39,7 +39,7 @@ func TestWaitForMigrationDeadlineReportsLastStatus(t *testing.T) {
 func TestWaitForMigrationReturnsQueryError(t *testing.T) {
 	wantErr := errors.New("query migrate failed")
 	client := &migrationClient{err: wantErr}
-	err := WaitForMigration(context.Background(), client, MigrationWait{PollDelay: time.Millisecond})
+	err := WaitForMigration(context.Background(), client)
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("query error: got %v want %v", err, wantErr)
 	}
@@ -48,7 +48,7 @@ func TestWaitForMigrationReturnsQueryError(t *testing.T) {
 func TestWaitForMigrationReturnsContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	client := &migrationClient{afterQuery: cancel}
-	err := WaitForMigration(ctx, client, MigrationWait{PollDelay: time.Hour})
+	err := WaitForMigration(ctx, client)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancel error: got %v want %v", err, context.Canceled)
 	}
@@ -56,7 +56,7 @@ func TestWaitForMigrationReturnsContextCancellation(t *testing.T) {
 
 func TestRestoreFromFileMigratesWaitsAndContinues(t *testing.T) {
 	client := &migrationClient{statuses: []string{"active", "completed"}}
-	if err := RestoreFromFile(context.Background(), client, "/tmp/vmstate", MigrationWait{PollDelay: time.Millisecond}); err != nil {
+	if err := RestoreFromFile(context.Background(), client, "/tmp/vmstate"); err != nil {
 		t.Fatalf("restore from file: %v", err)
 	}
 	assertCalls(t, client.calls, []string{"migrate-incoming:/tmp/vmstate", "query-migrate", "query-migrate", "cont"})
@@ -65,7 +65,7 @@ func TestRestoreFromFileMigratesWaitsAndContinues(t *testing.T) {
 func TestRestoreFromFileReturnsMigrateIncomingError(t *testing.T) {
 	wantErr := errors.New("restore failed")
 	client := &migrationClient{migrateIncomingErr: wantErr}
-	err := RestoreFromFile(context.Background(), client, "/tmp/vmstate", MigrationWait{PollDelay: time.Millisecond})
+	err := RestoreFromFile(context.Background(), client, "/tmp/vmstate")
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("restore error: got %v want %v", err, wantErr)
 	}
@@ -73,7 +73,7 @@ func TestRestoreFromFileReturnsMigrateIncomingError(t *testing.T) {
 
 func TestSaveToFileStopsRunningVMAndMigrates(t *testing.T) {
 	client := &migrationClient{vmStatus: "running", statuses: []string{"active", "completed"}}
-	if err := SaveToFile(context.Background(), client, "/tmp/vmstate", MigrationWait{PollDelay: time.Millisecond}); err != nil {
+	if err := SaveToFile(context.Background(), client, "/tmp/vmstate"); err != nil {
 		t.Fatalf("save to file: %v", err)
 	}
 	assertCalls(t, client.calls, []string{"query-status", "stop", "migrate:/tmp/vmstate", "query-migrate", "query-migrate"})
@@ -81,7 +81,7 @@ func TestSaveToFileStopsRunningVMAndMigrates(t *testing.T) {
 
 func TestSaveToFileMigratesPausedVMWithoutStop(t *testing.T) {
 	client := &migrationClient{vmStatus: "paused", statuses: []string{"completed"}}
-	if err := SaveToFile(context.Background(), client, "/tmp/vmstate", MigrationWait{PollDelay: time.Millisecond}); err != nil {
+	if err := SaveToFile(context.Background(), client, "/tmp/vmstate"); err != nil {
 		t.Fatalf("save paused vm: %v", err)
 	}
 	assertCalls(t, client.calls, []string{"query-status", "migrate:/tmp/vmstate", "query-migrate"})
@@ -89,7 +89,7 @@ func TestSaveToFileMigratesPausedVMWithoutStop(t *testing.T) {
 
 func TestSaveToFileRejectsInvalidVMStatus(t *testing.T) {
 	client := &migrationClient{vmStatus: "shutdown"}
-	err := SaveToFile(context.Background(), client, "/tmp/vmstate", MigrationWait{PollDelay: time.Millisecond})
+	err := SaveToFile(context.Background(), client, "/tmp/vmstate")
 	if err == nil || !strings.Contains(err.Error(), `cannot save VM while QMP status is "shutdown"`) {
 		t.Fatalf("expected invalid status error, got %v", err)
 	}

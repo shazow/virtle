@@ -34,7 +34,7 @@ import (
 const (
 	defaultSSHRetryDelay      = 500 * time.Millisecond
 	defaultShutdownDelay      = 15 * time.Second
-	defaultMigrationPollDelay = 100 * time.Millisecond
+	defaultGuestExecPollDelay = 100 * time.Millisecond
 	sshRetryOutputRevealDelay = 250 * time.Millisecond
 )
 
@@ -156,9 +156,7 @@ func (m *manager) restoreLaunchRuntime(ctx context.Context, plan *launch.Plan, c
 	}
 	migrateCtx, cancel := m.migrationContext(ctx)
 	defer cancel()
-	if err := qmpclient.RestoreFromFile(migrateCtx, client, plan.ResumeState.VMStatePath, qmpclient.MigrationWait{
-		PollDelay: defaultMigrationPollDelay,
-	}); err != nil {
+	if err := qmpclient.RestoreFromFile(migrateCtx, client, plan.ResumeState.VMStatePath); err != nil {
 		return launch.WrapFixedStage("restore")(err)
 	}
 	notifyRuntimeResume(ctx, plan)
@@ -472,9 +470,7 @@ func (m *manager) saveSuspendStateConnected(ctx context.Context, qmpSocketPath s
 	}
 	migrateCtx, cancel := m.migrationContext(ctx)
 	defer cancel()
-	if err := qmpclient.SaveToFile(migrateCtx, client, statePath, qmpclient.MigrationWait{
-		PollDelay: defaultMigrationPollDelay,
-	}); err != nil {
+	if err := qmpclient.SaveToFile(migrateCtx, client, statePath); err != nil {
 		return launch.WrapFixedStage("qmp suspend")(err)
 	}
 

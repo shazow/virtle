@@ -821,7 +821,7 @@ func TestCreateVolumeImageRunsChattrBeforeSizingImage(t *testing.T) {
 	}
 	chattrLog := filepath.Join(tmpDir, "chattr-size.log")
 	chattrPath := filepath.Join(binDir, "chattr")
-	if err := os.WriteFile(chattrPath, []byte("#!/usr/bin/env sh\nset -eu\nstat -c '%s' \"$2\" > \"$CHATTR_LOG\"\n"), 0o755); err != nil {
+	if err := os.WriteFile(chattrPath, []byte("#!/bin/sh\nset -eu\nstat -c '%s' \"$2\" > \"$CHATTR_LOG\"\n"), 0o755); err != nil {
 		t.Fatalf("write fake chattr tool: %v", err)
 	}
 	t.Setenv("CHATTR_LOG", chattrLog)
@@ -1526,18 +1526,10 @@ func TestManagerLaunchWritesGuestFilesBeforeSSHSession(t *testing.T) {
 	guestAgent := &fakeGuestAgentClient{
 		record: record,
 		execStatuses: []qga.ExecStatus{
-			{Exited: true, ExitCode: 1}, // test -d /etc/virtle
-			{Exited: true},              // test -d /etc
-			{Exited: true},              // install -d /etc/virtle
-			{Exited: true},              // chown /etc/virtle/inline
-			{Exited: true},              // chmod /etc/virtle/inline
-			{Exited: true, ExitCode: 1}, // test -d /var/lib/virtle
-			{Exited: true, ExitCode: 1}, // test -d /var/lib
-			{Exited: true, ExitCode: 1}, // test -d /var
-			{Exited: true},              // test -d /
-			{Exited: true},              // install -d /var
-			{Exited: true},              // install -d /var/lib
-			{Exited: true},              // install -d /var/lib/virtle
+			{Exited: true}, // sh -c dir install /etc/virtle
+			{Exited: true}, // chown /etc/virtle/inline
+			{Exited: true}, // chmod /etc/virtle/inline
+			{Exited: true}, // sh -c dir install /var/lib/virtle
 		},
 	}
 	manager := &manager{
@@ -1565,21 +1557,7 @@ func TestManagerLaunchWritesGuestFilesBeforeSSHSession(t *testing.T) {
 		t.Fatalf("unexpected host write text: got %q want %q", got, want)
 	}
 	if got, want := guestAgent.execs, []guestExecCall{
-		{
-			path:          guestTestPath,
-			args:          []string{"-d", "/etc/virtle"},
-			captureOutput: true,
-		},
-		{
-			path:          guestTestPath,
-			args:          []string{"-d", "/etc"},
-			captureOutput: true,
-		},
-		{
-			path:          guestInstallPath,
-			args:          []string{"-d", "-o", "agent", "-g", "users", "-m", "0750", "/etc/virtle"},
-			captureOutput: true,
-		},
+		guestDirInstallCall(t, "/etc/virtle", "agent:users", "0750"),
 		{
 			path:          guestChownPath,
 			args:          []string{"agent:users", "/etc/virtle/inline"},
@@ -1590,62 +1568,26 @@ func TestManagerLaunchWritesGuestFilesBeforeSSHSession(t *testing.T) {
 			args:          []string{"0640", "/etc/virtle/inline"},
 			captureOutput: true,
 		},
-		{
-			path:          guestTestPath,
-			args:          []string{"-d", "/var/lib/virtle"},
-			captureOutput: true,
-		},
-		{
-			path:          guestTestPath,
-			args:          []string{"-d", "/var/lib"},
-			captureOutput: true,
-		},
-		{
-			path:          guestTestPath,
-			args:          []string{"-d", "/var"},
-			captureOutput: true,
-		},
-		{
-			path:          guestTestPath,
-			args:          []string{"-d", "/"},
-			captureOutput: true,
-		},
-		{
-			path:          guestInstallPath,
-			args:          []string{"-d", "/var"},
-			captureOutput: true,
-		},
-		{
-			path:          guestInstallPath,
-			args:          []string{"-d", "/var/lib"},
-			captureOutput: true,
-		},
-		{
-			path:          guestInstallPath,
-			args:          []string{"-d", "/var/lib/virtle"},
-			captureOutput: true,
-		},
+		guestDirInstallCall(t, "/var/lib/virtle", "", ""),
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected guest execs: got %#v want %#v", got, want)
 	}
 
 	firstSSH := indexString(events, "start:ssh")
 	ping := indexString(events, "guest-ping")
-	testInline := indexString(events, "guest-test-dir:/etc/virtle")
-	installInline := indexString(events, "guest-install-dir:/etc/virtle")
+	installInline := indexString(events, "guest-install-tree:/etc/virtle")
 	openInline := indexString(events, "guest-open:/etc/virtle/inline")
 	closeInline := indexString(events, "guest-close:/etc/virtle/inline")
 	chownInline := indexString(events, "guest-chown:/etc/virtle/inline:agent:users")
 	chmodInline := indexString(events, "guest-chmod:/etc/virtle/inline:0640")
-	testHost := indexString(events, "guest-test-dir:/var/lib/virtle")
-	installHost := indexString(events, "guest-install-dir:/var/lib/virtle")
+	installHost := indexString(events, "guest-install-tree:/var/lib/virtle")
 	openHost := indexString(events, "guest-open:/var/lib/virtle/host")
 	closeHost := indexString(events, "guest-close:/var/lib/virtle/host")
 	sshReady := indexString(events, "ssh-ready-dial:"+filepath.Join(tmpDir, "ready.sock"))
-	if firstSSH < 0 || ping < 0 || testInline < 0 || installInline < 0 || openInline < 0 || closeInline < 0 || chownInline < 0 || chmodInline < 0 || testHost < 0 || installHost < 0 || openHost < 0 || closeHost < 0 || sshReady < 0 {
+	if firstSSH < 0 || ping < 0 || installInline < 0 || openInline < 0 || closeInline < 0 || chownInline < 0 || chmodInline < 0 || installHost < 0 || openHost < 0 || closeHost < 0 || sshReady < 0 {
 		t.Fatalf("expected guest agent and ssh events, got %v", events)
 	}
-	if !(ping < testInline && testInline < installInline && installInline < openInline && openInline < closeInline && closeInline < chownInline && chownInline < chmodInline && chmodInline < testHost && testHost < installHost && installHost < openHost && openHost < closeHost && closeHost < sshReady && sshReady < firstSSH) {
+	if !(ping < installInline && installInline < openInline && openInline < closeInline && closeInline < chownInline && chownInline < chmodInline && chmodInline < installHost && installHost < openHost && openHost < closeHost && closeHost < sshReady && sshReady < firstSSH) {
 		t.Fatalf("expected guest writes before ssh session, got events %v", events)
 	}
 }
@@ -1946,7 +1888,7 @@ func TestManagerLaunchDoesNotAutoprovisionWhenDisabled(t *testing.T) {
 	}
 }
 
-func TestManagerLaunchSkipsGuestFileDirectoryInstallWhenParentExists(t *testing.T) {
+func TestManagerLaunchRunsGuestDirectoryInstallScript(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
 	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
@@ -1991,11 +1933,7 @@ func TestManagerLaunchSkipsGuestFileDirectoryInstallWhenParentExists(t *testing.
 	}
 
 	if got, want := guestAgent.execs, []guestExecCall{
-		{
-			path:          guestTestPath,
-			args:          []string{"-d", "/etc/virtle"},
-			captureOutput: true,
-		},
+		guestDirInstallCall(t, "/etc/virtle", "agent:users", ""),
 		{
 			path:          guestChownPath,
 			args:          []string{"agent:users", "/etc/virtle/inline"},
@@ -2093,13 +2031,9 @@ func TestManagerLaunchCreatesAllMissingGuestParentDirectoriesWithOwnerAndMode(t 
 	}
 	guestAgent := &fakeGuestAgentClient{
 		execStatuses: []qga.ExecStatus{
-			{Exited: true, ExitCode: 1}, // test -d /etc/virtle/nested
-			{Exited: true, ExitCode: 1}, // test -d /etc/virtle
-			{Exited: true},              // test -d /etc
-			{Exited: true},              // install -d /etc/virtle
-			{Exited: true},              // install -d /etc/virtle/nested
-			{Exited: true},              // chown file
-			{Exited: true},              // chmod file
+			{Exited: true}, // sh -c dir install /etc/virtle/nested
+			{Exited: true}, // chown file
+			{Exited: true}, // chmod file
 		},
 	}
 	manager := &manager{
@@ -2120,31 +2054,7 @@ func TestManagerLaunchCreatesAllMissingGuestParentDirectoriesWithOwnerAndMode(t 
 	}
 
 	if got, want := guestAgent.execs, []guestExecCall{
-		{
-			path:          guestTestPath,
-			args:          []string{"-d", "/etc/virtle/nested"},
-			captureOutput: true,
-		},
-		{
-			path:          guestTestPath,
-			args:          []string{"-d", "/etc/virtle"},
-			captureOutput: true,
-		},
-		{
-			path:          guestTestPath,
-			args:          []string{"-d", "/etc"},
-			captureOutput: true,
-		},
-		{
-			path:          guestInstallPath,
-			args:          []string{"-d", "-o", "agent", "-g", "users", "-m", "0750", "/etc/virtle"},
-			captureOutput: true,
-		},
-		{
-			path:          guestInstallPath,
-			args:          []string{"-d", "-o", "agent", "-g", "users", "-m", "0750", "/etc/virtle/nested"},
-			captureOutput: true,
-		},
+		guestDirInstallCall(t, "/etc/virtle/nested", "agent:users", "0750"),
 		{
 			path:          guestChownPath,
 			args:          []string{"agent:users", "/etc/virtle/nested/new"},
@@ -2185,9 +2095,8 @@ func TestManagerLaunchWritesGuestFileWhenOverwriteFalseAndPathMissing(t *testing
 	}
 	guestAgent := &fakeGuestAgentClient{
 		execStatuses: []qga.ExecStatus{
-			{Exited: true, ExitCode: 1},
-			{Exited: true},
-			{Exited: true},
+			{Exited: true, ExitCode: 1}, // test -e /etc/virtle/new (missing)
+			{Exited: true},              // sh -c dir install /etc/virtle
 		},
 	}
 	manager := &manager{
@@ -2213,11 +2122,7 @@ func TestManagerLaunchWritesGuestFileWhenOverwriteFalseAndPathMissing(t *testing
 			args:          []string{"-e", "/etc/virtle/new"},
 			captureOutput: true,
 		},
-		{
-			path:          guestTestPath,
-			args:          []string{"-d", "/etc/virtle"},
-			captureOutput: true,
-		},
+		guestDirInstallCall(t, "/etc/virtle", "", ""),
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected guest execs: got %#v want %#v", got, want)
 	}
@@ -2277,11 +2182,7 @@ func TestManagerLaunchFailsOnGuestFileChownFailure(t *testing.T) {
 		}
 	}
 	if got, want := guestAgent.execs, []guestExecCall{
-		{
-			path:          guestTestPath,
-			args:          []string{"-d", "/etc"},
-			captureOutput: true,
-		},
+		guestDirInstallCall(t, "/etc", "agent:users", "0700"),
 		{
 			path:          guestChownPath,
 			args:          []string{"agent:users", "/etc/inline"},
@@ -2318,9 +2219,7 @@ func TestManagerLaunchFailsOnGuestFileDirectoryFailure(t *testing.T) {
 	}
 	guestAgent := &fakeGuestAgentClient{
 		execStatuses: []qga.ExecStatus{
-			{Exited: true, ExitCode: 1}, // test -d /etc/virtle
-			{Exited: true},              // test -d /etc
-			{Exited: true, ExitCode: 1, ErrData: "aW5zdGFsbCBmYWlsZWQ="}, // install -d /etc/virtle
+			{Exited: true, ExitCode: 1, ErrData: "aW5zdGFsbCBmYWlsZWQ="}, // sh -c dir install /etc/virtle
 		},
 	}
 	manager := &manager{
@@ -2340,27 +2239,13 @@ func TestManagerLaunchFailsOnGuestFileDirectoryFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected launch to fail")
 	}
-	for _, want := range []string{"guest file write", "install -d \"/etc/virtle\" exited with status 1", "install failed"} {
+	for _, want := range []string{"guest file write", "install dirs \"/etc/virtle\" exited with status 1", "install failed"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("expected error containing %q, got %v", want, err)
 		}
 	}
 	if got, want := guestAgent.execs, []guestExecCall{
-		{
-			path:          guestTestPath,
-			args:          []string{"-d", "/etc/virtle"},
-			captureOutput: true,
-		},
-		{
-			path:          guestTestPath,
-			args:          []string{"-d", "/etc"},
-			captureOutput: true,
-		},
-		{
-			path:          guestInstallPath,
-			args:          []string{"-d", "-o", "agent", "-g", "users", "/etc/virtle"},
-			captureOutput: true,
-		},
+		guestDirInstallCall(t, "/etc/virtle", "agent:users", ""),
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected guest execs after install failure: got %#v want %#v", got, want)
 	}
@@ -2746,7 +2631,15 @@ func TestManagerLaunchUsesExternalVirtioFSSocketWithoutManagingDaemon(t *testing
 	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
 	cfg.QEMU.Devices.Block[0].ImagePath = "root.img"
 	cfg.Volumes[0].AutoCreate = false
-	externalSocket := filepath.Join(tmpDir, "virtiofs-nix-store.sock")
+	// t.TempDir embeds this test's long name, which pushes the socket path
+	// past the unix sun_path limit when TMPDIR is longer than /tmp (the nix
+	// sandbox uses /build); keep the socket in a short-named directory.
+	sockDir, err := os.MkdirTemp("", "virtle-sock")
+	if err != nil {
+		t.Fatalf("create socket dir: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(sockDir) })
+	externalSocket := filepath.Join(sockDir, "virtiofs-nix-store.sock")
 	listener, err := net.Listen("unix", externalSocket)
 	if err != nil {
 		t.Fatalf("listen on external socket: %v", err)
@@ -4868,6 +4761,67 @@ type guestExecCall struct {
 	timeout time.Duration
 }
 
+// guestDirInstallCall returns the exact guest command that the launch
+// package's directory installer issues for guestDir, so expected exec lists
+// don't re-encode the installer's script or argument layout.
+func guestDirInstallCall(t *testing.T, guestDir string, owner string, mode string) guestExecCall {
+	t.Helper()
+	var call guestExecCall
+	captured := false
+	installer := launch.ScriptGuestDirectoryInstaller(func(_ context.Context, _ string, path string, args []string) error {
+		call = guestExecCall{path: path, args: args, captureOutput: true}
+		captured = true
+		return nil
+	})
+	if err := installer.InstallTree(context.Background(), guestDir, owner, mode); err != nil {
+		t.Fatalf("capture guest dir install call: %v", err)
+	}
+	if !captured {
+		t.Fatal("script installer issued no guest command")
+	}
+	return call
+}
+
+// guestDirInstallTarget reports the directory a guest exec installs when the
+// exec matches the launch directory installer's invocation. It compares
+// against a template captured through the same seam production uses, keeping
+// the fake client ignorant of the installer's script and argument layout.
+var guestDirInstallTarget = func() func(path string, args []string) (string, bool) {
+	const (
+		sentinelDir   = "\x00dir"
+		sentinelOwner = "\x00owner"
+		sentinelMode  = "\x00mode"
+	)
+	tmplPath := ""
+	var tmplArgs []string
+	installer := launch.ScriptGuestDirectoryInstaller(func(_ context.Context, _ string, path string, args []string) error {
+		tmplPath, tmplArgs = path, args
+		return nil
+	})
+	if err := installer.InstallTree(context.Background(), sentinelDir, sentinelOwner, sentinelMode); err != nil || tmplArgs == nil {
+		panic("capture guest dir install template")
+	}
+	return func(path string, args []string) (string, bool) {
+		if path != tmplPath || len(args) != len(tmplArgs) {
+			return "", false
+		}
+		dir := ""
+		for i, tmpl := range tmplArgs {
+			switch tmpl {
+			case sentinelDir:
+				dir = args[i]
+			case sentinelOwner, sentinelMode:
+				// Varies per call.
+			default:
+				if args[i] != tmpl {
+					return "", false
+				}
+			}
+		}
+		return dir, true
+	}
+}()
+
 func (c *fakeGuestAgentClient) Ping(ctx context.Context) error {
 	if c.record != nil {
 		c.record("guest-ping")
@@ -4993,6 +4947,11 @@ func (c *fakeGuestAgentClient) Exec(ctx context.Context, path string, args []str
 	}
 	if c.record != nil && path == guestInstallPath && len(args) > 0 {
 		c.record("guest-install-dir:" + args[len(args)-1])
+	}
+	if c.record != nil {
+		if dir, ok := guestDirInstallTarget(path, args); ok {
+			c.record("guest-install-tree:" + dir)
+		}
 	}
 	if c.record != nil && path == guestTestPath && len(args) > 0 {
 		c.record("guest-test-dir:" + args[len(args)-1])

@@ -71,3 +71,6 @@ jobs:
 
       - name: Validate Nix package
         run: nix build .#virtle --no-link
+
+      - name: Run integration tests
+        run: nix flake check

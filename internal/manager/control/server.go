@@ -102,8 +102,17 @@ func (s *Server) handleConn(conn net.Conn) {
 		writeResponse(conn, responseEnvelope{Error: &RPCError{Code: ErrInvalidRequest, Message: err.Error()}})
 		return
 	}
-	resp := s.handler.handle(context.Background(), req)
-	writeResponse(conn, resp)
+	// Cancel the handler when the peer goes away so an abandoned request does
+	// not keep polling the guest forever. Requests are single-shot, so any
+	// further read result means the client is done.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		defer cancel()
+		var buf [1]byte
+		_, _ = conn.Read(buf[:])
+	}()
+	writeResponse(conn, s.handler.handle(ctx, req))
 }
 
 func writeResponse(conn net.Conn, resp responseEnvelope) {

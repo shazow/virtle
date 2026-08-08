@@ -358,3 +358,63 @@ func startTestControlRouterAt(t *testing.T, path string, router *Router) {
 		}
 	})
 }
+
+type blockingGuestHandler struct {
+	entered  chan struct{}
+	canceled chan struct{}
+}
+
+func (h *blockingGuestHandler) GuestPS(context.Context, GuestPSRequest) (GuestPSResponse, error) {
+	return GuestPSResponse{}, nil
+}
+
+func (h *blockingGuestHandler) GuestExec(ctx context.Context, _ GuestExecRequest) (GuestExecResponse, error) {
+	close(h.entered)
+	<-ctx.Done()
+	close(h.canceled)
+	return GuestExecResponse{}, ctx.Err()
+}
+
+func (h *blockingGuestHandler) GuestRead(context.Context, GuestReadRequest) (GuestReadResponse, error) {
+	return GuestReadResponse{}, nil
+}
+
+func (h *blockingGuestHandler) GuestWrite(context.Context, GuestWriteRequest) (GuestWriteResponse, error) {
+	return GuestWriteResponse{}, nil
+}
+
+func TestServerCancelsHandlerWhenPeerDisconnects(t *testing.T) {
+	handler := &blockingGuestHandler{
+		entered:  make(chan struct{}),
+		canceled: make(chan struct{}),
+	}
+	router, err := NewRouter(Handlers{Core: &fakeControlCore{}, Guest: handler})
+	if err != nil {
+		t.Fatalf("router: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "control.sock")
+	startTestControlRouterAt(t, path, router)
+
+	conn, err := net.Dial("unix", path)
+	if err != nil {
+		t.Fatalf("dial control socket: %v", err)
+	}
+	payload, err := json.Marshal(GuestExecRequest{Path: "/bin/sleep", Args: []string{"infinity"}})
+	if err != nil {
+		t.Fatalf("marshal params: %v", err)
+	}
+	if err := json.NewEncoder(conn).Encode(requestEnvelope{ID: 1, Method: "guest-exec", Params: payload}); err != nil {
+		t.Fatalf("send request: %v", err)
+	}
+	<-handler.entered
+
+	// Abandon the request; the server must cancel the in-flight handler.
+	if err := conn.Close(); err != nil {
+		t.Fatalf("close client conn: %v", err)
+	}
+	select {
+	case <-handler.canceled:
+	case <-time.After(time.Second):
+		t.Fatal("handler was not canceled after the peer disconnected")
+	}
+}

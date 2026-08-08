@@ -17,13 +17,14 @@ func (a QMPDeviceAdapter) AttachDevice(ctx context.Context, device Device, bus s
 		return nil, err
 	}
 	plan := planFor(device, bus)
-	started := false
+	// Rollback must run even when the attach failed because ctx was canceled,
+	// so release commands use a detached context; only commands that actually
+	// succeeded are released.
+	rollbackCtx := context.WithoutCancel(ctx)
+	succeeded := 0
 	rollback := func() {
-		if !started {
-			return
-		}
-		for _, command := range plan.release {
-			_ = a.Client.RunRaw(ctx, command)
+		for _, command := range plan.release[:succeeded] {
+			_ = a.Client.RunRaw(rollbackCtx, command)
 		}
 	}
 	for _, command := range plan.backend {
@@ -31,11 +32,11 @@ func (a QMPDeviceAdapter) AttachDevice(ctx context.Context, device Device, bus s
 			rollback()
 			return nil, err
 		}
-		started = true
 		if err := a.Client.RunRaw(ctx, command); err != nil {
 			rollback()
 			return nil, err
 		}
+		succeeded++
 	}
 	if err := ctx.Err(); err != nil {
 		rollback()

@@ -199,6 +199,45 @@ func TestGuestDirectoryInstallScriptCreatesTreeFromFirstComponent(t *testing.T) 
 	}
 }
 
+func TestGuestDirectoryInstallScriptLeavesConcurrentlyCreatedDirsUntouched(t *testing.T) {
+	// Simulate another guest process winning the creation race: a mkdir shim
+	// on PATH creates the directory with a different mode before running the
+	// real mkdir, so the script's mkdir loses with EEXIST and must treat the
+	// directory as existing instead of applying the requested mode to it.
+	realMkdir, err := exec.LookPath("mkdir")
+	if err != nil {
+		t.Skipf("cannot resolve mkdir: %v", err)
+	}
+	shimDir := t.TempDir()
+	shim := fmt.Sprintf("#!/bin/sh\nfor last; do :; done\n%q -m 0755 \"$last\"\nexec %q \"$@\"\n", realMkdir, realMkdir)
+	if err := os.WriteFile(filepath.Join(shimDir, "mkdir"), []byte(shim), 0o755); err != nil {
+		t.Fatalf("write mkdir shim: %v", err)
+	}
+
+	base := t.TempDir()
+	target := filepath.Join(base, "a", "b")
+	installer := ScriptGuestDirectoryInstaller(func(_ context.Context, _ string, path string, args []string) error {
+		cmd := exec.Command(path, args...)
+		cmd.Env = append(os.Environ(), "PATH="+shimDir+":"+os.Getenv("PATH"))
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("%v: %s", err, out)
+		}
+		return nil
+	})
+	if err := installer.InstallTree(context.Background(), target, "", "0700"); err != nil {
+		t.Fatalf("install dirs against racing mkdir: %v", err)
+	}
+	for _, rel := range []string{"a", "a/b"} {
+		info, err := os.Stat(filepath.Join(base, rel))
+		if err != nil {
+			t.Fatalf("stat %q: %v", rel, err)
+		}
+		if got := info.Mode().Perm(); got != 0o755 {
+			t.Fatalf("mode of %q: got %o want %o (directories the script did not create must stay untouched)", rel, got, 0o755)
+		}
+	}
+}
+
 func TestGuestDirectoryInstallScriptFailsWhenComponentIsFile(t *testing.T) {
 	base := t.TempDir()
 	blocker := filepath.Join(base, "a")

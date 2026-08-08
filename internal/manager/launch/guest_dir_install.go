@@ -14,9 +14,10 @@ import (
 type GuestDirectoryInstaller struct {
 	// InstallTree creates guestDir and any missing ancestors, applying owner
 	// and mode to each newly created directory only and leaving existing
-	// directories unchanged. owner is "user", "user:group", ":group", or
-	// empty; mode is the directory mode to apply (see guestDirectoryMode) or
-	// empty.
+	// directories unchanged; directories created concurrently by other guest
+	// processes count as existing. owner is "user", "user:group", ":group",
+	// or empty; mode is the directory mode to apply (see guestDirectoryMode)
+	// or empty.
 	InstallTree func(ctx context.Context, guestDir string, owner string, mode string) error
 }
 
@@ -44,16 +45,15 @@ func ScriptGuestDirectoryInstaller(run GuestCommandRunner) GuestDirectoryInstall
 // optional "user", "user:group", or ":group" owner, and an optional directory
 // mode. It walks the target path from the top, creating only the missing
 // directories and applying owner and mode to each newly created directory;
-// existing directories are left unchanged. Pure POSIX sh (verified under
-// dash).
+// existing directories are left unchanged. mkdir is the atomic creation
+// decision: a directory that appears concurrently between the -d probe and
+// mkdir is treated as existing and left untouched, so owner and mode are only
+// ever applied to directories this script created. Pure POSIX sh (verified
+// under dash).
 const guestDirectoryInstallScript = `set -eu
 dir=$1
 owner=$2
 mode=$3
-case $owner in
-  *:*) user=${owner%%:*}; group=${owner#*:} ;;
-  *) user=$owner; group= ;;
-esac
 case $dir in
   /*) cur= ;;
   *) cur=. ;;
@@ -69,12 +69,19 @@ while [ -n "$rest" ]; do
     continue
   fi
   cur=$cur/$comp
-  if [ ! -d "$cur" ]; then
-    set -- -d
-    [ -n "$user" ] && set -- "$@" -o "$user"
-    [ -n "$group" ] && set -- "$@" -g "$group"
-    [ -n "$mode" ] && set -- "$@" -m "$mode"
-    install "$@" "$cur"
+  if [ -d "$cur" ]; then
+    continue
+  fi
+  set --
+  if [ -n "$mode" ]; then
+    set -- -m "$mode"
+  fi
+  if mkdir "$@" "$cur"; then
+    if [ -n "$owner" ]; then
+      chown "$owner" "$cur"
+    fi
+  else
+    [ -d "$cur" ]
   fi
 done
 `

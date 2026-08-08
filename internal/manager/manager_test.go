@@ -821,7 +821,7 @@ func TestCreateVolumeImageRunsChattrBeforeSizingImage(t *testing.T) {
 	}
 	chattrLog := filepath.Join(tmpDir, "chattr-size.log")
 	chattrPath := filepath.Join(binDir, "chattr")
-	if err := os.WriteFile(chattrPath, []byte("#!/usr/bin/env sh\nset -eu\nstat -c '%s' \"$2\" > \"$CHATTR_LOG\"\n"), 0o755); err != nil {
+	if err := os.WriteFile(chattrPath, []byte("#!/bin/sh\nset -eu\nstat -c '%s' \"$2\" > \"$CHATTR_LOG\"\n"), 0o755); err != nil {
 		t.Fatalf("write fake chattr tool: %v", err)
 	}
 	t.Setenv("CHATTR_LOG", chattrLog)
@@ -2631,7 +2631,15 @@ func TestManagerLaunchUsesExternalVirtioFSSocketWithoutManagingDaemon(t *testing
 	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
 	cfg.QEMU.Devices.Block[0].ImagePath = "root.img"
 	cfg.Volumes[0].AutoCreate = false
-	externalSocket := filepath.Join(tmpDir, "virtiofs-nix-store.sock")
+	// t.TempDir embeds this test's long name, which pushes the socket path
+	// past the unix sun_path limit when TMPDIR is longer than /tmp (the nix
+	// sandbox uses /build); keep the socket in a short-named directory.
+	sockDir, err := os.MkdirTemp("", "virtle-sock")
+	if err != nil {
+		t.Fatalf("create socket dir: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(sockDir) })
+	externalSocket := filepath.Join(sockDir, "virtiofs-nix-store.sock")
 	listener, err := net.Listen("unix", externalSocket)
 	if err != nil {
 		t.Fatalf("listen on external socket: %v", err)

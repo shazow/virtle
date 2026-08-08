@@ -8,7 +8,7 @@ import (
 )
 
 // execPollDelay is the delay between exit-status polls.
-const execPollDelay = 100 * time.Millisecond
+const execPollDelay = 250 * time.Millisecond
 
 // ExecWait configures guest command execution. The command deadline is
 // carried by ctx; RunCommandStatus polls until the command exits or ctx ends.

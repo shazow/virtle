@@ -17,7 +17,7 @@ const (
 	// is polled; running out of time means the request was issued and QEMU
 	// exit is awaited.
 	guestShutdownExecWait      = 3 * time.Second
-	guestShutdownExecPollDelay = 100 * time.Millisecond
+	guestShutdownExecPollDelay = 250 * time.Millisecond
 )
 
 // requestGuestShutdown asks the guest to power down through the guest agent,

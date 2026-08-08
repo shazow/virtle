@@ -191,7 +191,8 @@ func (p *Process) Stop(ctx context.Context) error {
 	if killWait < minKillWait {
 		killWait = minKillWait
 	}
-	if !p.waitForExit(killWait) {
+	// Background's nil Done channel means the ctx arm of waitGrace never fires.
+	if !p.waitGrace(context.Background(), killWait) {
 		err := fmt.Errorf("kill %s: process did not exit", p.Name())
 		if shutdownErr != nil {
 			return errors.Join(shutdownErr, err)
@@ -245,13 +246,6 @@ func (p *Process) waitGrace(ctx context.Context, gracePeriod time.Duration) bool
 	case <-ctx.Done():
 		return false
 	}
-}
-
-// waitForExit waits up to delay for the process to exit, deliberately
-// ignoring any caller context (see Stop's post-kill comment): Background's
-// nil Done channel means that select arm never fires.
-func (p *Process) waitForExit(delay time.Duration) bool {
-	return p.waitGrace(context.Background(), delay)
 }
 
 func closedDone() <-chan struct{} {

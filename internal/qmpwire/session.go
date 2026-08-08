@@ -123,7 +123,12 @@ type Session struct {
 	Conn net.Conn
 	// RPCTimeout bounds each operation run through Do regardless of the
 	// caller's ctx deadline, so a wedged peer fails fast even when the
-	// operation itself has no time limit. Must be positive.
+	// operation itself has no time limit. It bounds the request/response
+	// round trip only, not the work it starts: commands that run
+	// asynchronously (guest-exec, migration polls) reply immediately and are
+	// tracked by follow-up polls, while the few commands whose reply itself
+	// tracks completion (migrate to file) use DoSlow and are bounded by ctx
+	// alone. Must be positive.
 	RPCTimeout time.Duration
 
 	mu     sync.Mutex

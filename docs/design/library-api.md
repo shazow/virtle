@@ -239,18 +239,31 @@ wrapped in `compress/gzip`), surfaced as a `GuestWithX` extension on the
 client:
 
 ```go
-// GuestWithInstallDir installs a directory tree from a streamed tar
-// archive (e.g. workspace provisioning) without buffering it in memory.
-type GuestWithInstallDir interface {
-	InstallDir(ctx context.Context, guestPath string, archive io.Reader, opts InstallDirOptions) error
+// GuestWithCopy streams file trees between host and guest. The wire format
+// (tar via stdlib archive/tar) is a protocol detail, never part of the API.
+type GuestWithCopy interface {
+	// CopyToGuest copies fsys into guestPath, mirroring os.CopyFS.
+	// Callers pass os.DirFS(path), an embed.FS, or a fstest.MapFS; the
+	// client streams it as tar under the hood (tar.Writer.AddFS), so
+	// nothing is buffered in memory.
+	CopyToGuest(ctx context.Context, guestPath string, fsys fs.FS, opts CopyOptions) error
+
+	// CopyFromGuest returns a streamed tar archive of the guest path
+	// (the Docker CopyFromContainer shape — a stream, not an fs.FS,
+	// because tar arrives sequentially).
+	CopyFromGuest(ctx context.Context, guestPath string, opts CopyOptions) (io.ReadCloser, error)
 }
 
-// InstallDirOptions controls extraction. Owner overrides cover archives
-// whose recorded uid/gid should not apply in the guest.
-type InstallDirOptions struct {
-	UID, GID *int // nil keeps the archive's values
+// CopyOptions controls extraction ownership. fs.FS sources carry no
+// uid/gid (host uids are meaningless in-guest), so overrides only *set*
+// ownership; nil keeps the target's defaults.
+type CopyOptions struct {
+	UID, GID *int
 }
 ```
+
+An archive-stream passthrough variant (for content that already is a
+tarball) can be added later as its own extension if a consumer needs it.
 
 The wire framing that delivers this is an implementation detail of the
 protocol, with two candidate shapes: length-prefixed JSON control frames

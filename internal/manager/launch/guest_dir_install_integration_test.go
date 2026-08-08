@@ -8,8 +8,13 @@ package launch
 //
 //	go test -tags=integration ./internal/manager/launch/
 //
+// The `integration` flake check runs this suite in an environment that
+// guarantees the required tools: nix flake check
+//
 // The unit tests run the script under whatever sh(1) resolves to; this test
-// pins the script's POSIX claim by running it explicitly under dash.
+// pins the script's POSIX claim by running it explicitly under dash. Missing
+// prerequisites fail the test rather than skip it: the environment is part
+// of what an integration run asserts.
 
 import (
 	"context"
@@ -27,7 +32,7 @@ func runGuestDirScriptDash(t *testing.T, target, owner, mode string) error {
 	t.Helper()
 	dash, err := exec.LookPath("dash")
 	if err != nil {
-		t.Skipf("dash not installed: %v", err)
+		t.Fatalf("dash is required for integration tests (use `nix flake check` for a guaranteed environment): %v", err)
 	}
 	installer := ScriptGuestDirectoryInstaller(func(_ context.Context, _ string, _ string, args []string) error {
 		cmd := exec.Command(dash, args...)
@@ -40,16 +45,16 @@ func runGuestDirScriptDash(t *testing.T, target, owner, mode string) error {
 }
 
 func TestIntegrationGuestDirectoryInstallScriptUnderDash(t *testing.T) {
-	owner := ""
+	current, err := user.Current()
+	if err != nil {
+		t.Fatalf("resolve current user: %v", err)
+	}
+	group, err := user.LookupGroupId(current.Gid)
+	if err != nil {
+		t.Fatalf("resolve current group: %v", err)
+	}
+	owner := current.Username + ":" + group.Name
 	wantUID, wantGID := uint32(os.Geteuid()), uint32(os.Getegid())
-	if current, err := user.Current(); err == nil {
-		if group, err := user.LookupGroupId(current.Gid); err == nil {
-			owner = current.Username + ":" + group.Name
-		}
-	}
-	if owner == "" {
-		t.Log("cannot resolve current user and group; skipping ownership assertions")
-	}
 
 	base := t.TempDir()
 	existing := filepath.Join(base, "existing")
@@ -70,11 +75,9 @@ func TestIntegrationGuestDirectoryInstallScriptUnderDash(t *testing.T) {
 		if got := info.Mode().Perm(); got != 0o750 {
 			t.Fatalf("mode of %q: got %o want %o", dir, got, 0o750)
 		}
-		if owner != "" {
-			uid, gid := statUIDGID(t, dir)
-			if uid != wantUID || gid != wantGID {
-				t.Fatalf("ownership of %q: got %d:%d want %d:%d", dir, uid, gid, wantUID, wantGID)
-			}
+		uid, gid := statUIDGID(t, dir)
+		if uid != wantUID || gid != wantGID {
+			t.Fatalf("ownership of %q: got %d:%d want %d:%d", dir, uid, gid, wantUID, wantGID)
 		}
 	}
 

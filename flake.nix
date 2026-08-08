@@ -41,6 +41,26 @@
         };
       });
 
+      checks = forAllSystems (
+        system:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+        in
+        {
+          # Runs the full Go test suite with the "integration" build tag in an
+          # environment that guarantees the tools the integration tests
+          # exercise (dash for the POSIX guest directory install script).
+          integration = pkgs.buildGoModule {
+            pname = "virtle-integration-tests";
+            inherit (release) version vendorHash;
+            src = ./.;
+            tags = [ "integration" ];
+            env.CGO_ENABLED = 0;
+            nativeCheckInputs = [ pkgs.dash ];
+          };
+        }
+      );
+
       formatter = forAllSystems (system: nixpkgs.legacyPackages.${system}.nixfmt);
     };
 }

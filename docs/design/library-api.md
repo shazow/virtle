@@ -65,8 +65,8 @@ in signatures); `vm` never imports `backend`. Two structural consequences:
 
 - There is no default backend anywhere in the core — `backend` cannot
   import `backend/qemu` without a cycle, so consumers always name their
-  backend explicitly (`&qemu.Backend{}`). The layering question answers
-  itself.
+  backend explicitly (`qemu.BackendWithQGA(...)`). The layering question
+  answers itself.
 - `vm` cannot alias the contract types, so consumers of both import both
   packages — the same shape `database/sql` users live with.
 
@@ -77,17 +77,19 @@ in signatures); `vm` never imports `backend`. Two structural consequences:
 ```go
 package vm // github.com/shazow/virtle/vm
 
-// Spec describes a virtual machine, independent of backend.
-// The zero value plus a boot source is launchable; backends apply defaults.
+// Spec describes a virtual machine, independent of backend. The zero value
+// plus a boot source is launchable; backends apply defaults. A Spec holds
+// no live resources, so the same value can be passed to multiple Start and
+// Resume calls.
 type Spec struct {
 	CPUs   int         // default: runtime.NumCPU
 	Memory units.Bytes // default: 2048 * units.Mebibyte
-	Kernel *Kernel   // direct kernel boot (microVM style)
-	Shares []Share   // host dirs shared into the guest (virtio-fs or similar)
-	Disks  []Disk    // block devices / volume images
-	Ports  []Forward // host↔guest port forwards
-	Files  []File    // files placed in the guest before workload start
-	Dir    string    // host working/state directory; default: derived tmp
+	Kernel *Kernel     // direct kernel boot (microVM style)
+	Shares []Share     // host dirs shared into the guest (virtio-fs or similar)
+	Disks  []Disk      // block devices / volume images
+	Ports  []Forward   // host↔guest port forwards
+	Files  []File      // small files placed in the guest before workload start
+	Dir    string      // host working/state directory; default: derived tmp
 }
 
 type Kernel struct{ Path, Initrd, Cmdline string }
@@ -100,19 +102,30 @@ type Disk struct {
 	Size                    units.Bytes // created if absent
 }
 type Forward struct{ HostAddr, GuestAddr, Proto string } // Proto defaults to "tcp"
+
+// File is inline content, not a stream: Specs are reusable, and a consumed
+// io.Reader would poison the second Start. Large trees go through
+// GuestWithCopy after boot instead.
 type File struct {
 	GuestPath string
-	Content   io.Reader
+	Content   []byte
 	Mode      fs.FileMode
 }
+
+// Device is a device description that can be attached to a running
+// instance: Share, Disk, or Forward. It is sealed (unexported method) so
+// backend.DeviceAttacher stays typed rather than accepting `any`.
+type Device interface{ device() }
 ```
 
 ```go
 // Guest performs operations inside a running VM. Implemented by the
 // host-side client in ./guest (virtle-native daemon) and by backend/qemu's
 // QGA adapter. Shapes are os/exec- and io/fs-flavored, never protocol-
-// flavored.
+// flavored. Implementations must be safe for concurrent use.
 type Guest interface {
+	// Run executes a command to completion with buffered output (the
+	// exec.Cmd.Output analog); streaming exec arrives as an extension.
 	Run(ctx context.Context, cmd *GuestCmd) (*GuestResult, error)
 	Open(ctx context.Context, name string) (io.ReadCloser, error)
 	Create(ctx context.Context, name string, mode fs.FileMode) (io.WriteCloser, error)
@@ -133,9 +146,10 @@ type GuestResult struct {
 }
 ```
 
-Daemon-only features (streaming exec, file watching, richer process
-control, ...) arrive later as `GuestWithX` extension interfaces on the
-./guest client without touching `vm.Guest`.
+Daemon-only features (file-tree copy, streaming exec, file watching, ...)
+are `GuestWithX` extension interfaces: declared here in `vm` (they use only
+stdlib and `vm` types, so consumers assert them without importing `guest`),
+implemented by the ./guest client, never added to `vm.Guest` itself.
 
 ### Implementer contract: `backend`
 
@@ -187,14 +201,15 @@ type Suspender interface {
 // MemoryResizer is implemented by backends that can grow or shrink a
 // running instance's memory (e.g. virtio-balloon).
 type MemoryResizer interface {
-	ResizeMemory(ctx context.Context, inst Instance, bytes int64) error
+	ResizeMemory(ctx context.Context, inst Instance, size units.Bytes) error
 }
 
 // DeviceAttacher is implemented by backends that can attach and detach
-// devices on a running instance.
+// devices on a running instance. vm.Device is the sealed union of
+// vm.Share, vm.Disk, and vm.Forward — typed, not `any`.
 type DeviceAttacher interface {
-	Attach(ctx context.Context, inst Instance, dev any) error // dev: vm.Share, vm.Disk, vm.Forward
-	Detach(ctx context.Context, inst Instance, dev any) error
+	Attach(ctx context.Context, inst Instance, dev vm.Device) error
+	Detach(ctx context.Context, inst Instance, dev vm.Device) error
 }
 
 // Shutdown stops an instance gracefully: guest shutdown via RemoteControl
@@ -239,8 +254,9 @@ wrapped in `compress/gzip`), surfaced as a `GuestWithX` extension on the
 client:
 
 ```go
-// GuestWithCopy streams file trees between host and guest. The wire format
-// (tar via stdlib archive/tar) is a protocol detail, never part of the API.
+// In vm: GuestWithCopy streams file trees between host and guest. The wire
+// format (tar via stdlib archive/tar) is a protocol detail, never part of
+// the API.
 type GuestWithCopy interface {
 	// CopyToGuest copies fsys into guestPath, mirroring os.CopyFS.
 	// Callers pass os.DirFS(path), an embed.FS, or a fstest.MapFS; the
@@ -251,12 +267,12 @@ type GuestWithCopy interface {
 	// CopyFromGuest returns a streamed tar archive of the guest path
 	// (the Docker CopyFromContainer shape — a stream, not an fs.FS,
 	// because tar arrives sequentially).
-	CopyFromGuest(ctx context.Context, guestPath string, opts CopyOptions) (io.ReadCloser, error)
+	CopyFromGuest(ctx context.Context, guestPath string) (io.ReadCloser, error)
 }
 
-// CopyOptions controls extraction ownership. fs.FS sources carry no
-// uid/gid (host uids are meaningless in-guest), so overrides only *set*
-// ownership; nil keeps the target's defaults.
+// CopyOptions controls extraction ownership in the guest. fs.FS sources
+// carry no uid/gid (host uids are meaningless in-guest), so overrides only
+// *set* ownership; nil keeps the target's defaults.
 type CopyOptions struct {
 	UID, GID *int
 }
@@ -270,7 +286,10 @@ protocol, with two candidate shapes: length-prefixed JSON control frames
 with dedicated binary stream channels, or — if the daemon embeds an sshd
 (D9) — reusing SSH's channel multiplexing for RPC and streams alike, one
 mux instead of two. Decided during implementation; the API above doesn't
-change either way.
+change either way. Whatever the framing, the protocol opens with a version
+handshake: the daemon is baked into guest images and will routinely be
+older or newer than the host virtle talking to it, so skew must fail (or
+degrade) explicitly, never silently.
 
 Portability requirements (decided in PR #67 review): the guest daemon ships
 inside the regular `virtle` binary as `virtle guest`, injected into guest
@@ -294,6 +313,7 @@ type Config struct {
 	ExtraArgs []string // passthrough
 	Console   Console
 	Seccomp   bool
+	Logger    *slog.Logger // default: discard; replaces today's package-global SetLogger
 	// ... QMP/QGA socket placement, virtiofsd path, etc.
 }
 
@@ -327,7 +347,7 @@ package manifest
 func Load(r io.Reader) (*vm.Spec, backend.Backend, error)
 ```
 
-The `[qemu]` TOML table maps onto `qemu.Backend` fields. CLI-only concerns —
+The `[qemu]` TOML table maps onto `qemu.Config` fields. CLI-only concerns —
 host `[run]` helper commands, SSH session handling, notifications, the
 control RPC socket — stay in the CLI and higher layers: they are session
 orchestration, not VM description (see D5).
@@ -411,37 +431,26 @@ package-qualified type assertion, exactly as in `database/sql/driver`.
 
 ## Decision points
 
-Resolved by this revision:
+Resolved (details live inline in the sections above; PR #67 review threads
+hold the rationale):
 
-- Root stays `package main`; the library splits `database/sql`-style into
-  consumer-facing `vm` (`Spec`, `Guest`) and the implementer contract
-  `backend` (`Backend`, `Instance`, capabilities), with implementations
-  under `backend/` (`backend/qemu`, ...).
-- Optional functionality uses standalone package-qualified `-er` capability
-  interfaces (`backend.Suspender` covering both Suspend and Resume,
-  `backend.MemoryResizer`, `backend.DeviceAttacher`) — no `Backend`
-  embedding, composed where needed.
-- The core interface is named `backend.Backend` (accepting the
-  `driver.Driver`-style stutter over `backend.Interface`).
-- No default backend in core — enforced structurally by the import
+- Root stays `package main`; the library splits `database/sql`-style:
+  consumer-facing `vm`, implementer contract `backend`, implementations
+  under `backend/`.
+- Capabilities are standalone package-qualified `-er` interfaces — no
+  `Backend` embedding; composed where needed. Core interface named
+  `backend.Backend` (accepting the `driver.Driver` stutter).
+- No default backend in core, enforced structurally by the import
   direction.
-- Guest control is obtained from the instance via
-  `Instance.RemoteControl() (vm.Guest, error)`, not from a dialer option;
-  the virtle-native daemon lives in `./guest` with host-side constructors
-  returning `vm.Guest` implementations.
-- **D6 — sizes** (PR #67 review): lean on the type system — `./units`
-  becomes public and `vm.Spec` uses typed scalars instead of plumbed
-  `int64`s whose meaning can be misread. Base size type is `units.Bytes`
-  with constant multipliers for readable literals —
-  `2048 * units.Mebibyte`, mirroring `2 * time.Second` (singular constant
-  per the `time.Second` convention). Manifest TOML numbers remain
-  MiB-denominated as today; `manifest.Load` converts to `units.Bytes`.
-- **D7 — RemoteControl selection** (PR #67 review): backend constructors
-  select the guest-control implementation — `qemu.BackendWithQGA(...)
-  (backend.Backend, error)` first, a `qemu.BackendWithGuest` equivalent
-  later for the virtle-native daemon. Whether wiring is lazy or eager is an
-  implementation detail behind the constructor so variants can be tried
-  without API changes.
+- Guest control comes from `Instance.RemoteControl()`; backend
+  constructors select its implementation (`qemu.BackendWithQGA` now,
+  `qemu.BackendWithGuest` later), with lazy-vs-eager wiring an
+  implementation detail behind the constructor.
+- Sizes are typed: public `units` package, `units.Bytes` base with constant
+  multipliers (`2048 * units.Mebibyte`); manifest TOML numbers stay
+  MiB-denominated, converted by `manifest.Load`.
+- Guest file trees move as `CopyToGuest(fs.FS)` / `CopyFromGuest` (streamed
+  tar under the hood), with ownership set via `CopyOptions`.
 
 Still open:
 
@@ -460,18 +469,27 @@ Still open:
   naturally at call sites. Recommend backend-level as specified, revisit
   only if call sites get awkward.
 
-- **D9 — tty / interactive sessions** (under discussion, PR #67 thread).
-  Recommended direction: standardize the *session type* in core — `vm.Term`
-  (`io.ReadWriteCloser` + `Resize` + `Wait`) with `vm.TermOptions` — rather
-  than a transport-driver registry, and let each source expose it where its
-  ownership naturally lives: the serial/chardev console as a
-  `backend.ConsoleProvider` capability on instances (backend resource, the
-  no-daemon debug path), an interactive terminal as a `GuestWithTerminal`
-  extension on the guest-daemon client (the primary programmatic path once
-  the daemon lands), and SSH staying at the CLI layer as today
-  (exec the user's ssh client; its value is their config/agent/tooling),
-  with an optional pure-Go `sshterm` transport implementing `vm.Term` only
-  if a library consumer needs programmatic SSH ttys.
+- **D9 — tty / interactive sessions** (leaning settled in the PR #67
+  thread, pending final call). Current direction:
+  - `virtle guest` embeds a **rudimentary sshd** (`x/crypto/ssh`, pure Go —
+    the Tailscale-SSH shape): `exec`/`shell`/pty channels only, no sftp or
+    forwarding initially. Constrained to vsock, but with publickey auth via
+    a host-provisioned key, because vsock guest-local loopback means
+    unprivileged guest processes can reach the root daemon's port.
+    This gives every daemon-equipped VM the full SSH ecosystem (user's ssh
+    config, scp, rsync, VS Code Remote-SSH) with zero image requirements,
+    and makes a custom terminal protocol unnecessary — SSH's channel model
+    is the terminal protocol. The `./guest` dependency budget amends to
+    include `x/crypto/ssh`.
+  - SSH remains an *additional service*, not the guest-control transport:
+    the virtle RPC stays for programs (typed, versionable, streams), sshd
+    serves humans and human-shaped tooling.
+  - Core standardizes the session type `vm.Term` (`io.ReadWriteCloser` +
+    `Resize` + `Wait`) with `vm.TermOptions`; the serial/chardev console
+    surfaces it via a `backend.ConsoleProvider` capability (the no-daemon
+    debug path); no transport-driver registry.
+  - The CLI keeps today's UX: `virtle launch --ssh` execs the user's ssh
+    client, ProxyCommand'd to the daemon's vsock port.
 
 ## Appendix: mapping to existing internals
 
@@ -480,7 +498,7 @@ implementation to be adapted:
 
 | New API piece | Existing code that becomes its implementation |
 |---|---|
-| `qemu.Backend.Start` | `internal/manager/qemu.go` lowering + `internal/manager/launch` (`BuildPlan`, `AcquireCID`, socket waits) + `internal/executor` supervision |
+| `backend/qemu` `Start` | `internal/manager/qemu.go` lowering + `internal/manager/launch` (`BuildPlan`, `AcquireCID`, socket waits) + `internal/executor` supervision |
 | `backend.Instance` | `internal/executor.Process` (later, libkrun: a cgo handle) |
 | `backend/qemu`'s QGA `vm.Guest` | `internal/qga` client behind the new shapes (`guest-exec` → `Run`, base64 file chunks → `Open`/`Create`) |
 | `guest` daemon + client | new code; binary-safe, concurrent, streaming protocol (see protocol requirements) — supersedes both QGA's base64 chunking and `control`'s request/response-only framing |

@@ -128,6 +128,19 @@ when illustrative of the change.
 
 ## 2026-07-13 – 2026-07-14
 
+- **v0.1 released** — the first tagged release.
+- Tests and CI added: GitHub Actions test workflow, a release workflow, and
+  example-manifest validation tests. (#27)
 - README fix: virtiofs template path is `mounts[type=virtiofs].virtiofs`.
 - Release pipeline hardened: tag verified against checkout, publication
   idempotent (`gh release upload --clobber`), manual retries supported. (#28)
+
+## 2026-07-01
+
+- virtle became its own project: the codebase (~32k lines across 179 files)
+  was migrated out of [agentspace](https://github.com/shazow/agentspace)'s
+  `virtie` tree into this repo, and lingering `virtie` references renamed. (#1, #2)
+
+## 2026-06-11
+
+- Repo created: a README and a LICENSE.

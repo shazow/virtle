@@ -98,35 +98,20 @@ func setDefaults(s *jsonschema.Schema, defaults map[string]any) {
 	}
 	for name, value := range defaults {
 		property := s.Properties[name]
-		if property == nil || isZeroJSON(value) {
+		if property == nil {
 			continue
 		}
 		if object, ok := value.(map[string]any); ok {
 			setDefaults(property, object)
 			continue
 		}
+		// Required fields carry no omitempty, so unset ones marshal as zero
+		// values (kernel.path as ""); those are absences, not defaults.
+		if value == nil || value == "" {
+			continue
+		}
 		if raw, err := json.Marshal(value); err == nil {
 			property.Default = raw
 		}
 	}
-}
-
-// isZeroJSON reports whether a decoded JSON value is its type's zero value,
-// which marks a field DefaultDocument leaves unset rather than a default.
-func isZeroJSON(value any) bool {
-	switch v := value.(type) {
-	case nil:
-		return true
-	case string:
-		return v == ""
-	case float64:
-		return v == 0
-	case bool:
-		return !v
-	case []any:
-		return len(v) == 0
-	case map[string]any:
-		return len(v) == 0
-	}
-	return false
 }

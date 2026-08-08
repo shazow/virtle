@@ -9,7 +9,7 @@ import (
 // migrationPollDelay is the fixed delay between query-migrate polls while
 // waiting for a migration to finish. The overall migration deadline is
 // carried by ctx.
-const migrationPollDelay = 100 * time.Millisecond
+const migrationPollDelay = 250 * time.Millisecond
 
 // SaveClient is the QMP capability set needed to save VM state to a file.
 type SaveClient interface {

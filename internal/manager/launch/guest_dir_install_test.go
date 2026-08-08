@@ -186,6 +186,50 @@ func TestGuestDirectoryInstallScriptPathWithSpaces(t *testing.T) {
 	}
 }
 
+func TestGuestDirectoryInstallScriptCreatesTreeFromFirstComponent(t *testing.T) {
+	// A target whose very first path component is missing exercises the same
+	// walk as creating a tree directly under the guest's / (which the tests
+	// cannot do unprivileged): every level from the top must be created.
+	base := t.TempDir()
+	if err := runGuestDirScriptIn(base, "x/y/z", "", "0755"); err != nil {
+		t.Fatalf("install dirs from first component: %v", err)
+	}
+	if info, err := os.Stat(filepath.Join(base, "x", "y", "z")); err != nil || !info.IsDir() {
+		t.Fatalf("target not created (err=%v)", err)
+	}
+}
+
+func TestGuestDirectoryInstallScriptFailsWhenComponentIsFile(t *testing.T) {
+	base := t.TempDir()
+	blocker := filepath.Join(base, "a")
+	if err := os.WriteFile(blocker, nil, 0o644); err != nil {
+		t.Fatalf("write blocker file: %v", err)
+	}
+	if err := runGuestDirScript(filepath.Join(blocker, "b"), "", "0755"); err == nil {
+		t.Fatalf("expected install through file component to fail")
+	}
+}
+
+func TestGuestDirectoryInstallScriptAppliesGroupOnlyOwner(t *testing.T) {
+	current, err := user.Current()
+	if err != nil {
+		t.Skipf("cannot resolve current user: %v", err)
+	}
+	group, err := user.LookupGroupId(current.Gid)
+	if err != nil {
+		t.Skipf("cannot resolve current group: %v", err)
+	}
+	base := t.TempDir()
+	target := filepath.Join(base, "a", "b")
+	if err := runGuestDirScript(target, ":"+group.Name, "0750"); err != nil {
+		t.Fatalf("install dirs with group-only owner: %v", err)
+	}
+	_, gid := statUIDGID(t, target)
+	if gid != uint32(os.Getegid()) {
+		t.Fatalf("group of %q: got %d want %d", target, gid, os.Getegid())
+	}
+}
+
 func TestInstallGuestFileDirectoryDelegatesToInstaller(t *testing.T) {
 	var gotGuestDir, gotOwner, gotMode string
 	calls := 0

@@ -42,37 +42,40 @@ func ScriptGuestDirectoryInstaller(run GuestCommandRunner) GuestDirectoryInstall
 // guestDirectoryInstallScript ensures the directory $1 and all of its missing
 // ancestors exist in one guest command. It takes the target directory, an
 // optional "user", "user:group", or ":group" owner, and an optional directory
-// mode. It walks upward to the existing ancestor, then creates only the
-// missing directories from top to bottom, applying owner and mode to each
-// newly created directory; existing directories are left unchanged. Pure
-// POSIX sh (verified under dash).
-const guestDirectoryInstallScript = `set -e
-d=$1
+// mode. It walks the target path from the top, creating only the missing
+// directories and applying owner and mode to each newly created directory;
+// existing directories are left unchanged. Pure POSIX sh (verified under
+// dash).
+const guestDirectoryInstallScript = `set -eu
+dir=$1
 owner=$2
 mode=$3
 case $owner in
   *:*) user=${owner%%:*}; group=${owner#*:} ;;
   *) user=$owner; group= ;;
 esac
-anc=$d
-while [ ! -d "$anc" ]; do
-  case $anc in
-    */*) anc=${anc%/*} ;;
-    *) exit 1 ;;
-  esac
-done
-cur=$anc
-rest=${d#"$anc"}
+case $dir in
+  /*) cur= ;;
+  *) cur=. ;;
+esac
+rest=${dir#/}
 while [ -n "$rest" ]; do
-  rest=${rest#/}
   comp=${rest%%/*}
+  case $rest in
+    */*) rest=${rest#*/} ;;
+    *) rest= ;;
+  esac
+  if [ -z "$comp" ]; then
+    continue
+  fi
   cur=$cur/$comp
-  set -- -d
-  [ -n "$user" ] && set -- "$@" -o "$user"
-  [ -n "$group" ] && set -- "$@" -g "$group"
-  [ -n "$mode" ] && set -- "$@" -m "$mode"
-  install "$@" "$cur"
-  rest=${rest#"$comp"}
+  if [ ! -d "$cur" ]; then
+    set -- -d
+    [ -n "$user" ] && set -- "$@" -o "$user"
+    [ -n "$group" ] && set -- "$@" -g "$group"
+    [ -n "$mode" ] && set -- "$@" -m "$mode"
+    install "$@" "$cur"
+  fi
 done
 `
 

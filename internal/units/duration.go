@@ -3,6 +3,7 @@ package units
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
 	"time"
 )
@@ -16,7 +17,7 @@ type Duration time.Duration
 // seconds.
 func ParseDuration(value string) (Duration, error) {
 	if seconds, err := strconv.ParseFloat(value, 64); err == nil {
-		return Duration(seconds * float64(time.Second)), nil
+		return secondsDuration(seconds)
 	}
 	parsed, err := time.ParseDuration(value)
 	if err != nil {
@@ -25,9 +26,30 @@ func ParseDuration(value string) (Duration, error) {
 	return Duration(parsed), nil
 }
 
+// secondsDuration converts seconds to a Duration. Positive infinity and
+// overflow saturate to the maximum duration (effectively no timeout); NaN and
+// negative infinity are rejected because their integer conversion is
+// platform-defined.
+func secondsDuration(seconds float64) (Duration, error) {
+	if math.IsNaN(seconds) || math.IsInf(seconds, -1) {
+		return 0, fmt.Errorf("invalid duration %v: must not be NaN or negative infinity", seconds)
+	}
+	nanos := seconds * float64(time.Second)
+	if nanos >= float64(math.MaxInt64) {
+		return Duration(math.MaxInt64), nil
+	}
+	return Duration(nanos), nil
+}
+
 func (d Duration) Duration() time.Duration { return time.Duration(d) }
 
 func (d Duration) String() string { return time.Duration(d).String() }
+
+// MarshalText encodes the duration in Go's duration-string form so text-based
+// encoders such as TOML emit values the decoder reads back unchanged.
+func (d Duration) MarshalText() ([]byte, error) {
+	return []byte(time.Duration(d).String()), nil
+}
 
 func (d Duration) MarshalJSON() ([]byte, error) {
 	return json.Marshal(time.Duration(d).String())
@@ -36,7 +58,11 @@ func (d Duration) MarshalJSON() ([]byte, error) {
 func (d *Duration) UnmarshalJSON(data []byte) error {
 	var seconds float64
 	if err := json.Unmarshal(data, &seconds); err == nil {
-		*d = Duration(seconds * float64(time.Second))
+		parsed, err := secondsDuration(seconds)
+		if err != nil {
+			return err
+		}
+		*d = parsed
 		return nil
 	}
 	var value string
@@ -56,9 +82,17 @@ func (d *Duration) UnmarshalJSON(data []byte) error {
 func (d *Duration) UnmarshalTOML(value any) error {
 	switch v := value.(type) {
 	case int64:
-		*d = Duration(time.Duration(v) * time.Second)
+		parsed, err := secondsDuration(float64(v))
+		if err != nil {
+			return err
+		}
+		*d = parsed
 	case float64:
-		*d = Duration(v * float64(time.Second))
+		parsed, err := secondsDuration(v)
+		if err != nil {
+			return err
+		}
+		*d = parsed
 	case string:
 		parsed, err := ParseDuration(v)
 		if err != nil {

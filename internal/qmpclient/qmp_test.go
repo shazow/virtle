@@ -10,6 +10,7 @@ import (
 	"time"
 
 	rawQMP "github.com/digitalocean/go-qemu/qmp/raw"
+	"github.com/shazow/virtle/internal/qmpwire"
 )
 
 func TestQMPClientQuit(t *testing.T) {
@@ -133,6 +134,78 @@ func TestQMPClientMigrationCommands(t *testing.T) {
 	assertQMPCommand(t, commands, "migrate-incoming")
 }
 
+// migrateTestRPCTimeout and migrateTestReplyDelay pin the invariant the
+// not-capped test depends on: the migrate reply arrives only after the RPC
+// liveness bound has expired. A timer is the only way to observe "the bound
+// elapsed", so this is the sanctioned sleep with shared constants.
+const (
+	migrateTestRPCTimeout = 10 * time.Millisecond
+	migrateTestReplyDelay = 10 * migrateTestRPCTimeout
+)
+
+func TestQMPClientMigrateNotCappedByRPCTimeout(t *testing.T) {
+	client, commands, cleanup := newTestQMPClient(t, func(message map[string]any) map[string]any {
+		if message["execute"] == "migrate" {
+			time.Sleep(migrateTestReplyDelay)
+		}
+		return map[string]any{"return": map[string]any{}}
+	})
+	defer cleanup()
+	client.session.RPCTimeout = migrateTestRPCTimeout
+
+	if err := client.MigrateToFile(context.Background(), "/tmp/vm.state"); err != nil {
+		t.Fatalf("migrate held its reply past the rpc timeout and should still succeed: %v", err)
+	}
+
+	assertHandshakeCommand(t, commands)
+	assertQMPCommand(t, commands, "migrate")
+}
+
+func TestQMPClientMigrateHonorsContextDeadline(t *testing.T) {
+	// Hold the migrate reply until the test ends so the ctx deadline is the
+	// only thing that can end the call.
+	release := make(chan struct{})
+	client, _, cleanup := newTestQMPClient(t, func(message map[string]any) map[string]any {
+		if message["execute"] == "migrate" {
+			<-release
+		}
+		return map[string]any{"return": map[string]any{}}
+	})
+	defer cleanup()
+	defer close(release)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	err := client.MigrateToFile(ctx, "/tmp/vm.state")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected ctx deadline to bound migrate, got %v", err)
+	}
+}
+
+func TestQMPClientFailsFastAfterTimedOutOperation(t *testing.T) {
+	release := make(chan struct{})
+	client, _, cleanup := newTestQMPClient(t, func(message map[string]any) map[string]any {
+		if message["execute"] == "stop" {
+			// Hold the reply past the RPC bound so it is still in flight when
+			// the next operation would run.
+			<-release
+		}
+		return map[string]any{"return": map[string]any{}}
+	})
+	defer cleanup()
+	client.session.RPCTimeout = 10 * time.Millisecond
+
+	if err := client.Stop(context.Background()); err == nil {
+		t.Fatal("expected stop to time out")
+	}
+	close(release)
+
+	err := client.Cont(context.Background())
+	if !errors.Is(err, qmpwire.ErrBroken) {
+		t.Fatalf("expected broken-connection error instead of reading the stale reply, got %v", err)
+	}
+}
+
 func TestQMPDialContextCancelsDuringHandshake(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "qmp.sock")
 	listener, err := net.Listen("unix", socketPath)
@@ -238,19 +311,18 @@ func newTestQMPClient(t *testing.T, handler func(message map[string]any) map[str
 		}
 	}()
 
-	monitor := &deadlineSocketMonitor{
-		conn:     clientConn,
-		decoder:  json.NewDecoder(clientConn),
-		deadline: time.Now().Add(time.Second),
+	monitor := &socketMonitor{
+		conn:    clientConn,
+		decoder: json.NewDecoder(clientConn),
 	}
 	if err := monitor.Connect(); err != nil {
 		t.Fatalf("connect qmp test monitor: %v", err)
 	}
 
 	client := &socketMonitorClient{
-		monitor:    monitor,
-		raw:        rawQMP.NewMonitor(monitor),
-		rpcTimeout: time.Second,
+		monitor: monitor,
+		raw:     rawQMP.NewMonitor(monitor),
+		session: &qmpwire.Session{Conn: clientConn, RPCTimeout: time.Second},
 	}
 
 	cleanup := func() {

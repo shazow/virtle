@@ -1,10 +1,10 @@
 package executor_test
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"testing"
-	"time"
 
 	"github.com/shazow/virtle/internal/executor"
 	"github.com/shazow/virtle/internal/executor/executortest"
@@ -66,7 +66,7 @@ func TestGroupStopAllStopsInReverseOrder(t *testing.T) {
 	second := executor.Wrap(secondProcess)
 	group := executor.NewGroup(first, second)
 
-	if err := group.StopAll(time.Second); err != nil {
+	if err := group.StopAll(context.Background()); err != nil {
 		t.Fatalf("stop all: %v", err)
 	}
 	if got, want := []executortest.EventKind{secondProcess.EventKinds()[0], firstProcess.EventKinds()[0]}, []executortest.EventKind{executortest.EventSignal, executortest.EventSignal}; !reflect.DeepEqual(got, want) {
@@ -92,7 +92,7 @@ func TestGroupZeroValueAndEmpty(t *testing.T) {
 	if process, err, ok := group.FirstExit(); process != nil || err != nil || ok {
 		t.Fatalf("empty group first exit: process=%v err=%v ok=%v", process, err, ok)
 	}
-	if err := group.StopAll(time.Second); err != nil {
+	if err := group.StopAll(context.Background()); err != nil {
 		t.Fatalf("empty group stop all: %v", err)
 	}
 }

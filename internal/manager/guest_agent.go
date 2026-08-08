@@ -11,6 +11,82 @@ import (
 	"github.com/shazow/virtle/internal/qga"
 )
 
+const (
+	guestShutdownResponseTimeout = time.Second
+	// guestShutdownExecWait bounds how long the shutdown command's exit status
+	// is polled; running out of time means the request was issued and QEMU
+	// exit is awaited.
+	guestShutdownExecWait      = 3 * time.Second
+	guestShutdownExecPollDelay = 250 * time.Millisecond
+)
+
+// requestGuestShutdown asks the guest to power down through the guest agent,
+// either with the guest-shutdown command or a configured shutdown_exec guest
+// command. QEMU exit is the authoritative completion signal; this only issues
+// the request.
+func (m *manager) requestGuestShutdown(ctx context.Context, socketPath string, exec []string) error {
+	dialer := m.guestAgentDialer
+	if dialer == nil {
+		dialer = &qga.SocketDialer{}
+	}
+	client, err := dialer.Dial(ctx, socketPath, m.effectiveQMPConnectTimeout())
+	if err != nil {
+		return fmt.Errorf("connect guest agent: %w", err)
+	}
+	defer client.Disconnect()
+
+	// The chardev accepts connections even when no agent runs in the guest, so
+	// probe with a ping first: a guest that cannot answer (agent missing, or
+	// paused after a suspend save) cannot process a shutdown request either,
+	// and treating that silence as success would burn the full shutdown wait.
+	pingCtx, cancelPing := context.WithTimeout(ctx, guestShutdownResponseTimeout)
+	err = client.Ping(pingCtx)
+	cancelPing()
+	if err != nil {
+		return fmt.Errorf("guest agent unavailable: %w", err)
+	}
+
+	if len(exec) == 0 {
+		// guest-shutdown rarely answers before the guest powers off; cap the
+		// wait for its response instead of holding out for a full RPC timeout.
+		ctx, cancel := context.WithTimeout(ctx, guestShutdownResponseTimeout)
+		defer cancel()
+		return client.Shutdown(ctx)
+	}
+
+	ctx, cancel := m.launchManifest.GuestCommandContext(ctx)
+	defer cancel()
+	pid, err := client.Exec(ctx, exec[0], exec[1:], true)
+	if err != nil {
+		return fmt.Errorf("execute guest shutdown command %v: %w", exec, err)
+	}
+	// Poll the exit status briefly so a fast-failing command is reported
+	// instead of silently burning the shutdown wait. Losing QGA or running out
+	// of polling time is expected while the guest powers off; QEMU exit is the
+	// authoritative completion signal.
+	statusCtx, cancelStatus := context.WithTimeout(ctx, guestShutdownExecWait)
+	defer cancelStatus()
+	ticker := time.NewTicker(guestShutdownExecPollDelay)
+	defer ticker.Stop()
+	for {
+		status, err := client.ExecStatus(statusCtx, pid)
+		if err != nil {
+			return nil
+		}
+		if status.Exited {
+			if status.ExitCode != 0 {
+				return fmt.Errorf("guest shutdown command %v exited with status %d%s", exec, status.ExitCode, qga.ExecOutputSuffix(status))
+			}
+			return nil
+		}
+		select {
+		case <-statusCtx.Done():
+			return nil
+		case <-ticker.C:
+		}
+	}
+}
+
 func (m *manager) writeGuestFiles(ctx context.Context, stats *launch.Stats, watchers executor.Group) error {
 	launchManifest := m.launchManifest
 	files := launchManifest.ResolvedWriteFiles()
@@ -42,28 +118,18 @@ func (m *manager) writeGuestFiles(ctx context.Context, stats *launch.Stats, watc
 
 	return launch.WriteGuestFiles(ctx, files, launch.GuestFileWriter{
 		PathExists: func(ctx context.Context, guestPath string) (bool, error) {
-			ctx, cancel := launchManifest.GuestCommandContext(ctx)
-			defer cancel()
 			return m.guestPathExists(ctx, client, guestPath)
 		},
 		InstallDirectory: func(ctx context.Context, file manifest.ResolvedWriteFile) error {
-			ctx, cancel := launchManifest.GuestCommandContext(ctx)
-			defer cancel()
 			return m.installGuestFileDirectory(ctx, client, file.GuestPath, file.Chown, file.Mode)
 		},
 		WriteFile: func(ctx context.Context, guestPath string, payloadBase64 string) error {
-			ctx, cancel := launchManifest.GuestCommandContext(ctx)
-			defer cancel()
-			return qga.WriteFile(ctx, client, guestPath, payloadBase64)
+			return m.writeGuestFile(ctx, client, guestPath, payloadBase64)
 		},
 		Chown: func(ctx context.Context, guestPath string, owner string) error {
-			ctx, cancel := launchManifest.GuestCommandContext(ctx)
-			defer cancel()
 			return m.chownGuestFile(ctx, client, guestPath, owner)
 		},
 		Chmod: func(ctx context.Context, guestPath string, mode string) error {
-			ctx, cancel := launchManifest.GuestCommandContext(ctx)
-			defer cancel()
 			return m.chmodGuestFile(ctx, client, guestPath, mode)
 		},
 		SkipExisting: func(guestPath string) {
@@ -96,9 +162,7 @@ func (m *manager) writeBackGuestFiles(ctx context.Context, watchers executor.Gro
 
 	return launch.WriteBackGuestFiles(ctx, writeBackFiles, launch.GuestFileWriteBacker{
 		ReadFile: func(ctx context.Context, guestPath string) ([]byte, error) {
-			ctx, cancel := launchManifest.GuestCommandContext(ctx)
-			defer cancel()
-			return qga.ReadFile(ctx, client, guestPath, qga.DefaultFileReadChunkSize)
+			return m.readGuestFile(ctx, client, guestPath)
 		},
 		WriteHostFile: launch.WriteHostFileAtomic,
 		Wrote: func(guestPath string, hostPath string) {
@@ -120,13 +184,9 @@ func (m *manager) mountWorkspaceCWD(ctx context.Context, client qga.Client) erro
 	launchManifest := m.launchManifest
 	return launch.MountWorkspaceCWD(ctx, launchManifest, launch.WorkspaceCWDMounter{
 		InstallDir: func(ctx context.Context, target string, args []string) error {
-			ctx, cancel := launchManifest.GuestCommandContext(ctx)
-			defer cancel()
 			return m.runGuestFileCommand(ctx, client, "install -d", guestInstallPath, args, target)
 		},
 		MountBind: func(ctx context.Context, source string, target string, args []string) error {
-			ctx, cancel := launchManifest.GuestCommandContext(ctx)
-			defer cancel()
 			return m.runGuestFileCommand(ctx, client, "mount --bind", guestMountPath, args, target)
 		},
 		Mounted: func(source string, target string) {
@@ -168,6 +228,21 @@ func (m *manager) guestPathExists(ctx context.Context, client qga.Client, guestP
 	return status.ExitCode == 0, nil
 }
 
+// writeGuestFile writes one guest file under the manifest's guest command
+// bound.
+func (m *manager) writeGuestFile(ctx context.Context, client qga.Client, guestPath string, payloadBase64 string) error {
+	ctx, cancel := m.launchManifest.GuestCommandContext(ctx)
+	defer cancel()
+	return qga.WriteFile(ctx, client, guestPath, payloadBase64)
+}
+
+// readGuestFile reads one guest file under the manifest's guest command bound.
+func (m *manager) readGuestFile(ctx context.Context, client qga.Client, guestPath string) ([]byte, error) {
+	ctx, cancel := m.launchManifest.GuestCommandContext(ctx)
+	defer cancel()
+	return qga.ReadFile(ctx, client, guestPath, qga.DefaultFileReadChunkSize)
+}
+
 func (m *manager) chownGuestFile(ctx context.Context, client qga.Client, guestPath string, owner string) error {
 	return m.runGuestFileCommand(ctx, client, "chown", guestChownPath, []string{owner, guestPath}, guestPath)
 }
@@ -187,9 +262,12 @@ func (m *manager) runGuestFileCommand(ctx context.Context, client qga.Client, na
 	return nil
 }
 
+// runGuestCommandStatus runs one guest command under the manifest's guest
+// command bound; call sites must not re-wrap.
 func (m *manager) runGuestCommandStatus(ctx context.Context, client qga.Client, name string, path string, args []string, subject string) (qga.ExecStatus, error) {
+	ctx, cancel := m.launchManifest.GuestCommandContext(ctx)
+	defer cancel()
 	return qga.RunCommandStatus(ctx, client, qga.ExecWait{
-		PollDelay:     defaultMigrationPollDelay,
 		Name:          name,
 		Path:          path,
 		Args:          args,
@@ -205,7 +283,7 @@ func (m *manager) waitForGuestAgent(ctx context.Context, socketPath string, watc
 func (m *manager) waitForGuestAgentStage(ctx context.Context, stage string, socketPath string, watchers executor.Group) (qga.Client, error) {
 	dialer := m.guestAgentDialer
 	if dialer == nil {
-		dialer = &qga.SocketDialer{RPCTimeout: m.effectiveQMPCommandTimeout()}
+		dialer = &qga.SocketDialer{}
 	}
 	retryDelay := m.qmpRetryDelay
 	if retryDelay <= 0 {

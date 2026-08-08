@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/shazow/virtle/internal/qmpwire"
 )
 
 func TestClientFileAndExecCommands(t *testing.T) {
@@ -90,11 +92,7 @@ func TestClientCancellationInterruptsBlockedRead(t *testing.T) {
 		_, _ = serverConn.Read(buf)
 	}()
 
-	client := &socketClient{
-		conn:       clientConn,
-		decoder:    json.NewDecoder(clientConn),
-		rpcTimeout: time.Hour,
-	}
+	client := newSocketClient(clientConn, time.Hour)
 	defer client.Disconnect()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -112,6 +110,29 @@ func TestClientCancellationInterruptsBlockedRead(t *testing.T) {
 	}
 }
 
+func TestClientFailsFastAfterInterruptedCall(t *testing.T) {
+	release := make(chan struct{})
+	client, _, cleanup := newTestClient(t, func(message map[string]any) map[string]any {
+		// Hold the first reply until after the caller gave up, so the stale
+		// response is still in flight when the next call would run.
+		<-release
+		return map[string]any{"return": map[string]any{}}
+	})
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	if err := client.Ping(ctx); err == nil {
+		t.Fatal("expected interrupted ping to fail")
+	}
+	close(release)
+
+	err := client.Ping(context.Background())
+	if !errors.Is(err, qmpwire.ErrBroken) {
+		t.Fatalf("expected broken-connection error instead of reading the stale reply, got %v", err)
+	}
+}
+
 func TestClientRPCTimeoutBoundsUnresponsiveAgent(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	defer serverConn.Close()
@@ -120,16 +141,20 @@ func TestClientRPCTimeoutBoundsUnresponsiveAgent(t *testing.T) {
 		_, _ = serverConn.Read(buf)
 	}()
 
-	client := &socketClient{
-		conn:       clientConn,
-		decoder:    json.NewDecoder(clientConn),
-		rpcTimeout: 20 * time.Millisecond,
-	}
+	client := newSocketClient(clientConn, 20*time.Millisecond)
 	defer client.Disconnect()
 
 	err := client.Ping(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "guest agent unresponsive after 20ms") {
 		t.Fatalf("expected unresponsive-agent error, got %v", err)
+	}
+}
+
+func newSocketClient(conn net.Conn, rpcTimeout time.Duration) *socketClient {
+	return &socketClient{
+		conn:    conn,
+		decoder: json.NewDecoder(conn),
+		session: &qmpwire.Session{Conn: conn, RPCTimeout: rpcTimeout},
 	}
 }
 
@@ -170,11 +195,7 @@ func newTestClient(t *testing.T, handler func(message map[string]any) map[string
 		}
 	}()
 
-	client := &socketClient{
-		conn:       clientConn,
-		decoder:    json.NewDecoder(clientConn),
-		rpcTimeout: time.Second,
-	}
+	client := newSocketClient(clientConn, time.Second)
 	cleanup := func() {
 		_ = client.Disconnect()
 		select {

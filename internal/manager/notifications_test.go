@@ -205,7 +205,6 @@ func TestLaunchResumeNotifiesAfterMigrationAndContinue(t *testing.T) {
 		socketWaiter:        &fakeSocketWaiter{callback: func(paths []string) error { return nil }},
 		qmpDialer:           &fakeQMPDialer{client: qmpClient},
 		logger:              slog.New(slog.NewTextHandler(os.Stderr, nil)),
-		sshRetryDelay:       0,
 		shutdownDelay:       10 * time.Millisecond,
 		qmpConnectTimeout:   time.Millisecond,
 		qmpQuitTimeout:      time.Millisecond,

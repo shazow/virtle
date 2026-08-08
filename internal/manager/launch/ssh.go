@@ -9,10 +9,6 @@ import (
 	"github.com/shazow/virtle/internal/sshtools"
 )
 
-func buildSSHCommand(launchManifest *manifest.Manifest, cid int, remoteCommand []string) (*exec.Cmd, error) {
-	return buildSSHCommandWithArgv(launchManifest, cid, remoteCommand, launchManifest.SSH.Argv)
-}
-
 func buildSSHCommandWithArgv(launchManifest *manifest.Manifest, cid int, remoteCommand []string, argv []string) (*exec.Cmd, error) {
 	renderer, err := manifest.NewTemplateRenderer(manifest.SSHTemplateProvider{
 		CID:         cid,
@@ -38,7 +34,9 @@ func buildSSHCommandWithArgv(launchManifest *manifest.Manifest, cid int, remoteC
 	return cmd, nil
 }
 
-func buildSSHCommandHint(launchManifest *manifest.Manifest, cid int) (string, error) {
+// BuildSSHCommandHint renders the copy-pasteable SSH command hint shown after
+// launch.
+func BuildSSHCommandHint(launchManifest *manifest.Manifest, cid int) (string, error) {
 	renderer, err := manifest.NewTemplateRenderer(manifest.SSHTemplateProvider{
 		CID:         cid,
 		User:        launchManifest.SSH.User,

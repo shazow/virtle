@@ -21,7 +21,6 @@ type Config struct {
 	SSHReadyDialer      launch.SSHReadyDialer
 	Logger              *slog.Logger
 	LogWriter           io.Writer
-	SSHRetryDelay       time.Duration
 	SSHReadyTimeout     time.Duration
 	ShutdownDelay       time.Duration
 	QMPRetryDelay       time.Duration
@@ -60,9 +59,6 @@ func mergeConfig(base Config, override Config) Config {
 	}
 	if override.LogWriter != nil {
 		base.LogWriter = override.LogWriter
-	}
-	if override.SSHRetryDelay != 0 {
-		base.SSHRetryDelay = override.SSHRetryDelay
 	}
 	if override.SSHReadyTimeout != 0 {
 		base.SSHReadyTimeout = override.SSHReadyTimeout

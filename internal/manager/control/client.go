@@ -36,11 +36,6 @@ func (c *Client) Suspend(ctx context.Context, req SuspendRequest) (SuspendRespon
 	return callTyped[SuspendRequest, SuspendResponse](c, ctx, rpcSuspend, req)
 }
 
-// Hotplug sends a hotplug request.
-func (c *Client) Hotplug(ctx context.Context, req HotplugRequest) (HotplugResponse, error) {
-	return callTyped[HotplugRequest, HotplugResponse](c, ctx, rpcHotplug, req)
-}
-
 // Balloon sends a balloon request.
 func (c *Client) Balloon(ctx context.Context, req BalloonRequest) (BalloonResponse, error) {
 	return callTyped[BalloonRequest, BalloonResponse](c, ctx, rpcBalloon, req)
@@ -64,6 +59,11 @@ func (c *Client) GuestRead(ctx context.Context, req GuestReadRequest) (GuestRead
 // GuestWrite sends a guest file write request.
 func (c *Client) GuestWrite(ctx context.Context, req GuestWriteRequest) (GuestWriteResponse, error) {
 	return callTyped[GuestWriteRequest, GuestWriteResponse](c, ctx, rpcGuestWrite, req)
+}
+
+// Hotplug sends a hotplug request.
+func (c *Client) Hotplug(ctx context.Context, req HotplugRequest) (HotplugResponse, error) {
+	return callTyped[HotplugRequest, HotplugResponse](c, ctx, rpcHotplug, req)
 }
 
 // Raw sends a request to method with raw JSON params and returns the raw JSON result.

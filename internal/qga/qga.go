@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
-	"sync"
 	"time"
 
 	"github.com/shazow/virtle/internal/qmpwire"
@@ -14,7 +14,7 @@ import (
 
 // DefaultRPCTimeout bounds a single guest-agent round trip when the dialer
 // does not configure one.
-const DefaultRPCTimeout = 5 * time.Second
+const DefaultRPCTimeout = qmpwire.DefaultRPCTimeout
 
 // Pinger checks whether the guest agent is accepting commands.
 type Pinger interface {
@@ -41,6 +41,11 @@ type ExecRunner interface {
 	ExecStatus(ctx context.Context, pid int) (ExecStatus, error)
 }
 
+// Shutdowner asks the guest operating system to power down.
+type Shutdowner interface {
+	Shutdown(ctx context.Context) error
+}
+
 // Disconnecter closes an open guest-agent connection.
 type Disconnecter interface {
 	Disconnect() error
@@ -54,6 +59,7 @@ type Client interface {
 	FileWriter
 	FileReader
 	ExecRunner
+	Shutdowner
 	Disconnecter
 }
 
@@ -71,10 +77,9 @@ type SocketDialer struct {
 }
 
 type socketClient struct {
-	conn       net.Conn
-	decoder    *json.Decoder
-	rpcTimeout time.Duration
-	mu         sync.Mutex
+	conn    net.Conn
+	decoder *json.Decoder
+	session *qmpwire.Session
 }
 
 // ExecStatus is the guest-agent status response for an executed process.
@@ -86,20 +91,9 @@ type ExecStatus struct {
 }
 
 func (d *SocketDialer) Dial(ctx context.Context, socketPath string, timeout time.Duration) (Client, error) {
-	dialer := net.Dialer{Timeout: timeout}
-	conn, err := dialer.DialContext(ctx, "unix", socketPath)
+	conn, err := qmpwire.DialUnix(ctx, socketPath, timeout, "guest agent")
 	if err != nil {
-		if ctx.Err() != nil {
-			return nil, context.Cause(ctx)
-		}
-		if qmpwire.IsTimeout(err) {
-			return nil, fmt.Errorf("guest agent connect timed out after %s", timeout)
-		}
 		return nil, err
-	}
-	if ctx.Err() != nil {
-		_ = conn.Close()
-		return nil, context.Cause(ctx)
 	}
 
 	rpcTimeout := d.RPCTimeout
@@ -107,9 +101,9 @@ func (d *SocketDialer) Dial(ctx context.Context, socketPath string, timeout time
 		rpcTimeout = DefaultRPCTimeout
 	}
 	return &socketClient{
-		conn:       conn,
-		decoder:    json.NewDecoder(conn),
-		rpcTimeout: rpcTimeout,
+		conn:    conn,
+		decoder: json.NewDecoder(conn),
+		session: &qmpwire.Session{Conn: conn, RPCTimeout: rpcTimeout},
 	}, nil
 }
 
@@ -236,6 +230,17 @@ func (c *socketClient) ExecStatus(ctx context.Context, pid int) (ExecStatus, err
 	return status, nil
 }
 
+// Shutdown asks the guest to power down. The guest often powers off without
+// answering, so a missing or truncated response counts as success; callers
+// bound the wait through ctx.
+func (c *socketClient) Shutdown(ctx context.Context) error {
+	_, err := c.run(ctx, "guest-shutdown", map[string]any{"mode": "powerdown"})
+	if err == nil || errors.Is(err, context.DeadlineExceeded) || qmpwire.IsTimeout(err) || errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
+		return nil
+	}
+	return fmt.Errorf("guest agent shutdown: %w", err)
+}
+
 func (c *socketClient) Disconnect() error {
 	if c == nil || c.conn == nil {
 		return nil
@@ -243,33 +248,10 @@ func (c *socketClient) Disconnect() error {
 	return c.conn.Close()
 }
 
-// run issues one guest-agent round trip. The connection deadline is the
-// earlier of the RPC timeout and the ctx deadline; ctx cancellation
-// interrupts an in-flight read by yanking the deadline.
+// run issues one guest-agent round trip through the session, which owns
+// deadline arbitration, cancellation interrupts, and poisoning the connection
+// once its stream can no longer be trusted.
 func (c *socketClient) run(ctx context.Context, execute string, arguments map[string]any) (json.RawMessage, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	deadline := time.Now().Add(c.rpcTimeout)
-	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
-		deadline = d
-	}
-	if err := c.conn.SetDeadline(deadline); err != nil {
-		return nil, err
-	}
-	stopc := make(chan struct{})
-	stop := context.AfterFunc(ctx, func() {
-		_ = c.conn.SetDeadline(time.Now())
-		close(stopc)
-	})
-	// Wait for a fired AfterFunc before releasing the mutex so it cannot
-	// clobber the deadline set by the next call.
-	defer func() {
-		if !stop() {
-			<-stopc
-		}
-	}()
-
 	command := map[string]any{"execute": execute}
 	if arguments != nil {
 		command["arguments"] = arguments
@@ -278,43 +260,44 @@ func (c *socketClient) run(ctx context.Context, execute string, arguments map[st
 	if err != nil {
 		return nil, err
 	}
-	if _, err := c.conn.Write(qmpwire.AppendDelimiter(payload)); err != nil {
+
+	var response json.RawMessage
+	err = c.session.Do(ctx, func() error {
+		if _, err := c.conn.Write(qmpwire.AppendDelimiter(payload)); err != nil {
+			return &qmpwire.WireError{Err: err}
+		}
+		for {
+			envelope, err := qmpwire.DecodeEnvelope(c.decoder)
+			if err != nil {
+				return err
+			}
+			if envelope.Event != "" {
+				continue
+			}
+			if envelope.Error != nil {
+				if envelope.Error.Desc != "" {
+					return envelope.Error
+				}
+				return fmt.Errorf("guest agent command %q failed with %s", execute, envelope.Error.Class)
+			}
+			response = envelope.Return
+			return nil
+		}
+	})
+	if err != nil {
 		return nil, c.wireError(ctx, err)
 	}
-
-	for {
-		var envelope struct {
-			Return json.RawMessage `json:"return"`
-			Event  string          `json:"event,omitempty"`
-			Error  *struct {
-				Class string `json:"class"`
-				Desc  string `json:"desc"`
-			} `json:"error,omitempty"`
-		}
-		if err := c.decoder.Decode(&envelope); err != nil {
-			return nil, c.wireError(ctx, err)
-		}
-		if envelope.Event != "" {
-			continue
-		}
-		if envelope.Error != nil {
-			if envelope.Error.Desc != "" {
-				return nil, errors.New(envelope.Error.Desc)
-			}
-			return nil, fmt.Errorf("guest agent command %q failed with %s", execute, envelope.Error.Class)
-		}
-		return envelope.Return, nil
-	}
+	return response, nil
 }
 
-// wireError maps a connection failure to its cause: the caller's ctx ending,
-// the RPC liveness bound expiring, or the raw error.
+// wireError maps a failure to its cause: the caller's ctx ending, the RPC
+// liveness bound expiring, or the raw error.
 func (c *socketClient) wireError(ctx context.Context, err error) error {
-	if ctx.Err() != nil {
+	if ctx.Err() != nil && !errors.Is(err, qmpwire.ErrBroken) {
 		return context.Cause(ctx)
 	}
 	if qmpwire.IsTimeout(err) {
-		return fmt.Errorf("guest agent unresponsive after %s", c.rpcTimeout)
+		return fmt.Errorf("guest agent unresponsive after %s", c.session.RPCTimeout)
 	}
 	return err
 }

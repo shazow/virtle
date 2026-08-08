@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/shazow/virtle/internal/executor"
 	"github.com/shazow/virtle/internal/qga"
@@ -19,11 +18,7 @@ func (m *manager) collectGuestInfo(ctx context.Context, socketPath string, watch
 		return Info{}, fmt.Errorf("guest agent socket is not configured")
 	}
 
-	timeout := 2 * m.effectiveQMPCommandTimeout()
-	if timeout <= 0 {
-		timeout = 2 * time.Second
-	}
-	infoCtx, cancel := context.WithTimeout(ctx, timeout)
+	infoCtx, cancel := context.WithTimeout(ctx, defaultGuestInfoTimeout)
 	defer cancel()
 
 	client, err := m.waitForGuestAgent(infoCtx, socketPath, watchers)

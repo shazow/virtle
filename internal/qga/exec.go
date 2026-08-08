@@ -7,16 +7,20 @@ import (
 	"time"
 )
 
-// ExecWait configures guest command execution and polling. The command
-// deadline is carried by ctx; RunCommandStatus polls until the command exits
-// or ctx ends.
+// execPollDelay is the delay between exit-status polls.
+const execPollDelay = 250 * time.Millisecond
+
+// ExecWait configures guest command execution. The command deadline is
+// carried by ctx; RunCommandStatus polls until the command exits or ctx ends.
 type ExecWait struct {
-	PollDelay     time.Duration
 	Name          string
 	Path          string
 	Args          []string
 	Subject       string
 	CaptureOutput bool
+
+	// pollDelay overrides the exit-status poll pacing; only tests set it.
+	pollDelay time.Duration
 }
 
 // RunCommandStatus starts a guest command and waits for its exit status.
@@ -25,6 +29,13 @@ func RunCommandStatus(ctx context.Context, client ExecRunner, wait ExecWait) (Ex
 	if err != nil {
 		return ExecStatus{}, fmt.Errorf("%s %q: %w", wait.Name, wait.Subject, err)
 	}
+
+	pollDelay := wait.pollDelay
+	if pollDelay <= 0 {
+		pollDelay = execPollDelay
+	}
+	ticker := time.NewTicker(pollDelay)
+	defer ticker.Stop()
 
 	for {
 		status, err := client.ExecStatus(ctx, pid)
@@ -38,7 +49,7 @@ func RunCommandStatus(ctx context.Context, client ExecRunner, wait ExecWait) (Ex
 		select {
 		case <-ctx.Done():
 			return ExecStatus{}, fmt.Errorf("%s %q: %w", wait.Name, wait.Subject, context.Cause(ctx))
-		case <-time.After(wait.PollDelay):
+		case <-ticker.C:
 		}
 	}
 }

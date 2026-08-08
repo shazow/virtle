@@ -6,11 +6,10 @@ import (
 	"time"
 )
 
-// MigrationWait configures polling for QMP migration completion. The overall
-// migration deadline is carried by ctx.
-type MigrationWait struct {
-	PollDelay time.Duration
-}
+// migrationPollDelay is the fixed delay between query-migrate polls while
+// waiting for a migration to finish. The overall migration deadline is
+// carried by ctx.
+const migrationPollDelay = 250 * time.Millisecond
 
 // SaveClient is the QMP capability set needed to save VM state to a file.
 type SaveClient interface {
@@ -33,7 +32,7 @@ type MigrationMonitor interface {
 }
 
 // SaveToFile saves VM state to path through QMP migration.
-func SaveToFile(ctx context.Context, client SaveClient, path string, wait MigrationWait) error {
+func SaveToFile(ctx context.Context, client SaveClient, path string) error {
 	status, err := client.QueryStatus(ctx)
 	if err != nil {
 		return err
@@ -50,15 +49,15 @@ func SaveToFile(ctx context.Context, client SaveClient, path string, wait Migrat
 	if err := client.MigrateToFile(ctx, path); err != nil {
 		return err
 	}
-	return WaitForMigration(ctx, client, wait)
+	return WaitForMigration(ctx, client)
 }
 
 // RestoreFromFile restores VM state from path through QMP migration.
-func RestoreFromFile(ctx context.Context, client RestoreClient, path string, wait MigrationWait) error {
+func RestoreFromFile(ctx context.Context, client RestoreClient, path string) error {
 	if err := client.MigrateIncoming(ctx, path); err != nil {
 		return err
 	}
-	if err := WaitForMigration(ctx, client, wait); err != nil {
+	if err := WaitForMigration(ctx, client); err != nil {
 		return err
 	}
 	return client.Cont(ctx)
@@ -66,11 +65,8 @@ func RestoreFromFile(ctx context.Context, client RestoreClient, path string, wai
 
 // WaitForMigration polls until QMP migration reaches a terminal state or ctx
 // ends.
-func WaitForMigration(ctx context.Context, client MigrationMonitor, wait MigrationWait) error {
-	if wait.PollDelay <= 0 {
-		wait.PollDelay = time.Second
-	}
-	ticker := time.NewTicker(wait.PollDelay)
+func WaitForMigration(ctx context.Context, client MigrationMonitor) error {
+	ticker := time.NewTicker(migrationPollDelay)
 	defer ticker.Stop()
 
 	var lastStatus string

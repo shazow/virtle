@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"sync"
 	"time"
 
 	doQMP "github.com/digitalocean/go-qemu/qmp"
@@ -16,7 +15,7 @@ import (
 
 // DefaultRPCTimeout bounds a single QMP operation when the dialer does not
 // configure one.
-const DefaultRPCTimeout = 5 * time.Second
+const DefaultRPCTimeout = qmpwire.DefaultRPCTimeout
 
 // RawRunner runs raw QMP monitor commands.
 type RawRunner interface {
@@ -73,69 +72,52 @@ type SocketMonitorDialer struct {
 }
 
 type socketMonitorClient struct {
-	monitor    *deadlineSocketMonitor
-	raw        *rawQMP.Monitor
-	rpcTimeout time.Duration
-	mu         sync.Mutex
+	monitor *socketMonitor
+	raw     *rawQMP.Monitor
+	session *qmpwire.Session
 }
 
 func (d *SocketMonitorDialer) Dial(ctx context.Context, socketPath string, timeout time.Duration) (Client, error) {
-	if ctx.Err() != nil {
-		return nil, context.Cause(ctx)
-	}
-
-	monitor, err := newDeadlineSocketMonitor(ctx, "unix", socketPath, timeout)
+	conn, err := qmpwire.DialUnix(ctx, socketPath, timeout, "qmp")
 	if err != nil {
-		if ctx.Err() != nil {
-			return nil, context.Cause(ctx)
-		}
-		if qmpwire.IsTimeout(err) {
-			return nil, fmt.Errorf("qmp connect timed out after %s", timeout)
-		}
 		return nil, err
 	}
+	monitor := &socketMonitor{
+		conn:    conn,
+		decoder: json.NewDecoder(conn),
+	}
 
-	monitor.setDeadline(time.Now().Add(timeout))
-	// Cancel a blocked Connect by expiring the socket deadline; the ctx.Err
-	// checks below own the case where cancellation raced a successful connect.
-	stopInterrupt := context.AfterFunc(ctx, func() { _ = monitor.interrupt() })
-	err = monitor.Connect()
-	stopInterrupt()
-	monitor.setDeadline(time.Time{})
-	if err != nil {
+	// The handshake runs through a session bounded by the connect timeout so
+	// ctx cancellation can interrupt a blocked banner read.
+	session := &qmpwire.Session{Conn: conn, RPCTimeout: timeout}
+	if err := session.Do(ctx, monitor.Connect); err != nil {
 		_ = monitor.Disconnect()
-		if ctx.Err() != nil {
-			return nil, context.Cause(ctx)
-		}
-		if qmpwire.IsTimeout(err) {
-			return nil, fmt.Errorf("qmp connect timed out after %s", timeout)
-		}
-		return nil, err
+		return nil, qmpwire.DialError(ctx, err, "qmp", timeout)
 	}
 	if ctx.Err() != nil {
 		_ = monitor.Disconnect()
 		return nil, context.Cause(ctx)
 	}
 
-	rpcTimeout := d.RPCTimeout
-	if rpcTimeout <= 0 {
-		rpcTimeout = DefaultRPCTimeout
+	session.RPCTimeout = d.RPCTimeout
+	if session.RPCTimeout <= 0 {
+		session.RPCTimeout = DefaultRPCTimeout
 	}
 	return &socketMonitorClient{
-		monitor:    monitor,
-		raw:        rawQMP.NewMonitor(monitor),
-		rpcTimeout: rpcTimeout,
+		monitor: monitor,
+		raw:     rawQMP.NewMonitor(monitor),
+		session: session,
 	}, nil
 }
 
 func (c *socketMonitorClient) WithRaw(ctx context.Context, fn func(*rawQMP.Monitor) error) error {
-	return c.withDeadline(ctx, func() error {
+	return c.session.Do(ctx, func() error {
 		return fn(c.raw)
 	})
 }
 
 func (c *socketMonitorClient) RunRaw(ctx context.Context, command string) error {
-	err := c.withDeadline(ctx, func() error {
+	err := c.session.Do(ctx, func() error {
 		if !json.Valid([]byte(command)) {
 			return fmt.Errorf("invalid qmp json")
 		}
@@ -153,18 +135,14 @@ func (c *socketMonitorClient) DeviceDelAndWait(ctx context.Context, id string) e
 	if err != nil {
 		return err
 	}
-	err = c.withDeadline(ctx, func() error {
-		c.monitor.mu.Lock()
-		defer c.monitor.mu.Unlock()
-		return c.monitor.withDeadline(func() error {
-			if _, err := c.monitor.conn.Write(qmpwire.AppendDelimiter(command)); err != nil {
-				return err
-			}
-			if _, err := c.monitor.readResponseLocked(); err != nil {
-				return err
-			}
-			return c.monitor.waitDeviceDeletedLocked(id)
-		})
+	err = c.session.Do(ctx, func() error {
+		if _, err := c.monitor.conn.Write(qmpwire.AppendDelimiter(command)); err != nil {
+			return &qmpwire.WireError{Err: err}
+		}
+		if _, err := c.monitor.readResponse(); err != nil {
+			return err
+		}
+		return c.monitor.waitDeviceDeleted(id)
 	})
 	return c.opError(ctx, fmt.Sprintf("qmp device_del %q", id), err)
 }
@@ -217,8 +195,12 @@ func (c *socketMonitorClient) QueryStatus(ctx context.Context) (string, error) {
 
 func (c *socketMonitorClient) MigrateToFile(ctx context.Context, path string) error {
 	uri := "file:" + path
-	err := c.WithRaw(ctx, func(monitor *rawQMP.Monitor) error {
-		if err := monitor.Migrate(uri, nil, nil, nil); err != nil {
+	// Deviation from the per-RPC liveness bound: QMP can hold the reply to
+	// migrate until the file-backed state transfer finishes, which takes
+	// longer than an ordinary round trip. The caller's ctx (the migration
+	// timeout) is the only bound here.
+	err := c.session.DoSlow(ctx, func() error {
+		if err := c.raw.Migrate(uri, nil, nil, nil); err != nil {
 			return fmt.Errorf("qmp migrate %q: %w", uri, err)
 		}
 		return nil
@@ -228,8 +210,10 @@ func (c *socketMonitorClient) MigrateToFile(ctx context.Context, path string) er
 
 func (c *socketMonitorClient) MigrateIncoming(ctx context.Context, path string) error {
 	uri := "file:" + path
-	err := c.WithRaw(ctx, func(monitor *rawQMP.Monitor) error {
-		if err := monitor.MigrateIncoming(uri); err != nil {
+	// Deviation from the per-RPC liveness bound: like migrate, the reply can
+	// lag behind reading the saved state, so only ctx bounds this operation.
+	err := c.session.DoSlow(ctx, func() error {
+		if err := c.raw.MigrateIncoming(uri); err != nil {
 			return fmt.Errorf("qmp migrate-incoming %q: %w", uri, err)
 		}
 		return nil
@@ -262,204 +246,106 @@ func (c *socketMonitorClient) Disconnect() error {
 	return c.monitor.Disconnect()
 }
 
-// withDeadline runs one QMP operation. The connection deadline is the earlier
-// of the RPC timeout and the ctx deadline; ctx cancellation interrupts an
-// in-flight read by yanking the deadline.
-func (c *socketMonitorClient) withDeadline(ctx context.Context, fn func() error) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	deadline := time.Now().Add(c.rpcTimeout)
-	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
-		deadline = d
-	}
-	c.monitor.setDeadline(deadline)
-	defer c.monitor.setDeadline(time.Time{})
-
-	stopc := make(chan struct{})
-	stop := context.AfterFunc(ctx, func() {
-		_ = c.monitor.interrupt()
-		close(stopc)
-	})
-	// Wait for a fired AfterFunc before releasing the mutex so it cannot
-	// clobber the deadline set by the next operation.
-	defer func() {
-		if !stop() {
-			<-stopc
-		}
-	}()
-
-	return fn()
-}
-
 // opError maps an operation failure to its cause: the caller's ctx ending,
 // the RPC liveness bound expiring, or the raw error.
 func (c *socketMonitorClient) opError(ctx context.Context, name string, err error) error {
 	if err == nil {
 		return nil
 	}
-	if ctx.Err() != nil {
+	if ctx.Err() != nil && !errors.Is(err, qmpwire.ErrBroken) {
 		return fmt.Errorf("%s: %w", name, context.Cause(ctx))
 	}
 	if qmpwire.IsTimeout(err) {
-		return fmt.Errorf("%s timed out after %s", name, c.rpcTimeout)
+		return fmt.Errorf("%s timed out after %s", name, c.session.RPCTimeout)
 	}
 	return err
 }
 
-type deadlineSocketMonitor struct {
-	conn     net.Conn
-	decoder  *json.Decoder
-	deadline time.Time
-	mu       sync.Mutex
+// socketMonitor adapts the shared unix socket to go-qemu's raw monitor
+// interface. It only frames commands and decodes replies: deadlines,
+// cancellation, and serialization are owned by the client's Session, so every
+// method must be called inside Session.Do/DoSlow.
+type socketMonitor struct {
+	conn    net.Conn
+	decoder *json.Decoder
 }
 
-func newDeadlineSocketMonitor(ctx context.Context, network string, addr string, timeout time.Duration) (*deadlineSocketMonitor, error) {
-	dialer := net.Dialer{Timeout: timeout}
-	conn, err := dialer.DialContext(ctx, network, addr)
-	if err != nil {
-		return nil, err
+func (m *socketMonitor) Connect() error {
+	var banner struct {
+		QMP struct {
+			Version      doQMP.Version `json:"version"`
+			Capabilities []string      `json:"capabilities"`
+		} `json:"QMP"`
+	}
+	if err := m.decoder.Decode(&banner); err != nil {
+		return &qmpwire.WireError{Err: err}
 	}
 
-	return &deadlineSocketMonitor{
-		conn:    conn,
-		decoder: json.NewDecoder(conn),
-	}, nil
-}
-
-func (m *deadlineSocketMonitor) Connect() error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	return m.withDeadline(func() error {
-		var banner struct {
-			QMP struct {
-				Version      doQMP.Version `json:"version"`
-				Capabilities []string      `json:"capabilities"`
-			} `json:"QMP"`
-		}
-		if err := m.decoder.Decode(&banner); err != nil {
-			return err
-		}
-
-		payload, err := json.Marshal(doQMP.Command{Execute: "qmp_capabilities"})
-		if err != nil {
-			return err
-		}
-		if _, err := m.conn.Write(qmpwire.AppendDelimiter(payload)); err != nil {
-			return err
-		}
-
-		_, err = m.readResponseLocked()
+	payload, err := json.Marshal(doQMP.Command{Execute: "qmp_capabilities"})
+	if err != nil {
 		return err
-	})
+	}
+	if _, err := m.conn.Write(qmpwire.AppendDelimiter(payload)); err != nil {
+		return &qmpwire.WireError{Err: err}
+	}
+
+	_, err = m.readResponse()
+	return err
 }
 
-func (m *deadlineSocketMonitor) Disconnect() error {
+func (m *socketMonitor) Disconnect() error {
 	if m == nil || m.conn == nil {
 		return nil
 	}
 	return m.conn.Close()
 }
 
-func (m *deadlineSocketMonitor) Run(command []byte) ([]byte, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	var response []byte
-	err := m.withDeadline(func() error {
-		if _, err := m.conn.Write(qmpwire.AppendDelimiter(command)); err != nil {
-			return err
-		}
-
-		var err error
-		response, err = m.readResponseLocked()
-		return err
-	})
-	if err != nil {
-		return nil, err
+func (m *socketMonitor) Run(command []byte) ([]byte, error) {
+	if _, err := m.conn.Write(qmpwire.AppendDelimiter(command)); err != nil {
+		return nil, &qmpwire.WireError{Err: err}
 	}
-	return response, nil
+	return m.readResponse()
 }
 
-func (m *deadlineSocketMonitor) Events(context.Context) (<-chan doQMP.Event, error) {
+func (m *socketMonitor) Events(context.Context) (<-chan doQMP.Event, error) {
 	return nil, doQMP.ErrEventsNotSupported
 }
 
-// setDeadline stores the absolute deadline applied to subsequent operations;
-// the raw go-qemu monitor calls Run without a ctx, so the deadline travels
-// through this field. Zero clears it.
-func (m *deadlineSocketMonitor) setDeadline(deadline time.Time) {
-	m.deadline = deadline
-}
-
-func (m *deadlineSocketMonitor) interrupt() error {
-	if m == nil || m.conn == nil {
-		return nil
-	}
-	return m.conn.SetDeadline(time.Now())
-}
-
-func (m *deadlineSocketMonitor) withDeadline(fn func() error) error {
-	if !m.deadline.IsZero() {
-		if err := m.conn.SetDeadline(m.deadline); err != nil {
-			return err
-		}
-		defer m.conn.SetDeadline(time.Time{})
-	}
-	return fn()
-}
-
-func (m *deadlineSocketMonitor) readResponseLocked() ([]byte, error) {
+func (m *socketMonitor) readResponse() ([]byte, error) {
 	for {
-		var message json.RawMessage
-		if err := m.decoder.Decode(&message); err != nil {
-			return nil, err
-		}
-
-		var envelope struct {
-			Event string `json:"event,omitempty"`
-			Error *struct {
-				Class string `json:"class"`
-				Desc  string `json:"desc"`
-			} `json:"error,omitempty"`
-		}
-		if err := json.Unmarshal(message, &envelope); err != nil {
+		envelope, err := qmpwire.DecodeRawEnvelope(m.decoder)
+		if err != nil {
 			return nil, err
 		}
 		if envelope.Event != "" {
 			continue
 		}
 		if envelope.Error != nil && envelope.Error.Desc != "" {
-			return nil, errors.New(envelope.Error.Desc)
+			return nil, envelope.Error
 		}
-		return message, nil
+		return envelope.Raw, nil
 	}
 }
 
-func (m *deadlineSocketMonitor) waitDeviceDeletedLocked(id string) error {
+func (m *socketMonitor) waitDeviceDeleted(id string) error {
 	for {
-		var message json.RawMessage
-		if err := m.decoder.Decode(&message); err != nil {
-			return err
-		}
-
-		var envelope struct {
-			Event string `json:"event,omitempty"`
-			Data  struct {
-				Device string `json:"device,omitempty"`
-			} `json:"data,omitempty"`
-			Error *struct {
-				Desc string `json:"desc"`
-			} `json:"error,omitempty"`
-		}
-		if err := json.Unmarshal(message, &envelope); err != nil {
+		envelope, err := qmpwire.DecodeEnvelope(m.decoder)
+		if err != nil {
 			return err
 		}
 		if envelope.Error != nil && envelope.Error.Desc != "" {
-			return errors.New(envelope.Error.Desc)
+			return envelope.Error
 		}
-		if envelope.Event == "DEVICE_DELETED" && envelope.Data.Device == id {
+		if envelope.Event != "DEVICE_DELETED" {
+			continue
+		}
+		var data struct {
+			Device string `json:"device,omitempty"`
+		}
+		if err := json.Unmarshal(envelope.Data, &data); err != nil {
+			return &qmpwire.WireError{Err: err}
+		}
+		if data.Device == id {
 			return nil
 		}
 	}

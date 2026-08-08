@@ -106,8 +106,10 @@ type QEMUQMP struct {
 }
 
 type QEMUGuestAgent struct {
-	SocketPath     string        `json:"socketPath,omitempty"`
-	CommandTimeout time.Duration `json:"commandTimeout,omitempty"`
+	SocketPath      string        `json:"socketPath,omitempty"`
+	CommandTimeout  time.Duration `json:"commandTimeout,omitempty"`
+	ShutdownExec    []string      `json:"shutdownExec,omitempty"`
+	ShutdownTimeout time.Duration `json:"shutdownTimeout,omitempty"`
 }
 
 type QEMUSSHReady struct {

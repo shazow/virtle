@@ -370,6 +370,11 @@ func TestDevicePlansDeclareEverySequenceExplicitly(t *testing.T) {
 			if len(plan.release) == 0 {
 				t.Errorf("release sequence is empty: attach rollback and detach would both leak the backend")
 			}
+			// Rollback replays release[:succeeded] where succeeded counts
+			// backend commands, so the two sequences must pair 1:1.
+			if len(plan.backend) != len(plan.release) {
+				t.Errorf("backend and release sequences must pair 1:1: %d backend vs %d release", len(plan.backend), len(plan.release))
+			}
 		})
 	}
 }

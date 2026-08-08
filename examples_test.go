@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"io/fs"
 	"os"
 	"testing"
@@ -26,7 +27,15 @@ func TestExampleManifests(t *testing.T) {
 			}
 			defer file.Close()
 
-			if _, err := manifest.Load(file); err != nil {
+			data, err := io.ReadAll(file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			doc, err := manifest.DecodeDocumentBytes(data, name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := doc.Manifest(); err != nil {
 				t.Fatal(err)
 			}
 		})

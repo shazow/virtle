@@ -15,6 +15,7 @@ import (
 	"github.com/shazow/virtle/internal/manager/launch"
 	runtimepkg "github.com/shazow/virtle/internal/manager/runtime"
 	"github.com/shazow/virtle/internal/qmpclient"
+	"github.com/shazow/virtle/internal/qmpwire"
 )
 
 func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started *runningLaunch, err error) {
@@ -61,7 +62,7 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 		}
 
 		var cleanupErr error
-		cleanupErr = errors.Join(cleanupErr, processes.Close(m.shutdownDelay))
+		cleanupErr = errors.Join(cleanupErr, processes.Close(context.Background()))
 		cleanupErr = errors.Join(cleanupErr, cleanupRuntime())
 		if qmp != nil {
 			cleanupErr = errors.Join(cleanupErr, qmp.Disconnect())
@@ -120,9 +121,40 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 	}
 	stats.Timer(launch.TimerQMPReady, time.Now())
 	qemu.SetShutdown(func() error {
+		// Shutdown runs during teardown, after the launch context may already
+		// be canceled, so each step gets its own context.
+		shutdown := plan.Manifest.QEMU.GuestAgent
+		method := "guest-shutdown"
+		if len(shutdown.ShutdownExec) > 0 {
+			method = "guest-exec"
+		}
+		m.logger.Info("requesting guest shutdown", "method", method, "exec", shutdown.ShutdownExec)
+		err := m.requestGuestShutdown(context.Background(), plan.Paths.GuestAgentSocket, shutdown.ShutdownExec)
+		if err != nil {
+			m.logger.Info("guest shutdown request failed; forcing qemu quit", "err", err)
+		} else {
+			m.logger.Info("waiting for guest shutdown", "timeout", shutdown.ShutdownTimeout)
+			waitCtx, cancel := context.WithTimeoutCause(context.Background(), shutdown.ShutdownTimeout,
+				fmt.Errorf("guest did not exit within %s", shutdown.ShutdownTimeout))
+			waitErr := qemu.WaitContext(waitCtx)
+			cancel()
+			if waitErr == nil {
+				m.logger.Info("guest shutdown completed")
+				return nil
+			}
+			m.logger.Info("guest shutdown timed out; forcing qemu quit", "err", waitErr)
+		}
+		m.logger.Info("forcing qemu quit through QMP")
 		ctx, cancel := context.WithTimeout(context.Background(), m.effectiveQMPQuitTimeout())
 		defer cancel()
-		return qmp.Quit(ctx)
+		quitErr := qmp.Quit(ctx)
+		if errors.Is(quitErr, qmpwire.ErrBroken) {
+			// The long-lived monitor was poisoned by an earlier interrupted
+			// operation; retry on a fresh connection so teardown still quits
+			// through QMP instead of falling to signals.
+			quitErr = m.quitFreshQMP(ctx, plan.Paths.QMPSocket)
+		}
+		return quitErr
 	})
 
 	if plan.ResumeState != nil {
@@ -143,7 +175,6 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 		QMP:             qmp,
 		SuspendRequests: lifecycle.Suspend(),
 		Processes:       processes,
-		ShutdownDelay:   m.shutdownDelay,
 		WriteBack: func(ctx context.Context) error {
 			if !writeBackOnExit {
 				return nil
@@ -153,7 +184,7 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 		Cleanup: func() error {
 			return errors.Join(launch.RemoveStaleSockets(plan.RuntimeSocketCleanupFiles()...), cleanupRuntime())
 		},
-		QMPTimeout:       m.effectiveQMPCommandTimeout(),
+		WriteBackTimeout: defaultWriteBackTimeout,
 		Logger:           m.logger,
 		SavedSuspendExit: launch.IsSavedSuspendExit,
 	})
@@ -287,5 +318,5 @@ func (m *manager) startQEMU(cmd *exec.Cmd) (*executor.Process, error) {
 	if m.logger != nil {
 		m.logger.Info("starting qemu", "command", shellquote.Join(cmd.Args...))
 	}
-	return m.runner.Start(cmd)
+	return m.startManagedProcess(cmd)
 }

@@ -7,10 +7,10 @@ import (
 )
 
 // GuestCommandContext bounds a guest-agent command with timeout. Zero means
-// the command is bounded only by ctx.
+// the command is bounded only by ctx, which is returned as-is.
 func GuestCommandContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
 	if timeout <= 0 {
-		return context.WithCancel(ctx)
+		return ctx, func() {}
 	}
 	return context.WithTimeoutCause(ctx, timeout, fmt.Errorf("guest command timed out after %s", timeout))
 }

@@ -62,11 +62,20 @@ machine_options = { accel = "kvm:tcg", pcie = "on" }  # Default: Derived for hos
 qmp_socket = "qmp.sock"  # Default: "qmp.sock"
 guest_agent_socket = "qga.sock"  # Default: "qga.sock"
 
-# Guest agent operations such as guest-exec and file transfer use an independent
-# timeout so slow guest commands are not constrained by the short QMP socket
-# timeout. Durations are Go duration strings such as "30s" or "5m". Set this
-# to "0" to wait indefinitely.
+# Guest agent commands virtle issues itself (file transfer, workspace mounts,
+# shutdown commands) use an independent timeout so slow guest commands are not
+# constrained by the short QMP socket timeout. Guest-exec requests sent through
+# the control socket carry their own timeout and are not affected. Durations
+# are Go duration strings such as "30s" or "5m". Set this to "0" to wait
+# indefinitely.
 guest_default_timeout = "30s"  # Default: "30s"; "0" disables the timeout
+
+# Virtle asks QGA to shut down the guest cleanly before QEMU is forced to quit.
+# Set shutdown_exec to override QGA's native guest-shutdown action with an exec
+# tuple (guest path plus arguments) started through guest-exec. If QGA rejects
+# the request or the VM remains running after the timeout, virtle uses QMP quit.
+shutdown_exec = ["/bin/sh", "-c", "poweroff"]
+shutdown_timeout = "90s"  # Default: "90s"; "0" skips the wait
 
 # Hotplugged PCI devices need root ports created when QEMU starts. virtle
 # automatically allocates one port for each entry under [hotplug].

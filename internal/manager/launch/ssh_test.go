@@ -97,7 +97,7 @@ func TestBuildSSHCommandRendersManifestExecTemplates(t *testing.T) {
 	if !containsString(commandArgs(session), "control-10") || !containsString(commandArgs(session), "HostName=agent@vsock/10") {
 		t.Fatalf("expected rendered ssh args, got %#v", commandArgs(session))
 	}
-	hint, err := buildSSHCommandHint(launchManifest, 10)
+	hint, err := BuildSSHCommandHint(launchManifest, 10)
 	if err != nil {
 		t.Fatalf("build ssh command hint: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestBuildSSHCommandHintReturnsTemplateError(t *testing.T) {
 		},
 	}
 
-	_, err := buildSSHCommandHint(launchManifest, 10)
+	_, err := BuildSSHCommandHint(launchManifest, 10)
 	if err == nil || !strings.Contains(err.Error(), `map has no entry for key "Missing"`) {
 		t.Fatalf("expected ssh hint template error, got %v", err)
 	}
@@ -144,4 +144,9 @@ func containsString(values []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+// buildSSHCommand is a test-only convenience using the manifest's own argv.
+func buildSSHCommand(launchManifest *manifest.Manifest, cid int, remoteCommand []string) (*exec.Cmd, error) {
+	return buildSSHCommandWithArgv(launchManifest, cid, remoteCommand, launchManifest.SSH.Argv)
 }

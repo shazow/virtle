@@ -101,5 +101,8 @@ func (m *manager) effectiveSuspendSignalTimeout() time.Duration {
 	return defaultLaunchSignalTimeout +
 		m.effectiveQMPMigrationTimeout() +
 		m.effectiveQMPQuitTimeout() +
+		// The graceful-shutdown probe: a post-suspend guest is paused, so the
+		// guest ping fails within its cap and teardown falls through to quit.
+		m.effectiveQMPConnectTimeout() + guestShutdownResponseTimeout +
 		time.Duration(teardownProcesses)*shutdownDelay
 }

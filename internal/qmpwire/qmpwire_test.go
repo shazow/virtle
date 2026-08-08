@@ -3,6 +3,7 @@ package qmpwire
 import (
 	"context"
 	"errors"
+	"net"
 	"testing"
 	"time"
 )
@@ -64,5 +65,68 @@ func TestDialWithRetryHonorsContext(t *testing.T) {
 	})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context error, got %v", err)
+	}
+}
+
+// sessionTestRPCTimeout and sessionTestLockHold pin the queued-operation
+// invariant: the hold outlasts the RPC bound, so a deadline armed before lock
+// acquisition would already be expired when the queued operation runs.
+const (
+	sessionTestRPCTimeout = 100 * time.Millisecond
+	sessionTestLockHold   = 3 * sessionTestRPCTimeout
+)
+
+func TestSessionQueuedOperationDeadlineStartsAtLockAcquisition(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	// Echo one byte so the queued operation performs a real round trip.
+	go func() {
+		buf := make([]byte, 1)
+		if _, err := serverConn.Read(buf); err != nil {
+			return
+		}
+		_, _ = serverConn.Write(buf)
+	}()
+
+	session := &Session{Conn: clientConn, RPCTimeout: sessionTestRPCTimeout}
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	slowDone := make(chan error, 1)
+	go func() {
+		slowDone <- session.DoSlow(context.Background(), func() error {
+			close(entered)
+			<-release
+			return nil
+		})
+	}()
+	<-entered
+
+	queuedDone := make(chan error, 1)
+	go func() {
+		queuedDone <- session.Do(context.Background(), func() error {
+			if _, err := clientConn.Write([]byte("x")); err != nil {
+				return &WireError{Err: err}
+			}
+			buf := make([]byte, 1)
+			if _, err := clientConn.Read(buf); err != nil {
+				return &WireError{Err: err}
+			}
+			return nil
+		})
+	}()
+
+	// Mutex queuing is unobservable, so a timed hold longer than the RPC bound
+	// is the only way to guarantee the queued operation waited past it.
+	time.Sleep(sessionTestLockHold)
+	close(release)
+
+	if err := <-slowDone; err != nil {
+		t.Fatalf("slow operation: %v", err)
+	}
+	if err := <-queuedDone; err != nil {
+		t.Fatalf("queued operation should start with a fresh deadline, got %v", err)
 	}
 }

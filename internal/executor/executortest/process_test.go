@@ -1,6 +1,7 @@
 package executortest
 
 import (
+	"context"
 	"errors"
 	"os"
 	"reflect"
@@ -49,8 +50,9 @@ func TestSignalCompletesByDefault(t *testing.T) {
 func TestProcessIgnoreSignalsAllowsKillEscalation(t *testing.T) {
 	handle := &Process{IgnoreSignals: true}
 	process := handle.Process()
+	process.SetGracePeriod(time.Millisecond)
 
-	if err := process.Stop(time.Millisecond); err != nil {
+	if err := process.Stop(context.Background()); err != nil {
 		t.Fatalf("stop: %v", err)
 	}
 

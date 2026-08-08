@@ -28,14 +28,18 @@ import (
 	"github.com/shazow/virtle/internal/manifest"
 	"github.com/shazow/virtle/internal/qga"
 	"github.com/shazow/virtle/internal/qmpclient"
-	"github.com/shazow/virtle/internal/sshtools"
 )
 
 const (
-	defaultSSHRetryDelay      = 500 * time.Millisecond
 	defaultShutdownDelay      = 15 * time.Second
-	defaultMigrationPollDelay = 100 * time.Millisecond
 	sshRetryOutputRevealDelay = 250 * time.Millisecond
+	// defaultWriteBackTimeout bounds the whole teardown write-back phase:
+	// reconnecting to the guest agent and copying changed files back to the
+	// host. Individual guest commands are bounded separately.
+	defaultWriteBackTimeout = time.Minute
+	// defaultGuestInfoTimeout bounds collecting guest diagnostics: waiting
+	// for the guest agent and running the process listing.
+	defaultGuestInfoTimeout = 10 * time.Second
 )
 
 type manager struct {
@@ -53,7 +57,6 @@ type manager struct {
 	sshReadyDialer      launch.SSHReadyDialer
 	logger              *slog.Logger
 	logWriter           io.Writer
-	sshRetryDelay       time.Duration
 	sshReadyTimeout     time.Duration
 	shutdownDelay       time.Duration
 	qmpRetryDelay       time.Duration
@@ -81,7 +84,6 @@ func newManagerFromConfig(config Config) *manager {
 		sshReadyDialer:      config.SSHReadyDialer,
 		logger:              config.Logger,
 		logWriter:           config.LogWriter,
-		sshRetryDelay:       config.SSHRetryDelay,
 		sshReadyTimeout:     config.SSHReadyTimeout,
 		shutdownDelay:       config.ShutdownDelay,
 		qmpRetryDelay:       config.QMPRetryDelay,
@@ -92,10 +94,6 @@ func newManagerFromConfig(config Config) *manager {
 		pidSignaler:         config.PIDSignaler,
 		notifier:            config.Notifier,
 	}
-}
-
-func (m *manager) launch(ctx context.Context, manifest *manifest.Manifest, remoteCommand []string) error {
-	return m.launchWithOptions(ctx, manifest, remoteCommand, launch.Options{Resume: launch.ResumeModeNo, SSH: true})
 }
 
 func (m *manager) launchWithOptions(ctx context.Context, manifest *manifest.Manifest, remoteCommand []string, options launch.Options) error {
@@ -156,9 +154,7 @@ func (m *manager) restoreLaunchRuntime(ctx context.Context, plan *launch.Plan, c
 	}
 	migrateCtx, cancel := m.migrationContext(ctx)
 	defer cancel()
-	if err := qmpclient.RestoreFromFile(migrateCtx, client, plan.ResumeState.VMStatePath, qmpclient.MigrationWait{
-		PollDelay: defaultMigrationPollDelay,
-	}); err != nil {
+	if err := qmpclient.RestoreFromFile(migrateCtx, client, plan.ResumeState.VMStatePath); err != nil {
 		return launch.WrapFixedStage("restore")(err)
 	}
 	notifyRuntimeResume(ctx, plan)
@@ -201,24 +197,12 @@ func (m *manager) waitForLaunchForeground(
 		}
 	}
 
-	renderer, err := manifest.NewTemplateRenderer(manifest.SSHTemplateProvider{
-		CID:         plan.CID,
-		User:        plan.Manifest.SSH.User,
-		Destination: sshtools.VSockDestination(plan.Manifest.SSH.User, plan.CID),
-	})
-	if err != nil {
+	if hint, err := launch.BuildSSHCommandHint(plan.Manifest, plan.CID); err != nil {
 		if m.logger != nil {
 			m.logger.Info("ssh command hint template failed", "err", err)
 		}
-	} else {
-		argv, err := renderer.RenderArgv(plan.Manifest.SSH.Argv)
-		if err != nil {
-			if m.logger != nil {
-				m.logger.Info("ssh command hint template failed", "err", err)
-			}
-		} else if hint := (sshtools.Config{Exec: argv, User: plan.Manifest.SSH.User}).Hint(plan.CID); hint != "" {
-			fmt.Fprintf(m.outputWriter(), "connect with: %s\n", hint)
-		}
+	} else if hint != "" {
+		fmt.Fprintf(m.outputWriter(), "connect with: %s\n", hint)
 	}
 
 	vmWatchers := processes.VMWatchers()
@@ -226,7 +210,12 @@ func (m *manager) waitForLaunchForeground(
 }
 
 func (m *manager) startManagedProcess(cmd *exec.Cmd) (*executor.Process, error) {
-	return m.runner.Start(cmd)
+	process, err := m.runner.Start(cmd)
+	if err != nil {
+		return nil, err
+	}
+	process.SetGracePeriod(m.shutdownDelay)
+	return process, nil
 }
 
 func (m *manager) startRuns(cid int) (executor.Group, error) {
@@ -252,9 +241,9 @@ func (m *manager) startRuns(cid int) (executor.Group, error) {
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		cmd.Stdout = os.Stderr
 		cmd.Stderr = os.Stderr
-		process, err := m.runner.Start(cmd)
+		process, err := m.startManagedProcess(cmd)
 		if err != nil {
-			_ = started.StopAll(m.shutdownDelay)
+			_ = started.StopAll(context.Background())
 			return executor.Group{}, &launch.StageError{Stage: "run startup", Err: err}
 		}
 		started.Add(process)
@@ -265,6 +254,21 @@ func (m *manager) startRuns(cid int) (executor.Group, error) {
 
 func (m *manager) waitForSockets(ctx context.Context, stage string, socketPaths []string, watchers executor.Group) error {
 	return m.waitForLaunchSockets(ctx, stage, socketPaths, watchers)
+}
+
+// quitFreshQMP dials a new QMP connection and quits QEMU through it, for
+// teardown paths whose long-lived monitor has been poisoned.
+func (m *manager) quitFreshQMP(ctx context.Context, socketPath string) error {
+	dialer := m.qmpDialer
+	if dialer == nil {
+		dialer = &qmpclient.SocketMonitorDialer{}
+	}
+	client, err := dialer.Dial(ctx, socketPath, m.effectiveQMPConnectTimeout())
+	if err != nil {
+		return fmt.Errorf("redial qmp for quit: %w", err)
+	}
+	defer client.Disconnect()
+	return client.Quit(ctx)
 }
 
 func (m *manager) waitForQMP(ctx context.Context, socketPath string, watchers executor.Group) (qmpclient.Client, error) {
@@ -324,10 +328,6 @@ func (m *manager) effectiveQMPMigrationTimeout() time.Duration {
 func (m *manager) migrationContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	timeout := m.effectiveQMPMigrationTimeout()
 	return context.WithTimeoutCause(ctx, timeout, fmt.Errorf("migration timed out after %s", timeout))
-}
-
-func (m *manager) effectiveQMPCommandTimeout() time.Duration {
-	return m.effectiveQMPConnectTimeout()
 }
 
 type launchSuspendHandler struct {
@@ -414,12 +414,9 @@ func (m *manager) runSSHSession(
 }
 
 func (m *manager) waitBeforeSSHRetry(ctx context.Context, lifecycle *launch.Lifecycle, suspendHandler suspendHandler, guestAgentSocketPath string, watchers executor.Group) error {
-	// An explicit manifest retry_delay of zero means retry immediately; the
-	// manager default applies only when no manifest is bound.
-	delay := m.launchManifest.SSHRetryDelay(m.sshRetryDelay)
-	if delay <= 0 {
-		return nil
-	}
+	// Validation rejects non-positive retry delays, so the manifest value is
+	// always usable directly.
+	delay := m.launchManifest.SSH.RetryDelay
 
 	return m.waitForLifecycleEvent(ctx, "active session", delay, lifecycle, suspendHandler, guestAgentSocketPath, watchers)
 }
@@ -472,9 +469,7 @@ func (m *manager) saveSuspendStateConnected(ctx context.Context, qmpSocketPath s
 	}
 	migrateCtx, cancel := m.migrationContext(ctx)
 	defer cancel()
-	if err := qmpclient.SaveToFile(migrateCtx, client, statePath, qmpclient.MigrationWait{
-		PollDelay: defaultMigrationPollDelay,
-	}); err != nil {
+	if err := qmpclient.SaveToFile(migrateCtx, client, statePath); err != nil {
 		return launch.WrapFixedStage("qmp suspend")(err)
 	}
 

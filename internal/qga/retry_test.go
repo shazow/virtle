@@ -107,6 +107,8 @@ func (c *retryClient) Exec(context.Context, string, []string, bool) (int, error)
 func (c *retryClient) ExecStatus(context.Context, int) (ExecStatus, error) {
 	return ExecStatus{}, nil
 }
+func (c *retryClient) Shutdown(context.Context) error { return nil }
+
 func (c *retryClient) Disconnect() error {
 	c.disconnected = true
 	return nil

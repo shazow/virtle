@@ -60,12 +60,12 @@ func (cfg Config) WithIdentity(identityFile string) Config {
 	}
 }
 
-func (cfg Config) Destination(cid int) string {
-	return VSockDestination(cfg.User, cid)
-}
-
 func VSockDestination(user string, cid int) string {
 	return fmt.Sprintf("%s@vsock/%d", user, cid)
+}
+
+func (cfg Config) Destination(cid int) string {
+	return VSockDestination(cfg.User, cid)
 }
 
 func (cfg Config) Hint(cid int) string {
@@ -75,18 +75,6 @@ func (cfg Config) Hint(cid int) string {
 	args := append([]string(nil), cfg.Exec...)
 	args = append(args, cfg.Destination(cid))
 	return shellDisplayJoin(args...)
-}
-
-func (c Command) Argv() []string {
-	if c.Path == "" {
-		return append([]string(nil), c.Args...)
-	}
-	argv := []string{c.Path}
-	return append(argv, c.Args...)
-}
-
-func (c Command) String() string {
-	return shellDisplayJoin(c.Argv()...)
 }
 
 // shellDisplayJoin quotes args for display with the same library used when

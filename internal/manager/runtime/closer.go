@@ -15,9 +15,8 @@ type disconnecter interface {
 }
 
 type shutdownResources struct {
-	Processes     *launch.ProcessSet
-	ShutdownDelay time.Duration
-	QMP           disconnecter
+	Processes *launch.ProcessSet
+	QMP       disconnecter
 }
 
 type closeActions struct {
@@ -63,7 +62,9 @@ func (a closeActions) Run() error {
 		err = errors.Join(err, a.Control.Close())
 	}
 	if a.Processes != nil {
-		err = errors.Join(err, a.Processes.Close(a.ShutdownDelay))
+		// Teardown is never canceled from above; each process escalates on
+		// its own grace period.
+		err = errors.Join(err, a.Processes.Close(context.Background()))
 	}
 	if a.QMP != nil {
 		err = errors.Join(err, a.QMP.Disconnect())

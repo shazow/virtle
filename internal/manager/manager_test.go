@@ -369,7 +369,6 @@ func TestManagerLaunchSIGTERMSequenceAndTeardownOrder(t *testing.T) {
 		qmpDialer:         &fakeQMPDialer{client: qmpClient},
 		logger:            slog.New(slog.NewTextHandler(&logOutput, nil)),
 		logWriter:         &logOutput,
-		sshRetryDelay:     0,
 		shutdownDelay:     10 * time.Millisecond,
 		qmpRetryDelay:     0,
 		qmpConnectTimeout: time.Millisecond,
@@ -864,7 +863,6 @@ func TestManagerLaunchWithoutSSHPrintsConnectHintAndWaitsForQEMU(t *testing.T) {
 		qmpDialer:         &fakeQMPDialer{client: qmpClient},
 		logger:            slog.New(slog.NewTextHandler(&logOutput, nil)),
 		logWriter:         &logOutput,
-		sshRetryDelay:     0,
 		shutdownDelay:     10 * time.Millisecond,
 		qmpRetryDelay:     0,
 		qmpConnectTimeout: time.Millisecond,
@@ -1033,17 +1031,16 @@ func TestWaitForRunningLaunchSavedSuspendSkipsCloseWriteBack(t *testing.T) {
 	processes.SetQEMU((&executortest.Process{OverrideName: "qemu-system-x86_64"}).Process())
 	var writeBackCalls int
 	runtime := runtimepkg.New(runtimepkg.RuntimeConfig{
-		Manifest:      cfg,
-		Stats:         stats,
-		QMP:           &fakeQMPClient{},
-		Processes:     processes,
-		ShutdownDelay: time.Millisecond,
+		Manifest:  cfg,
+		Stats:     stats,
+		QMP:       &fakeQMPClient{},
+		Processes: processes,
 		WriteBack: func(context.Context) error {
 			writeBackCalls++
 			return nil
 		},
-		QMPTimeout: time.Second,
-		Logger:     slog.New(slog.DiscardHandler),
+		WriteBackTimeout: time.Second,
+		Logger:           slog.New(slog.DiscardHandler),
 	})
 	lifecycle := newTestLaunchLifecycle()
 	lifecycle.Suspend().Request()
@@ -1219,7 +1216,6 @@ func TestManagerLaunchPacesSSHRetriesAndWarnsAfterFiveFailures(t *testing.T) {
 		sshReadyDialer:    &fakeSSHReadyDialer{},
 		logger:            slog.New(slog.NewTextHandler(&logOutput, nil)),
 		logWriter:         &logOutput,
-		sshRetryDelay:     0,
 		shutdownDelay:     10 * time.Millisecond,
 		qmpRetryDelay:     0,
 		qmpConnectTimeout: time.Millisecond,
@@ -1368,7 +1364,6 @@ func TestManagerLaunchPrintsGuestInfoOnSIGUSR1(t *testing.T) {
 		guestAgentDialer:    &fakeGuestAgentDialer{client: guestAgent},
 		logger:              slog.New(slog.NewTextHandler(&logOutput, nil)),
 		logWriter:           &logOutput,
-		sshRetryDelay:       time.Hour,
 		shutdownDelay:       10 * time.Millisecond,
 		qmpRetryDelay:       0,
 		qmpConnectTimeout:   time.Millisecond,
@@ -1425,7 +1420,6 @@ func TestManagerLaunchLogsGuestInfoFailureOnSIGUSR1(t *testing.T) {
 		guestAgentDialer:    &fakeGuestAgentDialer{client: &fakeGuestAgentClient{execErr: errors.New("exec failed")}},
 		logger:              slog.New(slog.NewTextHandler(&logOutput, nil)),
 		logWriter:           &logOutput,
-		sshRetryDelay:       time.Hour,
 		shutdownDelay:       10 * time.Millisecond,
 		qmpRetryDelay:       0,
 		qmpConnectTimeout:   time.Millisecond,
@@ -1554,7 +1548,6 @@ func TestManagerLaunchWritesGuestFilesBeforeSSHSession(t *testing.T) {
 		guestAgentDialer:  &fakeGuestAgentDialer{client: guestAgent},
 		sshReadyDialer:    &fakeSSHReadyDialer{record: record},
 		logger:            slog.New(slog.DiscardHandler),
-		sshRetryDelay:     0,
 		shutdownDelay:     10 * time.Millisecond,
 		qmpRetryDelay:     0,
 		qmpConnectTimeout: 100 * time.Millisecond,
@@ -1695,7 +1688,6 @@ func TestManagerLaunchWritesBackGuestFilesOnShutdown(t *testing.T) {
 		guestAgentDialer:  &fakeGuestAgentDialer{client: guestAgent},
 		sshReadyDialer:    &fakeSSHReadyDialer{},
 		logger:            slog.New(slog.DiscardHandler),
-		sshRetryDelay:     0,
 		shutdownDelay:     10 * time.Millisecond,
 		qmpRetryDelay:     0,
 		qmpConnectTimeout: 100 * time.Millisecond,
@@ -1881,7 +1873,6 @@ func TestManagerLaunchAutoprovisionsSSHKeyAfterAuthFailure(t *testing.T) {
 		qmpDialer:         &fakeQMPDialer{client: qmpClient},
 		guestAgentDialer:  &fakeGuestAgentDialer{client: guestAgent},
 		logger:            slog.New(slog.DiscardHandler),
-		sshRetryDelay:     0,
 		shutdownDelay:     10 * time.Millisecond,
 		qmpRetryDelay:     0,
 		qmpConnectTimeout: 100 * time.Millisecond,
@@ -1937,7 +1928,6 @@ func TestManagerLaunchDoesNotAutoprovisionWhenDisabled(t *testing.T) {
 		qmpDialer:         &fakeQMPDialer{client: qmpClient},
 		guestAgentDialer:  guestDialer,
 		logger:            slog.New(slog.DiscardHandler),
-		sshRetryDelay:     0,
 		shutdownDelay:     10 * time.Millisecond,
 		qmpRetryDelay:     0,
 		qmpConnectTimeout: 100 * time.Millisecond,
@@ -1951,8 +1941,8 @@ func TestManagerLaunchDoesNotAutoprovisionWhenDisabled(t *testing.T) {
 	if got, want := len(runner.sshArgs()), 1; got != want {
 		t.Fatalf("unexpected ssh starts: got %d want %d", got, want)
 	}
-	if guestDialer.attempts != 0 {
-		t.Fatalf("expected no guest agent use without autoprovision, got %d attempts", guestDialer.attempts)
+	if guestDialer.attempts != 1 {
+		t.Fatalf("expected only the guest shutdown attempt without autoprovision, got %d attempts", guestDialer.attempts)
 	}
 }
 
@@ -1990,7 +1980,6 @@ func TestManagerLaunchSkipsGuestFileDirectoryInstallWhenParentExists(t *testing.
 		socketWaiter:      &fakeSocketWaiter{callback: func(paths []string) error { return nil }},
 		qmpDialer:         &fakeQMPDialer{client: qmpClient},
 		guestAgentDialer:  &fakeGuestAgentDialer{client: guestAgent},
-		sshRetryDelay:     0,
 		shutdownDelay:     10 * time.Millisecond,
 		qmpRetryDelay:     0,
 		qmpConnectTimeout: 100 * time.Millisecond,
@@ -2053,7 +2042,6 @@ func TestManagerLaunchSkipsGuestFileWhenOverwriteFalseAndPathExists(t *testing.T
 		socketWaiter:      &fakeSocketWaiter{callback: func(paths []string) error { return nil }},
 		qmpDialer:         &fakeQMPDialer{client: qmpClient},
 		guestAgentDialer:  &fakeGuestAgentDialer{client: guestAgent},
-		sshRetryDelay:     0,
 		shutdownDelay:     10 * time.Millisecond,
 		qmpRetryDelay:     0,
 		qmpConnectTimeout: 100 * time.Millisecond,
@@ -2121,7 +2109,6 @@ func TestManagerLaunchCreatesAllMissingGuestParentDirectoriesWithOwnerAndMode(t 
 		socketWaiter:      &fakeSocketWaiter{callback: func(paths []string) error { return nil }},
 		qmpDialer:         &fakeQMPDialer{client: qmpClient},
 		guestAgentDialer:  &fakeGuestAgentDialer{client: guestAgent},
-		sshRetryDelay:     0,
 		shutdownDelay:     10 * time.Millisecond,
 		qmpRetryDelay:     0,
 		qmpConnectTimeout: 100 * time.Millisecond,
@@ -2210,7 +2197,6 @@ func TestManagerLaunchWritesGuestFileWhenOverwriteFalseAndPathMissing(t *testing
 		socketWaiter:      &fakeSocketWaiter{callback: func(paths []string) error { return nil }},
 		qmpDialer:         &fakeQMPDialer{client: qmpClient},
 		guestAgentDialer:  &fakeGuestAgentDialer{client: guestAgent},
-		sshRetryDelay:     0,
 		shutdownDelay:     10 * time.Millisecond,
 		qmpRetryDelay:     0,
 		qmpConnectTimeout: 100 * time.Millisecond,
@@ -2275,7 +2261,6 @@ func TestManagerLaunchFailsOnGuestFileChownFailure(t *testing.T) {
 		socketWaiter:      &fakeSocketWaiter{callback: func(paths []string) error { return nil }},
 		qmpDialer:         &fakeQMPDialer{client: qmpClient},
 		guestAgentDialer:  &fakeGuestAgentDialer{client: guestAgent},
-		sshRetryDelay:     0,
 		shutdownDelay:     10 * time.Millisecond,
 		qmpRetryDelay:     0,
 		qmpConnectTimeout: 100 * time.Millisecond,
@@ -2345,7 +2330,6 @@ func TestManagerLaunchFailsOnGuestFileDirectoryFailure(t *testing.T) {
 		socketWaiter:      &fakeSocketWaiter{callback: func(paths []string) error { return nil }},
 		qmpDialer:         &fakeQMPDialer{client: qmpClient},
 		guestAgentDialer:  &fakeGuestAgentDialer{client: guestAgent},
-		sshRetryDelay:     0,
 		shutdownDelay:     10 * time.Millisecond,
 		qmpRetryDelay:     0,
 		qmpConnectTimeout: 100 * time.Millisecond,
@@ -2428,7 +2412,6 @@ func TestManagerLaunchFailsOnGuestFileChmodFailure(t *testing.T) {
 		socketWaiter:      &fakeSocketWaiter{callback: func(paths []string) error { return nil }},
 		qmpDialer:         &fakeQMPDialer{client: qmpClient},
 		guestAgentDialer:  &fakeGuestAgentDialer{client: guestAgent},
-		sshRetryDelay:     0,
 		shutdownDelay:     10 * time.Millisecond,
 		qmpRetryDelay:     0,
 		qmpConnectTimeout: 100 * time.Millisecond,
@@ -2494,7 +2477,6 @@ func TestManagerLaunchSkipsGuestFilesOnResume(t *testing.T) {
 		socketWaiter:        &fakeSocketWaiter{callback: func(paths []string) error { return nil }},
 		qmpDialer:           &fakeQMPDialer{client: qmpClient},
 		guestAgentDialer:    guestDialer,
-		sshRetryDelay:       0,
 		shutdownDelay:       10 * time.Millisecond,
 		qmpRetryDelay:       0,
 		qmpConnectTimeout:   time.Millisecond,
@@ -2505,8 +2487,8 @@ func TestManagerLaunchSkipsGuestFilesOnResume(t *testing.T) {
 	if err := manager.launchWithOptions(context.Background(), cfg, nil, LaunchOptions{Resume: ResumeModeForce, SSH: true}); err != nil {
 		t.Fatalf("resume launch: %v", err)
 	}
-	if guestDialer.attempts != 0 {
-		t.Fatalf("expected resume launch to skip guest agent writes, got %d dial attempts", guestDialer.attempts)
+	if guestDialer.attempts != 1 {
+		t.Fatalf("expected resume launch to skip guest agent writes and only request shutdown, got %d dial attempts", guestDialer.attempts)
 	}
 	if qmpClient.migrateIncomingCalls != 1 || qmpClient.contCalls != 1 {
 		t.Fatalf("expected resume path to restore and continue, migrate=%d cont=%d", qmpClient.migrateIncomingCalls, qmpClient.contCalls)
@@ -2552,7 +2534,6 @@ func TestManagerLaunchWithoutSSHSavesQueuedSuspend(t *testing.T) {
 		runner:              runner,
 		socketWaiter:        &fakeSocketWaiter{callback: func(paths []string) error { return nil }},
 		qmpDialer:           &fakeQMPDialer{client: qmpClient},
-		sshRetryDelay:       time.Hour,
 		shutdownDelay:       10 * time.Millisecond,
 		qmpRetryDelay:       0,
 		qmpConnectTimeout:   time.Millisecond,
@@ -2627,7 +2608,6 @@ func TestManagerLaunchControlSuspendWaitsForGuestProvisioning(t *testing.T) {
 		socketWaiter:        &fakeSocketWaiter{callback: func(paths []string) error { return nil }},
 		qmpDialer:           &fakeQMPDialer{client: qmpClient},
 		guestAgentDialer:    &fakeGuestAgentDialer{client: guestAgent},
-		sshRetryDelay:       time.Hour,
 		shutdownDelay:       10 * time.Millisecond,
 		qmpRetryDelay:       0,
 		qmpConnectTimeout:   time.Millisecond,
@@ -2728,7 +2708,6 @@ func TestManagerLaunchHandlesDuplicateSuspendDuringActiveSessionWithoutForwardin
 		runner:              runner,
 		socketWaiter:        &fakeSocketWaiter{callback: func(paths []string) error { return nil }},
 		qmpDialer:           &fakeQMPDialer{client: qmpClient},
-		sshRetryDelay:       0,
 		shutdownDelay:       10 * time.Millisecond,
 		qmpRetryDelay:       0,
 		qmpConnectTimeout:   time.Millisecond,
@@ -2797,7 +2776,6 @@ func TestManagerLaunchUsesExternalVirtioFSSocketWithoutManagingDaemon(t *testing
 		runner:            runner,
 		socketWaiter:      waiter,
 		qmpDialer:         &fakeQMPDialer{client: qmpClient},
-		sshRetryDelay:     0,
 		shutdownDelay:     10 * time.Millisecond,
 		qmpConnectTimeout: time.Millisecond,
 		qmpQuitTimeout:    time.Millisecond,
@@ -2875,7 +2853,6 @@ func TestManagerLaunchSkipsVirtioFSReadinessWhenNoVirtioFSDevices(t *testing.T) 
 		runner:            runner,
 		socketWaiter:      waiter,
 		qmpDialer:         &fakeQMPDialer{client: qmpClient},
-		sshRetryDelay:     0,
 		shutdownDelay:     10 * time.Millisecond,
 		qmpConnectTimeout: time.Millisecond,
 		qmpQuitTimeout:    time.Millisecond,
@@ -2943,7 +2920,6 @@ func TestManagerLaunchWithOnlyNinePShareDoesNotWaitForVirtioFS(t *testing.T) {
 		runner:            runner,
 		socketWaiter:      waiter,
 		qmpDialer:         &fakeQMPDialer{client: qmpClient},
-		sshRetryDelay:     0,
 		shutdownDelay:     10 * time.Millisecond,
 		qmpConnectTimeout: time.Millisecond,
 		qmpQuitTimeout:    time.Millisecond,
@@ -3296,11 +3272,13 @@ func TestEffectiveSuspendSignalTimeoutIncludesMigrationAndTeardown(t *testing.T)
 		shutdownDelay:       4 * time.Second,
 		qmpQuitTimeout:      3 * time.Second,
 		qmpMigrationTimeout: 2 * time.Second,
+		qmpConnectTimeout:   time.Second,
 	}
 
 	manager.launchManifest = cfg
 	got := manager.effectiveSuspendSignalTimeout()
-	want := defaultLaunchSignalTimeout + 2*time.Second + 3*time.Second + 4*4*time.Second
+	want := defaultLaunchSignalTimeout + 2*time.Second + 3*time.Second +
+		time.Second + guestShutdownResponseTimeout + 4*4*time.Second
 	if got != want {
 		t.Fatalf("unexpected suspend signal timeout: got %s want %s", got, want)
 	}
@@ -3369,7 +3347,6 @@ func TestManagerLaunchResumeAutoFreshLaunchesWithoutSavedState(t *testing.T) {
 		runner:            runner,
 		socketWaiter:      &fakeSocketWaiter{callback: func(paths []string) error { return nil }},
 		qmpDialer:         &fakeQMPDialer{client: qmpClient},
-		sshRetryDelay:     0,
 		shutdownDelay:     10 * time.Millisecond,
 		qmpConnectTimeout: time.Millisecond,
 		qmpQuitTimeout:    time.Millisecond,
@@ -3420,7 +3397,6 @@ func TestManagerLaunchResumeForceRestoresAndRemovesSavedState(t *testing.T) {
 		runner:              runner,
 		socketWaiter:        &fakeSocketWaiter{callback: func(paths []string) error { return nil }},
 		qmpDialer:           &fakeQMPDialer{client: qmpClient},
-		sshRetryDelay:       0,
 		shutdownDelay:       10 * time.Millisecond,
 		qmpConnectTimeout:   time.Millisecond,
 		qmpQuitTimeout:      time.Millisecond,
@@ -3488,7 +3464,6 @@ func TestManagerLaunchResumeForceSavesSuspendDuringRestoredSession(t *testing.T)
 		runner:              runner,
 		socketWaiter:        &fakeSocketWaiter{callback: func(paths []string) error { return nil }},
 		qmpDialer:           &fakeQMPDialer{client: qmpClient},
-		sshRetryDelay:       0,
 		shutdownDelay:       10 * time.Millisecond,
 		qmpConnectTimeout:   time.Millisecond,
 		qmpQuitTimeout:      time.Millisecond,
@@ -3552,7 +3527,6 @@ func TestManagerLaunchResumeCancellationDuringActiveSessionIsNotSuspend(t *testi
 		runner:              runner,
 		socketWaiter:        &fakeSocketWaiter{callback: func(paths []string) error { return nil }},
 		qmpDialer:           &fakeQMPDialer{client: qmpClient},
-		sshRetryDelay:       0,
 		shutdownDelay:       10 * time.Millisecond,
 		qmpConnectTimeout:   time.Millisecond,
 		qmpQuitTimeout:      time.Millisecond,
@@ -3605,7 +3579,6 @@ func TestManagerLaunchResumeForcePreservesStateWhenSessionStartFails(t *testing.
 		runner:              runner,
 		socketWaiter:        &fakeSocketWaiter{callback: func(paths []string) error { return nil }},
 		qmpDialer:           &fakeQMPDialer{client: qmpClient},
-		sshRetryDelay:       0,
 		shutdownDelay:       10 * time.Millisecond,
 		qmpConnectTimeout:   time.Millisecond,
 		qmpQuitTimeout:      time.Millisecond,
@@ -3825,6 +3798,7 @@ func TestLaunchRuntimeRegistersHotplugAtControlPeriphery(t *testing.T) {
 		logger:            slog.New(slog.DiscardHandler),
 		qmpConnectTimeout: time.Second,
 		qmpRetryDelay:     time.Millisecond,
+		shutdownDelay:     time.Millisecond,
 	}
 	plan, err := manager.planLaunch(launch.Spec{Manifest: cfg, Options: LaunchOptions{Resume: ResumeModeNo, SSH: false}})
 	if err != nil {
@@ -3890,6 +3864,7 @@ func TestLaunchRuntimeRegistersGuestRPCsAtControlPeriphery(t *testing.T) {
 		logger:            slog.New(slog.DiscardHandler),
 		qmpConnectTimeout: time.Second,
 		qmpRetryDelay:     time.Millisecond,
+		shutdownDelay:     time.Millisecond,
 	}
 	plan, err := manager.planLaunch(launch.Spec{Manifest: cfg, Options: LaunchOptions{Resume: ResumeModeNo, SSH: false}})
 	if err != nil {
@@ -3981,6 +3956,7 @@ func TestLaunchRuntimeGuestPSMapsFailureToFailedPrecondition(t *testing.T) {
 		logger:            slog.New(slog.DiscardHandler),
 		qmpConnectTimeout: time.Second,
 		qmpRetryDelay:     time.Millisecond,
+		shutdownDelay:     time.Millisecond,
 	}
 	plan, err := manager.planLaunch(launch.Spec{Manifest: cfg, Options: LaunchOptions{Resume: ResumeModeNo, SSH: false}})
 	if err != nil {
@@ -4378,8 +4354,9 @@ func validManifest(workingDir string) *manifest.Manifest {
 			LockPath:   "/tmp/virtle.lock",
 		},
 		SSH: manifest.SSH{
-			Argv: []string{"/bin/ssh"},
-			User: "agent",
+			Argv:       []string{"/bin/ssh"},
+			User:       "agent",
+			RetryDelay: 500 * time.Millisecond,
 		},
 		QEMU: manifest.QEMU{
 			BinaryPath: "/bin/qemu-system-x86_64",
@@ -4829,6 +4806,36 @@ func (d *fakeSSHReadyDialer) Dial(ctx context.Context, socketPath string, timeou
 	return io.NopCloser(strings.NewReader(data)), nil
 }
 
+func TestRequestGuestShutdownFailsFastWhenAgentUnavailable(t *testing.T) {
+	client := &fakeGuestAgentClient{pingErr: errors.New("no agent listening")}
+	manager := &manager{
+		guestAgentDialer:  &fakeGuestAgentDialer{client: client},
+		qmpConnectTimeout: time.Second,
+	}
+	manager.launchManifest = &manifest.Manifest{}
+	err := manager.requestGuestShutdown(context.Background(), "/tmp/qga.sock", nil)
+	if err == nil || !strings.Contains(err.Error(), "guest agent unavailable") {
+		t.Fatalf("expected unavailable error instead of a silent success, got %v", err)
+	}
+}
+
+func TestRequestGuestShutdownReportsCommandFailure(t *testing.T) {
+	client := &fakeGuestAgentClient{execStatuses: []qga.ExecStatus{{Exited: true, ExitCode: 127}}}
+	manager := &manager{
+		guestAgentDialer:  &fakeGuestAgentDialer{client: client},
+		qmpConnectTimeout: time.Second,
+	}
+	manager.launchManifest = &manifest.Manifest{}
+	exec := []string{"/bin/sh", "-c", "poweroff"}
+	err := manager.requestGuestShutdown(context.Background(), "/tmp/qga.sock", exec)
+	if err == nil || !strings.Contains(err.Error(), "exited with status 127") {
+		t.Fatalf("expected shutdown command failure, got %v", err)
+	}
+	if len(client.execs) != 1 || client.execs[0].path != exec[0] || !reflect.DeepEqual(client.execs[0].args, exec[1:]) {
+		t.Fatalf("unexpected guest shutdown exec: %#v", client.execs)
+	}
+}
+
 type fakeGuestAgentClient struct {
 	mu              sync.Mutex
 	nextHandle      int
@@ -4846,6 +4853,7 @@ type fakeGuestAgentClient struct {
 	execErr         error
 	execStatusErr   error
 	pingErr         error
+	shutdownErr     error
 	openErr         error
 	disconnects     int
 	record          func(string)
@@ -4865,6 +4873,13 @@ func (c *fakeGuestAgentClient) Ping(ctx context.Context) error {
 		c.record("guest-ping")
 	}
 	return c.pingErr
+}
+
+func (c *fakeGuestAgentClient) Shutdown(ctx context.Context) error {
+	if c.record != nil {
+		c.record("guest-shutdown")
+	}
+	return c.shutdownErr
 }
 
 func (c *fakeGuestAgentClient) OpenFile(ctx context.Context, path string) (int, error) {
@@ -5013,6 +5028,12 @@ func (c *fakeGuestAgentClient) Disconnect() error {
 	defer c.mu.Unlock()
 	c.disconnects++
 	return nil
+}
+
+// launch is a test-only convenience wrapping launchWithOptions with the
+// default foreground options.
+func (m *manager) launch(ctx context.Context, manifest *manifest.Manifest, remoteCommand []string) error {
+	return m.launchWithOptions(ctx, manifest, remoteCommand, launch.Options{Resume: launch.ResumeModeNo, SSH: true})
 }
 
 func manifestBoundManager(m *manager, cfg *manifest.Manifest) *manager {

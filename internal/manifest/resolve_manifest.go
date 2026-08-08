@@ -74,6 +74,8 @@ func (d Document) ManifestWithOptions(options ResolveOptions) (*Manifest, error)
 		return nil, err
 	}
 	qemu.GuestAgent.CommandTimeout = guestDefaultTimeout
+	qemu.GuestAgent.ShutdownExec = d.QEMU.ShutdownExec
+	qemu.GuestAgent.ShutdownTimeout = d.QEMU.ShutdownTimeout.Duration()
 	m.QEMU = qemu
 	m.Volumes = resolveVolumes(imageMounts)
 	virtioFSRuns, err := m.resolveVirtioFSRuns(virtioFSMounts, options)

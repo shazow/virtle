@@ -32,9 +32,11 @@ func TestProcessSetWatchersAndVMWatchers(t *testing.T) {
 func TestProcessSetCloseStopsTasksBeforeProcesses(t *testing.T) {
 	var order []string
 	processes := NewProcessSet()
-	process := (&executortest.Process{}).Process()
+	handle := &executortest.Process{}
+	process := handle.Process()
 	process.SetShutdown(func() error {
 		order = append(order, "process")
+		handle.Complete(nil)
 		return nil
 	})
 	processes.Add(process)
@@ -45,7 +47,7 @@ func TestProcessSetCloseStopsTasksBeforeProcesses(t *testing.T) {
 		return nil
 	})
 
-	if err := processes.Close(0); err != nil {
+	if err := processes.Close(context.Background()); err != nil {
 		t.Fatalf("close process set: %v", err)
 	}
 	if got, want := order, []string{"task", "process"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {

@@ -59,7 +59,7 @@ func TestLoadReadsFromReader(t *testing.T) {
 		t.Fatalf("marshal manifest: %v", err)
 	}
 
-	loaded, err := Load(bytes.NewReader(data))
+	loaded, err := loadBytes(data, "")
 	if err != nil {
 		t.Fatalf("load manifest: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestLoadRejectsTrailingData(t *testing.T) {
 		t.Fatalf("marshal manifest: %v", err)
 	}
 
-	_, err = Load(strings.NewReader(string(data) + "\n{}"))
+	_, err = loadBytes([]byte(string(data)+"\n{}"), "")
 	if err == nil {
 		t.Fatal("expected trailing data error")
 	}
@@ -217,7 +217,7 @@ func TestDocumentWriteFilesFollowLinksResolvesToManifest(t *testing.T) {
 		t.Fatalf("marshal manifest: %v", err)
 	}
 
-	loaded, err := Load(bytes.NewReader(data))
+	loaded, err := loadBytes(data, "")
 	if err != nil {
 		t.Fatalf("load manifest: %v", err)
 	}
@@ -251,7 +251,7 @@ func TestDocumentWriteFilesRejectsTextAndSource(t *testing.T) {
 		t.Fatalf("marshal manifest: %v", err)
 	}
 
-	_, err = Load(bytes.NewReader(data))
+	_, err = loadBytes(data, "")
 	if err == nil || !strings.Contains(err.Error(), `manifest.writeFiles["/etc/source.conf"] must set exactly one of text or path`) {
 		t.Fatalf("expected exactly-one write_files validation error, got %v", err)
 	}
@@ -550,7 +550,7 @@ func TestLoadTOMLExamples(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read example: %v", err)
 			}
-			if _, err := LoadBytes(data, path); err != nil {
+			if _, err := loadBytes(data, path); err != nil {
 				t.Fatalf("load example: %v", err)
 			}
 		})
@@ -733,7 +733,7 @@ func TestManifestSSHRetryDelayDefaultsAndValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve manifest: %v", err)
 	}
-	if got, want := manifest.SSHRetryDelay(25*time.Millisecond), 500*time.Millisecond; got != want {
+	if got, want := manifest.SSH.RetryDelay, 500*time.Millisecond; got != want {
 		t.Fatalf("unexpected default ssh retry delay: got %s want %s", got, want)
 	}
 	if got, want := manifest.QEMU.SSHReady.SocketPath, ""; got != want {
@@ -757,24 +757,20 @@ func TestManifestSSHRetryDelayDefaultsAndValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve custom retry delay: %v", err)
 	}
-	if got, want := custom.SSHRetryDelay(time.Second), 250*time.Millisecond; got != want {
+	if got, want := custom.SSH.RetryDelay, 250*time.Millisecond; got != want {
 		t.Fatalf("unexpected custom ssh retry delay: got %s want %s", got, want)
 	}
 
 	zeroDoc := validDocument()
 	zeroDoc.SSH.RetryDelay = 0
-	zero, err := zeroDoc.Manifest()
-	if err != nil {
-		t.Fatalf("resolve zero retry delay: %v", err)
-	}
-	if got := zero.SSHRetryDelay(time.Second); got != 0 {
-		t.Fatalf("unexpected zero ssh retry delay: got %s want 0", got)
+	if _, err := zeroDoc.Manifest(); err == nil || !strings.Contains(err.Error(), "manifest.ssh.retryDelay must be greater than zero") {
+		t.Fatalf("expected zero retry delay error, got %v", err)
 	}
 
 	invalid := validDocument()
 	invalid.SSH.RetryDelay = units.Duration(-time.Second)
 	_, err = invalid.Manifest()
-	if err == nil || !strings.Contains(err.Error(), "manifest.ssh.retryDelay must be greater than or equal to zero") {
+	if err == nil || !strings.Contains(err.Error(), "manifest.ssh.retryDelay must be greater than zero") {
 		t.Fatalf("expected retry delay validation error, got %v", err)
 	}
 }
@@ -831,6 +827,30 @@ func TestManifestGuestDefaultTimeoutResolutionAndValidation(t *testing.T) {
 	_, err = invalid.Manifest()
 	if err == nil || !strings.Contains(err.Error(), "manifest.qemu.guestAgent.commandTimeout must be greater than or equal to zero") {
 		t.Fatalf("expected guest agent timeout validation error, got %v", err)
+	}
+}
+
+func TestManifestGuestShutdownConfiguration(t *testing.T) {
+	omitted, err := DecodeDocumentBytes([]byte("[qemu]\n"), "manifest.toml")
+	if err != nil {
+		t.Fatalf("decode omitted shutdown timeout: %v", err)
+	}
+	if got, want := omitted.QEMU.ShutdownTimeout, units.Duration(90*time.Second); got != want {
+		t.Fatalf("omitted shutdown timeout: got %v want %v", got, want)
+	}
+
+	document := validDocument()
+	document.QEMU.ShutdownExec = []string{"/bin/sh", "-c", "poweroff"}
+	document.QEMU.ShutdownTimeout = units.Duration(2500 * time.Millisecond)
+	resolved, err := document.Manifest()
+	if err != nil {
+		t.Fatalf("resolve manifest: %v", err)
+	}
+	if got, want := resolved.QEMU.GuestAgent.ShutdownExec, document.QEMU.ShutdownExec; !slices.Equal(got, want) {
+		t.Fatalf("shutdown exec: got %v want %v", got, want)
+	}
+	if got, want := resolved.QEMU.GuestAgent.ShutdownTimeout, 2500*time.Millisecond; got != want {
+		t.Fatalf("custom shutdown timeout: got %s want %s", got, want)
 	}
 }
 
@@ -1349,7 +1369,7 @@ func TestManifestNotificationsValidationAndResolution(t *testing.T) {
 			],
 			"notifications": {"exec": ["--verbose"]}
 		}`)
-		loaded, err := Load(bytes.NewReader(data))
+		loaded, err := loadBytes(data, "")
 		if err != nil {
 			t.Fatalf("load manifest: %v", err)
 		}
@@ -1372,7 +1392,7 @@ func TestManifestNotificationsValidationAndResolution(t *testing.T) {
 			t.Fatalf("marshal manifest: %v", err)
 		}
 
-		loaded, err := Load(bytes.NewReader(data))
+		loaded, err := loadBytes(data, "")
 		if err != nil {
 			t.Fatalf("load manifest: %v", err)
 		}
@@ -1666,7 +1686,7 @@ func TestLoadRejectsMalformedForwardEndpoints(t *testing.T) {
 				t.Fatalf("marshal manifest: %v", err)
 			}
 
-			_, err = Load(bytes.NewReader(data))
+			_, err = loadBytes(data, "")
 			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
 				t.Fatalf("expected error containing %q, got %v", tt.wantError, err)
 			}
@@ -1692,7 +1712,7 @@ func TestLoadDefaultsForwardPortProtoAndFrom(t *testing.T) {
 		t.Fatalf("marshal manifest: %v", err)
 	}
 
-	loaded, err := Load(bytes.NewReader(data))
+	loaded, err := loadBytes(data, "")
 	if err != nil {
 		t.Fatalf("load manifest: %v", err)
 	}
@@ -1755,7 +1775,7 @@ func TestLoadGuestForwardUsesTunnelExecTemplate(t *testing.T) {
 				t.Fatalf("marshal manifest: %v", err)
 			}
 
-			loaded, err := Load(bytes.NewReader(data))
+			loaded, err := loadBytes(data, "")
 			if err != nil {
 				t.Fatalf("load manifest: %v", err)
 			}
@@ -1808,7 +1828,7 @@ func TestLoadRejectsInvalidForwardOptions(t *testing.T) {
 				t.Fatalf("marshal manifest: %v", err)
 			}
 
-			_, err = Load(bytes.NewReader(data))
+			_, err = loadBytes(data, "")
 			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
 				t.Fatalf("expected error containing %q, got %v", tt.wantError, err)
 			}
@@ -1835,7 +1855,7 @@ func TestLoadTreatsHeadlessGraphicsAsAbsentForTransport(t *testing.T) {
 				t.Fatalf("marshal manifest: %v", err)
 			}
 
-			loaded, err := Load(bytes.NewReader(data))
+			loaded, err := loadBytes(data, "")
 			if err != nil {
 				t.Fatalf("load manifest: %v", err)
 			}
@@ -1966,7 +1986,7 @@ func TestManifestNoGraphicDefaultsPreserveExplicitFalse(t *testing.T) {
 			t.Fatalf("marshal manifest: %v", err)
 		}
 
-		loaded, err := Load(bytes.NewReader(data))
+		loaded, err := loadBytes(data, "")
 		if err != nil {
 			t.Fatalf("load manifest: %v", err)
 		}
@@ -2606,6 +2626,20 @@ func TestManifestAllowsRuntimeAndQEMUPassedCPUs(t *testing.T) {
 	}
 }
 
+// loadBytes decodes and resolves a manifest the way production does
+// (DecodeDocumentBytes then Manifest), as a test convenience.
+func loadBytes(data []byte, name string) (*Manifest, error) {
+	doc, err := DecodeDocumentBytes(data, name)
+	if err != nil {
+		return nil, err
+	}
+	return doc.Manifest()
+}
+
+func stringPtr(value string) *string {
+	return &value
+}
+
 func validDocument() Document {
 	return Document{
 		HostName:   "agent-sandbox",
@@ -2653,8 +2687,9 @@ func validDocument() Document {
 			},
 		},
 		SSH: SSHInput{
-			Exec: []string{"/bin/ssh"},
-			User: "agent",
+			Exec:       []string{"/bin/ssh"},
+			User:       "agent",
+			RetryDelay: units.Duration(500 * time.Millisecond),
 		},
 	}
 }

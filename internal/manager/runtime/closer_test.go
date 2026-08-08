@@ -62,8 +62,7 @@ func TestCloseActionsRunInShutdownOrder(t *testing.T) {
 			return nil
 		},
 		shutdownResources: shutdownResources{
-			Processes:     launch.NewProcessSet(),
-			ShutdownDelay: time.Millisecond,
+			Processes: launch.NewProcessSet(),
 			QMP: closeQMPFunc(func() error {
 				calls = append(calls, "qmp")
 				return nil

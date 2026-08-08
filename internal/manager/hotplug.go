@@ -59,7 +59,9 @@ func (s managedProcessStarter) Stop(process *executor.Process) error {
 	if process == nil {
 		return nil
 	}
-	return process.Stop(s.m.shutdownDelay)
+	// Cleanup of a failed attach must run to completion even when the attach
+	// ctx is already canceled.
+	return process.Stop(context.Background())
 }
 
 func (s managedProcessStarter) SignalPIDGroup(pid int, signal syscall.Signal) error {
@@ -97,8 +99,6 @@ func (g guestCommandRunner) Run(ctx context.Context, command []string) error {
 		return err
 	}
 	defer client.Disconnect()
-	ctx, cancel := g.m.launchManifest.GuestCommandContext(ctx)
-	defer cancel()
 	status, err := g.m.runGuestCommandStatus(ctx, client, filepath.Base(command[0]), command[0], command[1:], strings.Join(command, " "))
 	if err != nil {
 		return err

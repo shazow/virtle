@@ -168,7 +168,7 @@ func TestParserAcceptsLaunchFlags(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := newParser().ParseArgs(tt.args)
+			_, err := newParserForOptions(&Options{}).ParseArgs(tt.args)
 			if err != nil && strings.Contains(err.Error(), tt.unwantedErrMsg) {
 				t.Fatalf("ParseArgs(%v) rejected supported flag: %v", tt.args, err)
 			}

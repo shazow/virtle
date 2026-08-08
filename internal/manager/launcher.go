@@ -44,7 +44,6 @@ func DefaultConfig() Config {
 		SSHReadyDialer:      &unixSSHReadyDialer{},
 		Logger:              logger,
 		LogWriter:           os.Stderr,
-		SSHRetryDelay:       defaultSSHRetryDelay,
 		SSHReadyTimeout:     configuredSSHReadyTimeout(),
 		ShutdownDelay:       defaultShutdownDelay,
 		QMPRetryDelay:       defaultQMPRetryDelay,
@@ -62,18 +61,9 @@ func NewLauncher(configs ...Config) *Launcher {
 	return &Launcher{config: &config}
 }
 
-// Launch runs the supported virtle sandbox session.
-func Launch(ctx context.Context, manifest *manifest.Manifest, remoteCommand []string) error {
-	return NewLauncher().launch(ctx, manifest, remoteCommand)
-}
-
 // LaunchWithOptions runs the supported virtle sandbox session with explicit launch options.
 func LaunchWithOptions(ctx context.Context, manifest *manifest.Manifest, remoteCommand []string, options LaunchOptions) error {
 	return NewLauncher().launchWithOptions(ctx, manifest, remoteCommand, options)
-}
-
-func (l *Launcher) launch(ctx context.Context, manifest *manifest.Manifest, remoteCommand []string) (err error) {
-	return l.launchWithOptions(ctx, manifest, remoteCommand, launch.Options{Resume: launch.ResumeModeNo, SSH: true})
 }
 
 func (l *Launcher) launchWithOptions(ctx context.Context, manifest *manifest.Manifest, remoteCommand []string, options launch.Options) error {

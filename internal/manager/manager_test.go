@@ -3295,11 +3295,13 @@ func TestEffectiveSuspendSignalTimeoutIncludesMigrationAndTeardown(t *testing.T)
 		shutdownDelay:       4 * time.Second,
 		qmpQuitTimeout:      3 * time.Second,
 		qmpMigrationTimeout: 2 * time.Second,
+		qmpConnectTimeout:   time.Second,
 	}
 
 	manager.launchManifest = cfg
 	got := manager.effectiveSuspendSignalTimeout()
-	want := defaultLaunchSignalTimeout + 2*time.Second + 3*time.Second + 4*4*time.Second
+	want := defaultLaunchSignalTimeout + 2*time.Second + 3*time.Second +
+		time.Second + guestShutdownResponseTimeout + 4*4*time.Second
 	if got != want {
 		t.Fatalf("unexpected suspend signal timeout: got %s want %s", got, want)
 	}
@@ -4832,6 +4834,19 @@ func (d *fakeSSHReadyDialer) Dial(ctx context.Context, socketPath string, timeou
 	return io.NopCloser(strings.NewReader(data)), nil
 }
 
+func TestRequestGuestShutdownFailsFastWhenAgentUnavailable(t *testing.T) {
+	client := &fakeGuestAgentClient{pingErr: errors.New("no agent listening")}
+	manager := &manager{
+		guestAgentDialer:  &fakeGuestAgentDialer{client: client},
+		qmpConnectTimeout: time.Second,
+	}
+	manager.launchManifest = &manifest.Manifest{}
+	err := manager.requestGuestShutdown(context.Background(), "/tmp/qga.sock", nil)
+	if err == nil || !strings.Contains(err.Error(), "guest agent unavailable") {
+		t.Fatalf("expected unavailable error instead of a silent success, got %v", err)
+	}
+}
+
 func TestRequestGuestShutdownReportsCommandFailure(t *testing.T) {
 	client := &fakeGuestAgentClient{execStatuses: []qga.ExecStatus{{Exited: true, ExitCode: 127}}}
 	manager := &manager{
@@ -4866,6 +4881,7 @@ type fakeGuestAgentClient struct {
 	execErr         error
 	execStatusErr   error
 	pingErr         error
+	shutdownErr     error
 	openErr         error
 	disconnects     int
 	record          func(string)
@@ -4885,6 +4901,13 @@ func (c *fakeGuestAgentClient) Ping(ctx context.Context) error {
 		c.record("guest-ping")
 	}
 	return c.pingErr
+}
+
+func (c *fakeGuestAgentClient) Shutdown(ctx context.Context) error {
+	if c.record != nil {
+		c.record("guest-shutdown")
+	}
+	return c.shutdownErr
 }
 
 func (c *fakeGuestAgentClient) OpenFile(ctx context.Context, path string) (int, error) {

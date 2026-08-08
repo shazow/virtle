@@ -59,6 +59,7 @@ type Client interface {
 	FileWriter
 	FileReader
 	ExecRunner
+	Shutdowner
 	Disconnecter
 }
 

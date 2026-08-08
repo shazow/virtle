@@ -11,7 +11,14 @@ import (
 	"github.com/shazow/virtle/internal/qga"
 )
 
-const guestShutdownResponseTimeout = time.Second
+const (
+	guestShutdownResponseTimeout = time.Second
+	// guestShutdownExecWait bounds how long the shutdown command's exit status
+	// is polled; running out of time means the request was issued and QEMU
+	// exit is awaited.
+	guestShutdownExecWait      = 3 * time.Second
+	guestShutdownExecPollDelay = 100 * time.Millisecond
+)
 
 // requestGuestShutdown asks the guest to power down through the guest agent,
 // either with the guest-shutdown command or a configured shutdown_exec guest
@@ -27,33 +34,57 @@ func (m *manager) requestGuestShutdown(ctx context.Context, socketPath string, e
 		return fmt.Errorf("connect guest agent: %w", err)
 	}
 	defer client.Disconnect()
+
+	// The chardev accepts connections even when no agent runs in the guest, so
+	// probe with a ping first: a guest that cannot answer (agent missing, or
+	// paused after a suspend save) cannot process a shutdown request either,
+	// and treating that silence as success would burn the full shutdown wait.
+	pingCtx, cancelPing := context.WithTimeout(ctx, guestShutdownResponseTimeout)
+	err = client.Ping(pingCtx)
+	cancelPing()
+	if err != nil {
+		return fmt.Errorf("guest agent unavailable: %w", err)
+	}
+
 	if len(exec) == 0 {
-		shutdowner, ok := client.(qga.Shutdowner)
-		if !ok {
-			return fmt.Errorf("guest agent client does not support shutdown")
-		}
 		// guest-shutdown rarely answers before the guest powers off; cap the
 		// wait for its response instead of holding out for a full RPC timeout.
 		ctx, cancel := context.WithTimeout(ctx, guestShutdownResponseTimeout)
 		defer cancel()
-		return shutdowner.Shutdown(ctx)
+		return client.Shutdown(ctx)
 	}
+
 	ctx, cancel := m.launchManifest.GuestCommandContext(ctx)
 	defer cancel()
 	pid, err := client.Exec(ctx, exec[0], exec[1:], true)
 	if err != nil {
 		return fmt.Errorf("execute guest shutdown command %v: %w", exec, err)
 	}
-	status, err := client.ExecStatus(ctx, pid)
-	if err != nil {
-		// Losing QGA after the command starts is expected while the guest shuts
-		// down. QEMU exit is the authoritative completion signal.
-		return nil
+	// Poll the exit status briefly so a fast-failing command is reported
+	// instead of silently burning the shutdown wait. Losing QGA or running out
+	// of polling time is expected while the guest powers off; QEMU exit is the
+	// authoritative completion signal.
+	statusCtx, cancelStatus := context.WithTimeout(ctx, guestShutdownExecWait)
+	defer cancelStatus()
+	ticker := time.NewTicker(guestShutdownExecPollDelay)
+	defer ticker.Stop()
+	for {
+		status, err := client.ExecStatus(statusCtx, pid)
+		if err != nil {
+			return nil
+		}
+		if status.Exited {
+			if status.ExitCode != 0 {
+				return fmt.Errorf("guest shutdown command %v exited with status %d%s", exec, status.ExitCode, qga.ExecOutputSuffix(status))
+			}
+			return nil
+		}
+		select {
+		case <-statusCtx.Done():
+			return nil
+		case <-ticker.C:
+		}
 	}
-	if status.Exited && status.ExitCode != 0 {
-		return fmt.Errorf("guest shutdown command %v exited with status %d%s", exec, status.ExitCode, qga.ExecOutputSuffix(status))
-	}
-	return nil
 }
 
 func (m *manager) writeGuestFiles(ctx context.Context, stats *launch.Stats, watchers executor.Group) error {

@@ -276,6 +276,21 @@ func (m *manager) waitForSockets(ctx context.Context, stage string, socketPaths 
 	return m.waitForLaunchSockets(ctx, stage, socketPaths, watchers)
 }
 
+// quitFreshQMP dials a new QMP connection and quits QEMU through it, for
+// teardown paths whose long-lived monitor has been poisoned.
+func (m *manager) quitFreshQMP(ctx context.Context, socketPath string) error {
+	dialer := m.qmpDialer
+	if dialer == nil {
+		dialer = &qmpclient.SocketMonitorDialer{}
+	}
+	client, err := dialer.Dial(ctx, socketPath, m.effectiveQMPConnectTimeout())
+	if err != nil {
+		return fmt.Errorf("redial qmp for quit: %w", err)
+	}
+	defer client.Disconnect()
+	return client.Quit(ctx)
+}
+
 func (m *manager) waitForQMP(ctx context.Context, socketPath string, watchers executor.Group) (qmpclient.Client, error) {
 	dialer := m.qmpDialer
 	if dialer == nil {

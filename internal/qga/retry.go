@@ -8,8 +8,15 @@ import (
 	"github.com/shazow/virtle/internal/qmpwire"
 )
 
+// probeTimeout bounds the readiness ping. The QGA chardev accepts
+// connections before the in-guest agent is listening and discards the bytes,
+// so an unanswered probe must fail fast to keep the retry loop (and its
+// process-exit checks) responsive; the steady-state RPC bound stays with the
+// session.
+const probeTimeout = 2 * time.Second
+
 // DialRetry configures guest-agent dial retry behavior. The readiness ping is
-// bounded by the transport's RPC timeout.
+// bounded by probeTimeout.
 type DialRetry struct {
 	SocketPath     string
 	ConnectTimeout time.Duration
@@ -27,7 +34,9 @@ func DialWithRetry(ctx context.Context, dialer Dialer, retry DialRetry) (Client,
 			return dialer.Dial(ctx, retry.SocketPath, retry.ConnectTimeout)
 		},
 		Probe: func(client Client) error {
-			return client.Ping(ctx)
+			probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
+			defer cancel()
+			return client.Ping(probeCtx)
 		},
 		Close: func(client Client) {
 			_ = client.Disconnect()

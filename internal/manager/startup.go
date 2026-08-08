@@ -15,6 +15,7 @@ import (
 	"github.com/shazow/virtle/internal/manager/launch"
 	runtimepkg "github.com/shazow/virtle/internal/manager/runtime"
 	"github.com/shazow/virtle/internal/qmpclient"
+	"github.com/shazow/virtle/internal/qmpwire"
 )
 
 func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started *runningLaunch, err error) {
@@ -146,7 +147,14 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 		m.logger.Info("forcing qemu quit through QMP")
 		ctx, cancel := context.WithTimeout(context.Background(), m.effectiveQMPQuitTimeout())
 		defer cancel()
-		return qmp.Quit(ctx)
+		quitErr := qmp.Quit(ctx)
+		if errors.Is(quitErr, qmpwire.ErrBroken) {
+			// The long-lived monitor was poisoned by an earlier interrupted
+			// operation; retry on a fresh connection so teardown still quits
+			// through QMP instead of falling to signals.
+			quitErr = m.quitFreshQMP(ctx, plan.Paths.QMPSocket)
+		}
+		return quitErr
 	})
 
 	if plan.ResumeState != nil {

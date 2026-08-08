@@ -158,4 +158,5 @@ func (c *fakeGuestAgentClient) Exec(context.Context, string, []string, bool) (in
 func (c *fakeGuestAgentClient) ExecStatus(context.Context, int) (qga.ExecStatus, error) {
 	return qga.ExecStatus{}, nil
 }
-func (c *fakeGuestAgentClient) Disconnect() error { return nil }
+func (c *fakeGuestAgentClient) Shutdown(context.Context) error { return nil }
+func (c *fakeGuestAgentClient) Disconnect() error               { return nil }

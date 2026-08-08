@@ -58,9 +58,21 @@ type Envelope struct {
 	Error  *EnvelopeError  `json:"error,omitempty"`
 }
 
-// DecodeEnvelope reads the next message from decoder. Failures are
-// wire-level: a stream that cannot be decoded cannot be trusted.
+// DecodeEnvelope reads the next message from decoder in a single parse; Raw
+// stays unset. Failures are wire-level: a stream that cannot be decoded
+// cannot be trusted.
 func DecodeEnvelope(decoder *json.Decoder) (Envelope, error) {
+	var envelope Envelope
+	if err := decoder.Decode(&envelope); err != nil {
+		return Envelope{}, &WireError{Err: err}
+	}
+	return envelope, nil
+}
+
+// DecodeRawEnvelope is DecodeEnvelope but also retains the raw message bytes,
+// for callers that hand the response to another parser. It costs a second
+// parse; prefer DecodeEnvelope when Raw is not needed.
+func DecodeRawEnvelope(decoder *json.Decoder) (Envelope, error) {
 	var raw json.RawMessage
 	if err := decoder.Decode(&raw); err != nil {
 		return Envelope{}, &WireError{Err: err}
@@ -123,16 +135,16 @@ type Session struct {
 // runs strictly after ctx is marked done, so a failure is always attributable
 // to exactly one of the two bounds.
 func (s *Session) Do(ctx context.Context, fn func() error) error {
-	return s.do(ctx, time.Now().Add(s.RPCTimeout), fn)
+	return s.do(ctx, true, fn)
 }
 
 // DoSlow runs one operation bounded only by ctx, for commands whose reply
 // legitimately lags past the RPC liveness bound.
 func (s *Session) DoSlow(ctx context.Context, fn func() error) error {
-	return s.do(ctx, time.Time{}, fn)
+	return s.do(ctx, false, fn)
 }
 
-func (s *Session) do(ctx context.Context, deadline time.Time, fn func() error) (err error) {
+func (s *Session) do(ctx context.Context, bounded bool, fn func() error) (err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -142,6 +154,13 @@ func (s *Session) do(ctx context.Context, deadline time.Time, fn func() error) (
 		return fmt.Errorf("%w: %v", ErrBroken, s.broken)
 	}
 
+	// The deadline must be computed under the lock: an operation that queued
+	// behind a slow one would otherwise start already expired and poison the
+	// session on a healthy connection.
+	var deadline time.Time
+	if bounded {
+		deadline = time.Now().Add(s.RPCTimeout)
+	}
 	// A zero deadline means no time limit; setting it unconditionally also
 	// clears anything left behind by an earlier interrupt.
 	if err := s.Conn.SetDeadline(deadline); err != nil {

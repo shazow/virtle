@@ -322,7 +322,7 @@ func (m *socketMonitor) Events(context.Context) (<-chan doQMP.Event, error) {
 
 func (m *socketMonitor) readResponseLocked() ([]byte, error) {
 	for {
-		envelope, err := qmpwire.DecodeEnvelope(m.decoder)
+		envelope, err := qmpwire.DecodeRawEnvelope(m.decoder)
 		if err != nil {
 			return nil, err
 		}

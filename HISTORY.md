@@ -1,8 +1,8 @@
 # History
 
-Day-by-day highlights since [v0.1](https://github.com/shazow/virtle/releases/tag/v0.1)
-(2026-07-13), newest first. Consumer-facing changes lead; substantial internal
-changes get a line.
+Brief changes grouped by day, newest first. Consumer-facing changes lead;
+substantial internal changes get a line. Include diffs or before/after examples
+when illustrative of the change.
 
 ## 2026-08-08
 

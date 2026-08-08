@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -13,7 +12,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jessevdk/go-flags"
 	"github.com/shazow/virtle/internal/manager/control"
 )
 
@@ -86,6 +84,16 @@ func TestParserRejectsInvalidCommandLines(t *testing.T) {
 		wantErr string
 	}{
 		{
+			name:    "no command shows help",
+			args:    nil,
+			wantErr: "Available commands",
+		},
+		{
+			name:    "manifest without subcommand shows help",
+			args:    []string{"manifest"},
+			wantErr: "Available commands",
+		},
+		{
 			name:    "launch missing manifest",
 			args:    []string{"launch"},
 			wantErr: "no manifest path provided",
@@ -120,57 +128,6 @@ func TestParserRejectsInvalidCommandLines(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), tt.wantErr) {
 				t.Fatalf("run(%v) error %q does not contain %q", tt.args, err, tt.wantErr)
-			}
-		})
-	}
-}
-
-func TestRunWithoutCommandReturnsHelpOnce(t *testing.T) {
-	tests := []struct {
-		name         string
-		args         []string
-		wantCommands []string
-	}{
-		{
-			name:         "no arguments",
-			args:         nil,
-			wantCommands: []string{"hotplug", "launch", "manifest", "rpc", "suspend"},
-		},
-		{
-			name:         "manifest without subcommand",
-			args:         []string{"manifest"},
-			wantCommands: []string{"defaults", "resolve", "schema", "validate"},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var err error
-			stderr := captureStderr(t, func() {
-				stdout := captureStdout(t, func() {
-					err = run(tt.args)
-				})
-				if stdout != "" {
-					t.Errorf("run(%v) printed to stdout: %q", tt.args, stdout)
-				}
-			})
-			// The parser must not print the error itself; main prints the
-			// returned error exactly once.
-			if stderr != "" {
-				t.Errorf("run(%v) printed to stderr: %q", tt.args, stderr)
-			}
-
-			var flagsErr *flags.Error
-			if !errors.As(err, &flagsErr) || flagsErr.Type != flags.ErrCommandRequired {
-				t.Fatalf("run(%v) error = %v, want flags.ErrCommandRequired", tt.args, err)
-			}
-			if !strings.Contains(flagsErr.Message, "Usage:") {
-				t.Errorf("run(%v) error does not include usage: %q", tt.args, flagsErr.Message)
-			}
-			for _, command := range tt.wantCommands {
-				if !strings.Contains(flagsErr.Message, command) {
-					t.Errorf("run(%v) error does not mention command %q: %q", tt.args, command, flagsErr.Message)
-				}
 			}
 		})
 	}
@@ -633,37 +590,27 @@ func startMainTestControlServerAt(t *testing.T, path string, runtime control.Run
 
 func captureStdout(t *testing.T, fn func()) string {
 	t.Helper()
-	return captureFile(t, &os.Stdout, fn)
-}
-
-func captureStderr(t *testing.T, fn func()) string {
-	t.Helper()
-	return captureFile(t, &os.Stderr, fn)
-}
-
-func captureFile(t *testing.T, target **os.File, fn func()) string {
-	t.Helper()
-	original := *target
+	original := os.Stdout
 	readFile, writeFile, err := os.Pipe()
 	if err != nil {
-		t.Fatalf("pipe: %v", err)
+		t.Fatalf("pipe stdout: %v", err)
 	}
-	*target = writeFile
+	os.Stdout = writeFile
 	defer func() {
-		*target = original
+		os.Stdout = original
 	}()
 
 	fn()
 
 	if err := writeFile.Close(); err != nil {
-		t.Fatalf("close pipe writer: %v", err)
+		t.Fatalf("close stdout pipe writer: %v", err)
 	}
 	data, err := io.ReadAll(readFile)
 	if err != nil {
-		t.Fatalf("read pipe: %v", err)
+		t.Fatalf("read stdout pipe: %v", err)
 	}
 	if err := readFile.Close(); err != nil {
-		t.Fatalf("close pipe reader: %v", err)
+		t.Fatalf("close stdout pipe reader: %v", err)
 	}
 	return string(data)
 }

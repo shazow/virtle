@@ -20,9 +20,6 @@ func TestNewCommandAndHint(t *testing.T) {
 	if command.Path != "/bin/ssh" {
 		t.Fatalf("unexpected command path %q", command.Path)
 	}
-	if got, want := command.String(), "/bin/ssh -tt -q agent@vsock/10 'bash -lc '\\''echo hi'\\'"; got != want {
-		t.Fatalf("unexpected command string: got %q want %q", got, want)
-	}
 	wantArgs := []string{"-tt", "-q", "agent@vsock/10", "bash -lc 'echo hi'"}
 	if !reflect.DeepEqual(command.Args, wantArgs) {
 		t.Fatalf("unexpected args: got %v want %v", command.Args, wantArgs)

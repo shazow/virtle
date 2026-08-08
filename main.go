@@ -335,10 +335,6 @@ func run(args []string) error {
 	}
 }
 
-func newParser() *flags.Parser {
-	return newParserForOptions(&Options{})
-}
-
 func newParserForOptions(opts *Options) *flags.Parser {
 	return flags.NewParser(opts, flags.Default|flags.PassDoubleDash)
 }

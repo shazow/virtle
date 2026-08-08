@@ -28,7 +28,6 @@ import (
 	"github.com/shazow/virtle/internal/manifest"
 	"github.com/shazow/virtle/internal/qga"
 	"github.com/shazow/virtle/internal/qmpclient"
-	"github.com/shazow/virtle/internal/sshtools"
 )
 
 const (
@@ -95,10 +94,6 @@ func newManagerFromConfig(config Config) *manager {
 		pidSignaler:         config.PIDSignaler,
 		notifier:            config.Notifier,
 	}
-}
-
-func (m *manager) launch(ctx context.Context, manifest *manifest.Manifest, remoteCommand []string) error {
-	return m.launchWithOptions(ctx, manifest, remoteCommand, launch.Options{Resume: launch.ResumeModeNo, SSH: true})
 }
 
 func (m *manager) launchWithOptions(ctx context.Context, manifest *manifest.Manifest, remoteCommand []string, options launch.Options) error {
@@ -202,24 +197,12 @@ func (m *manager) waitForLaunchForeground(
 		}
 	}
 
-	renderer, err := manifest.NewTemplateRenderer(manifest.SSHTemplateProvider{
-		CID:         plan.CID,
-		User:        plan.Manifest.SSH.User,
-		Destination: sshtools.VSockDestination(plan.Manifest.SSH.User, plan.CID),
-	})
-	if err != nil {
+	if hint, err := launch.BuildSSHCommandHint(plan.Manifest, plan.CID); err != nil {
 		if m.logger != nil {
 			m.logger.Info("ssh command hint template failed", "err", err)
 		}
-	} else {
-		argv, err := renderer.RenderArgv(plan.Manifest.SSH.Argv)
-		if err != nil {
-			if m.logger != nil {
-				m.logger.Info("ssh command hint template failed", "err", err)
-			}
-		} else if hint := (sshtools.Config{Exec: argv, User: plan.Manifest.SSH.User}).Hint(plan.CID); hint != "" {
-			fmt.Fprintf(m.outputWriter(), "connect with: %s\n", hint)
-		}
+	} else if hint != "" {
+		fmt.Fprintf(m.outputWriter(), "connect with: %s\n", hint)
 	}
 
 	vmWatchers := processes.VMWatchers()

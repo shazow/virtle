@@ -12,22 +12,6 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-func Load(r io.Reader) (*Manifest, error) {
-	data, err := io.ReadAll(r)
-	if err != nil {
-		return nil, fmt.Errorf("read manifest: %w", err)
-	}
-	return LoadBytes(data, "")
-}
-
-func LoadBytes(data []byte, name string) (*Manifest, error) {
-	doc, err := DecodeDocumentBytes(data, name)
-	if err != nil {
-		return nil, err
-	}
-	return doc.Manifest()
-}
-
 func DecodeDocumentBytes(data []byte, name string) (Document, error) {
 	var doc Document
 	applyDefaultTags(&doc)

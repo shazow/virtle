@@ -59,7 +59,7 @@ func TestLoadReadsFromReader(t *testing.T) {
 		t.Fatalf("marshal manifest: %v", err)
 	}
 
-	loaded, err := Load(bytes.NewReader(data))
+	loaded, err := loadBytes(data, "")
 	if err != nil {
 		t.Fatalf("load manifest: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestLoadRejectsTrailingData(t *testing.T) {
 		t.Fatalf("marshal manifest: %v", err)
 	}
 
-	_, err = Load(strings.NewReader(string(data) + "\n{}"))
+	_, err = loadBytes([]byte(string(data)+"\n{}"), "")
 	if err == nil {
 		t.Fatal("expected trailing data error")
 	}
@@ -217,7 +217,7 @@ func TestDocumentWriteFilesFollowLinksResolvesToManifest(t *testing.T) {
 		t.Fatalf("marshal manifest: %v", err)
 	}
 
-	loaded, err := Load(bytes.NewReader(data))
+	loaded, err := loadBytes(data, "")
 	if err != nil {
 		t.Fatalf("load manifest: %v", err)
 	}
@@ -251,7 +251,7 @@ func TestDocumentWriteFilesRejectsTextAndSource(t *testing.T) {
 		t.Fatalf("marshal manifest: %v", err)
 	}
 
-	_, err = Load(bytes.NewReader(data))
+	_, err = loadBytes(data, "")
 	if err == nil || !strings.Contains(err.Error(), `manifest.writeFiles["/etc/source.conf"] must set exactly one of text or path`) {
 		t.Fatalf("expected exactly-one write_files validation error, got %v", err)
 	}
@@ -550,7 +550,7 @@ func TestLoadTOMLExamples(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read example: %v", err)
 			}
-			if _, err := LoadBytes(data, path); err != nil {
+			if _, err := loadBytes(data, path); err != nil {
 				t.Fatalf("load example: %v", err)
 			}
 		})
@@ -1369,7 +1369,7 @@ func TestManifestNotificationsValidationAndResolution(t *testing.T) {
 			],
 			"notifications": {"exec": ["--verbose"]}
 		}`)
-		loaded, err := Load(bytes.NewReader(data))
+		loaded, err := loadBytes(data, "")
 		if err != nil {
 			t.Fatalf("load manifest: %v", err)
 		}
@@ -1392,7 +1392,7 @@ func TestManifestNotificationsValidationAndResolution(t *testing.T) {
 			t.Fatalf("marshal manifest: %v", err)
 		}
 
-		loaded, err := Load(bytes.NewReader(data))
+		loaded, err := loadBytes(data, "")
 		if err != nil {
 			t.Fatalf("load manifest: %v", err)
 		}
@@ -1686,7 +1686,7 @@ func TestLoadRejectsMalformedForwardEndpoints(t *testing.T) {
 				t.Fatalf("marshal manifest: %v", err)
 			}
 
-			_, err = Load(bytes.NewReader(data))
+			_, err = loadBytes(data, "")
 			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
 				t.Fatalf("expected error containing %q, got %v", tt.wantError, err)
 			}
@@ -1712,7 +1712,7 @@ func TestLoadDefaultsForwardPortProtoAndFrom(t *testing.T) {
 		t.Fatalf("marshal manifest: %v", err)
 	}
 
-	loaded, err := Load(bytes.NewReader(data))
+	loaded, err := loadBytes(data, "")
 	if err != nil {
 		t.Fatalf("load manifest: %v", err)
 	}
@@ -1775,7 +1775,7 @@ func TestLoadGuestForwardUsesTunnelExecTemplate(t *testing.T) {
 				t.Fatalf("marshal manifest: %v", err)
 			}
 
-			loaded, err := Load(bytes.NewReader(data))
+			loaded, err := loadBytes(data, "")
 			if err != nil {
 				t.Fatalf("load manifest: %v", err)
 			}
@@ -1828,7 +1828,7 @@ func TestLoadRejectsInvalidForwardOptions(t *testing.T) {
 				t.Fatalf("marshal manifest: %v", err)
 			}
 
-			_, err = Load(bytes.NewReader(data))
+			_, err = loadBytes(data, "")
 			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
 				t.Fatalf("expected error containing %q, got %v", tt.wantError, err)
 			}
@@ -1855,7 +1855,7 @@ func TestLoadTreatsHeadlessGraphicsAsAbsentForTransport(t *testing.T) {
 				t.Fatalf("marshal manifest: %v", err)
 			}
 
-			loaded, err := Load(bytes.NewReader(data))
+			loaded, err := loadBytes(data, "")
 			if err != nil {
 				t.Fatalf("load manifest: %v", err)
 			}
@@ -1986,7 +1986,7 @@ func TestManifestNoGraphicDefaultsPreserveExplicitFalse(t *testing.T) {
 			t.Fatalf("marshal manifest: %v", err)
 		}
 
-		loaded, err := Load(bytes.NewReader(data))
+		loaded, err := loadBytes(data, "")
 		if err != nil {
 			t.Fatalf("load manifest: %v", err)
 		}
@@ -2624,6 +2624,20 @@ func TestManifestAllowsRuntimeAndQEMUPassedCPUs(t *testing.T) {
 			t.Fatalf("unexpected validation error for cpus=%v: %v", cpus, err)
 		}
 	}
+}
+
+// loadBytes decodes and resolves a manifest the way production does
+// (DecodeDocumentBytes then Manifest), as a test convenience.
+func loadBytes(data []byte, name string) (*Manifest, error) {
+	doc, err := DecodeDocumentBytes(data, name)
+	if err != nil {
+		return nil, err
+	}
+	return doc.Manifest()
+}
+
+func stringPtr(value string) *string {
+	return &value
 }
 
 func validDocument() Document {

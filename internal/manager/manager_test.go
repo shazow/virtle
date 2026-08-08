@@ -5030,6 +5030,12 @@ func (c *fakeGuestAgentClient) Disconnect() error {
 	return nil
 }
 
+// launch is a test-only convenience wrapping launchWithOptions with the
+// default foreground options.
+func (m *manager) launch(ctx context.Context, manifest *manifest.Manifest, remoteCommand []string) error {
+	return m.launchWithOptions(ctx, manifest, remoteCommand, launch.Options{Resume: launch.ResumeModeNo, SSH: true})
+}
+
 func manifestBoundManager(m *manager, cfg *manifest.Manifest) *manager {
 	m.launchManifest = cfg
 	return m

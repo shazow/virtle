@@ -134,16 +134,24 @@ func TestQMPClientMigrationCommands(t *testing.T) {
 	assertQMPCommand(t, commands, "migrate-incoming")
 }
 
+// migrateTestRPCTimeout and migrateTestReplyDelay pin the invariant the
+// not-capped test depends on: the migrate reply arrives only after the RPC
+// liveness bound has expired. A timer is the only way to observe "the bound
+// elapsed", so this is the sanctioned sleep with shared constants.
+const (
+	migrateTestRPCTimeout = 10 * time.Millisecond
+	migrateTestReplyDelay = 10 * migrateTestRPCTimeout
+)
+
 func TestQMPClientMigrateNotCappedByRPCTimeout(t *testing.T) {
-	responseDelay := 100 * time.Millisecond
 	client, commands, cleanup := newTestQMPClient(t, func(message map[string]any) map[string]any {
 		if message["execute"] == "migrate" {
-			time.Sleep(responseDelay)
+			time.Sleep(migrateTestReplyDelay)
 		}
 		return map[string]any{"return": map[string]any{}}
 	})
 	defer cleanup()
-	client.session.RPCTimeout = 10 * time.Millisecond
+	client.session.RPCTimeout = migrateTestRPCTimeout
 
 	if err := client.MigrateToFile(context.Background(), "/tmp/vm.state"); err != nil {
 		t.Fatalf("migrate held its reply past the rpc timeout and should still succeed: %v", err)
@@ -154,13 +162,17 @@ func TestQMPClientMigrateNotCappedByRPCTimeout(t *testing.T) {
 }
 
 func TestQMPClientMigrateHonorsContextDeadline(t *testing.T) {
+	// Hold the migrate reply until the test ends so the ctx deadline is the
+	// only thing that can end the call.
+	release := make(chan struct{})
 	client, _, cleanup := newTestQMPClient(t, func(message map[string]any) map[string]any {
 		if message["execute"] == "migrate" {
-			time.Sleep(200 * time.Millisecond)
+			<-release
 		}
 		return map[string]any{"return": map[string]any{}}
 	})
 	defer cleanup()
+	defer close(release)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()

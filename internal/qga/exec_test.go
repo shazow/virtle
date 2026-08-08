@@ -17,7 +17,7 @@ func TestRunCommandStatusWaitsForExit(t *testing.T) {
 		},
 	}
 	status, err := RunCommandStatus(context.Background(), client, ExecWait{
-		PollDelay:     time.Millisecond,
+		pollDelay:     time.Millisecond,
 		Name:          "test",
 		Path:          "/bin/test",
 		Args:          []string{"-e", "/tmp/file"},
@@ -42,7 +42,7 @@ func TestRunCommandStatusWrapsExecStatusError(t *testing.T) {
 	wantErr := errors.New("status failed")
 	client := &execClient{pid: 7, statusErr: wantErr}
 	_, err := RunCommandStatus(context.Background(), client, ExecWait{
-		PollDelay: time.Millisecond,
+		pollDelay: time.Millisecond,
 		Name:      "chmod",
 		Path:      "/bin/chmod",
 		Subject:   "/tmp/file",
@@ -57,7 +57,7 @@ func TestRunCommandStatusReturnsContextCancellation(t *testing.T) {
 	client := &execClient{pid: 7, statuses: []ExecStatus{{Exited: false}}}
 	cancel()
 	_, err := RunCommandStatus(ctx, client, ExecWait{
-		PollDelay: time.Hour,
+		pollDelay: time.Hour,
 		Name:      "test",
 		Path:      "/bin/test",
 		Subject:   "/tmp/file",
@@ -73,7 +73,7 @@ func TestRunCommandStatusReturnsContextDeadlineCause(t *testing.T) {
 	defer cancel()
 	client := &execClient{pid: 7, statuses: []ExecStatus{{Exited: false}}}
 	_, err := RunCommandStatus(ctx, client, ExecWait{
-		PollDelay: time.Hour,
+		pollDelay: time.Hour,
 		Name:      "test",
 		Path:      "/bin/test",
 		Subject:   "/tmp/file",

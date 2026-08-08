@@ -65,6 +65,10 @@ type Options struct {
 	} `command:"manifest" description:"Inspect and work with virtle manifests" long-description:"Inspect and work with the virtle manifest input format."`
 }
 
+const extraHelp = `Run 'virtle <command> --help' for more information on a command.
+Project repository: https://github.com/shazow/virtle
+`
+
 func runLaunch(options *Options) error {
 	if len(options.Launch.Args.RemoteCommand) > 0 && !options.Launch.SSH {
 		return fmt.Errorf("remote command arguments require --ssh")
@@ -294,6 +298,7 @@ func main() {
 		var flagsErr *flags.Error
 		if errors.As(err, &flagsErr) && flagsErr.Type == flags.ErrHelp {
 			fmt.Fprintln(os.Stdout, flagsErr.Message)
+			fmt.Fprint(os.Stdout, extraHelp)
 			os.Exit(0)
 		}
 
@@ -313,6 +318,8 @@ func run(args []string) error {
 			// bare "Please specify one command" message.
 			var help bytes.Buffer
 			parser.WriteHelp(&help)
+			help.WriteString("\n")
+			help.WriteString(extraHelp)
 			return &flags.Error{Type: flags.ErrCommandRequired, Message: strings.TrimRight(help.String(), "\n")}
 		}
 		return err

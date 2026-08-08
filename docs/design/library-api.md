@@ -56,6 +56,7 @@ github.com/shazow/virtle/backend/qemu         QEMU backend + its QGA-based vm.Gu
 github.com/shazow/virtle/backend/firecracker  (future) example sibling backend
 github.com/shazow/virtle/guest                virtle-native guest daemon + host-side client (implements vm.Guest)
 github.com/shazow/virtle/manifest             TOML ⇄ (vm.Spec, backend.Backend) loader
+github.com/shazow/virtle/units                typed scalars (units.MiB, units.Duration, ...)
 internal/...                                  protocol clients (QMP, QGA wire), process supervision, etc.
 ```
 
@@ -80,7 +81,7 @@ package vm // github.com/shazow/virtle/vm
 // The zero value plus a boot source is launchable; backends apply defaults.
 type Spec struct {
 	CPUs   int       // default: runtime.NumCPU
-	Memory int64     // bytes; default 2 GiB (see D6)
+	Memory units.MiB // default: 2048
 	Kernel *Kernel   // direct kernel boot (microVM style)
 	Shares []Share   // host dirs shared into the guest (virtio-fs or similar)
 	Disks  []Disk    // block devices / volume images
@@ -96,7 +97,7 @@ type Share struct {
 }
 type Disk struct {
 	Path, GuestPath, Format string
-	Size                    int64 // created if absent
+	Size                    units.MiB // created if absent
 }
 type Forward struct{ HostAddr, GuestAddr, Proto string } // Proto defaults to "tcp"
 type File struct {
@@ -158,7 +159,9 @@ type Instance interface {
 	// RemoteControl returns guest control for this instance, wired up by
 	// the backend, or an error wrapping errors.ErrUnsupported when the VM
 	// has no reachable guest agent. Most virtle functionality is built on
-	// the expectation that this succeeds.
+	// the expectation that this succeeds. Whether the backend wires guest
+	// control eagerly at Start or lazily on first call is an implementation
+	// detail behind the backend's constructor.
 	RemoteControl() (vm.Guest, error)
 }
 ```
@@ -204,7 +207,7 @@ Naming notes: `backend.Backend` stutters, but so does `driver.Driver`; the
 stutter is accepted for greppability over `backend.Interface`
 (`sort.Interface` precedent, a style the stdlib has moved away from). One
 ergonomic caveat: callers cannot name a variable `backend`, so examples and
-docs model `b := &qemu.Backend{}`.
+docs model `b, err := qemu.BackendWithQGA(...)`.
 
 ### The virtle guest daemon: `guest`
 
@@ -241,9 +244,8 @@ only.
 ```go
 package qemu // github.com/shazow/virtle/backend/qemu
 
-// Backend implements backend.Backend by exec'ing QEMU.
-// The zero value works; fields are the QEMU-only knobs.
-type Backend struct {
+// Config holds the QEMU-only knobs. The zero value works.
+type Config struct {
 	Binary    string   // default: qemu-system-<arch>
 	Machine   string   // default: microvm/q35 per arch
 	ExtraArgs []string // passthrough
@@ -252,18 +254,25 @@ type Backend struct {
 	// ... QMP/QGA socket placement, virtiofsd path, etc.
 }
 
-func (b *Backend) Start(ctx context.Context, spec *vm.Spec) (backend.Instance, error)
+// Constructors select the RemoteControl implementation (if any); whether
+// guest control is wired eagerly or lazily is an implementation detail
+// behind them, so variants can be tried without API changes.
+
+// BackendWithQGA returns a QEMU backend whose instances' RemoteControl
+// speaks the QEMU Guest Agent — equivalent to today's codebase.
+func BackendWithQGA(cfg Config) (backend.Backend, error)
+
+// BackendWithGuest (future) returns a QEMU backend whose instances'
+// RemoteControl speaks the virtle-native guest daemon.
+func BackendWithGuest(cfg Config) (backend.Backend, error)
 ```
 
-`qemu.Backend` also implements `backend.Suspender` (QMP migration
+The returned backends also implement `backend.Suspender` (QMP migration
 save/restore), `backend.MemoryResizer` (virtio-balloon), and
-`backend.DeviceAttacher` (QMP device_add/del). Its instances'
-`RemoteControl` returns the virtle guest daemon client when the spec boots
-one, and otherwise falls back to the package's QGA-based `vm.Guest`
-implementation — equivalent to today's codebase (see D7). virtiofsd helper
-processes are an implementation detail inside the backend. `qmpclient`,
-`qga`, and `qmpwire` stay internal; nothing in `backend/qemu`'s exported
-surface names QMP.
+`backend.DeviceAttacher` (QMP device_add/del). virtiofsd helper processes
+are an implementation detail inside the backend. `qmpclient`, `qga`, and
+`qmpwire` stay internal; nothing in `backend/qemu`'s exported surface names
+QMP beyond the `BackendWithQGA` constructor that opts into it.
 
 ### Config files: `manifest`
 
@@ -288,9 +297,12 @@ orchestration, not VM description (see D5).
 spec := &vm.Spec{
 	Kernel: &vm.Kernel{Path: "vmlinuz", Initrd: "initrd.img"},
 	Shares: []vm.Share{{Tag: "src", HostPath: ".", GuestPath: "/workspace"}},
-	Memory: 2 << 30,
+	Memory: 2048, // units.MiB
 }
-b := &qemu.Backend{}
+b, err := qemu.BackendWithQGA(qemu.Config{})
+if err != nil {
+	log.Fatal(err)
+}
 inst, err := b.Start(ctx, spec)
 if err != nil {
 	log.Fatal(err)
@@ -308,9 +320,9 @@ fmt.Printf("exit=%d\n%s", out.ExitCode, out.Stdout)
 **2. Swapping the backend — the abstraction paying off:**
 
 ```go
-var b backend.Backend = &qemu.Backend{Machine: "microvm"}
+b, err := qemu.BackendWithQGA(qemu.Config{Machine: "microvm"})
 if useFirecracker {
-	b = &firecracker.Backend{} // hypothetical sibling
+	b, err = firecracker.New(firecracker.Config{}) // hypothetical sibling
 }
 inst, err := b.Start(ctx, spec)
 ```
@@ -374,6 +386,16 @@ Resolved by this revision:
   `Instance.RemoteControl() (vm.Guest, error)`, not from a dialer option;
   the virtle-native daemon lives in `./guest` with host-side constructors
   returning `vm.Guest` implementations.
+- **D6 — sizes** (PR #67 review): lean on the type system — `./units`
+  becomes public and `vm.Spec` uses typed scalars (`units.MiB`,
+  `units.Duration`, more as needed) instead of plumbed `int64`s whose
+  meaning can be misread.
+- **D7 — RemoteControl selection** (PR #67 review): backend constructors
+  select the guest-control implementation — `qemu.BackendWithQGA(...)
+  (backend.Backend, error)` first, a `qemu.BackendWithGuest` equivalent
+  later for the virtle-native daemon. Whether wiring is lazy or eager is an
+  implementation detail behind the constructor so variants can be tried
+  without API changes.
 
 Still open:
 
@@ -383,23 +405,6 @@ Still open:
   (b) Include host `Runs` in Spec for manifest parity — fatter core,
   simpler CLI.
 
-- **D6 — sizes.**
-  (a) `int64` bytes everywhere (stdlib-flavored, recommended).
-  (b) Keep `units.MiB` / `units.Duration` typed scalars (nicer TOML
-  round-trip, already exists).
-
-- **D7 — how RemoteControl picks its implementation.**
-  `RemoteControl()` takes no context, implying the backend wires guest
-  control during `Start` (dial/retry happens there, under Start's ctx).
-  (a) *Recommended:* a `qemu.Backend` field selects the agent
-  (`GuestControl: guestd | qga | none`), defaulting to the virtle daemon
-  with QGA fallback during the transition.
-  (b) Probe at start: try the virtle daemon port, fall back to QGA if it
-  doesn't answer — zero config, but adds boot-time latency and
-  nondeterminism.
-  A lazy variant (`RemoteControl(ctx)` dialing on first use) is possible if
-  wiring at Start proves too eager.
-
 - **D8 — where instance-scoped optional ops live.**
   This design puts Suspend/ResizeMemory/Attach on backend-level capability
   interfaces taking the `Instance` as an argument (capability is a property
@@ -408,6 +413,19 @@ Still open:
   keeps discovery in one place; instance-level reads slightly more
   naturally at call sites. Recommend backend-level as specified, revisit
   only if call sites get awkward.
+
+- **D9 — tty / interactive sessions** (under discussion, PR #67 thread).
+  Recommended direction: standardize the *session type* in core — `vm.Term`
+  (`io.ReadWriteCloser` + `Resize` + `Wait`) with `vm.TermOptions` — rather
+  than a transport-driver registry, and let each source expose it where its
+  ownership naturally lives: the serial/chardev console as a
+  `backend.ConsoleProvider` capability on instances (backend resource, the
+  no-daemon debug path), an interactive terminal as a `GuestWithTerminal`
+  extension on the guest-daemon client (the primary programmatic path once
+  the daemon lands), and SSH staying at the CLI layer as today
+  (exec the user's ssh client; its value is their config/agent/tooling),
+  with an optional pure-Go `sshterm` transport implementing `vm.Term` only
+  if a library consumer needs programmatic SSH ttys.
 
 ## Appendix: mapping to existing internals
 

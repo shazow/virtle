@@ -10,6 +10,10 @@ import (
 	"time"
 )
 
+// DefaultRPCTimeout bounds a single round trip on a QEMU control socket when
+// the dialer does not configure one.
+const DefaultRPCTimeout = 15 * time.Second
+
 // WireError marks a connection-level failure — a failed write, read, or
 // decode — after which the stream position is unknown and the connection must
 // not be reused.

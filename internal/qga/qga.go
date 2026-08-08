@@ -14,7 +14,7 @@ import (
 
 // DefaultRPCTimeout bounds a single guest-agent round trip when the dialer
 // does not configure one.
-const DefaultRPCTimeout = 5 * time.Second
+const DefaultRPCTimeout = qmpwire.DefaultRPCTimeout
 
 // Pinger checks whether the guest agent is accepting commands.
 type Pinger interface {

@@ -22,7 +22,7 @@ type Core struct {
 	suspendRequests  *launch.SuspendCoordinator
 	processes        *launch.ProcessSet
 	shutdownDelay    time.Duration
-	qmpTimeout       time.Duration
+	writeBackTimeout time.Duration
 	logger           *slog.Logger
 	savedSuspendExit func(error) bool
 	writeBack        func(context.Context) error
@@ -43,7 +43,7 @@ func New(config RuntimeConfig) *Core {
 		stats:            config.Stats,
 		qmp:              config.QMP,
 		suspendRequests:  config.SuspendRequests,
-		qmpTimeout:       config.QMPTimeout,
+		writeBackTimeout: config.WriteBackTimeout,
 		logger:           config.Logger,
 		savedSuspendExit: config.SavedSuspendExit,
 		processes:        config.Processes,
@@ -90,7 +90,7 @@ func (r *Core) Close() error {
 			QMP:           r.qmp,
 		},
 		WriteBack:        r.writeBack,
-		WriteBackTimeout: r.qmpTimeout,
+		WriteBackTimeout: r.writeBackTimeout,
 		SkipWriteBack:    r.savedSuspend.Load(),
 		Control:          r.control,
 		Cleanup:          r.cleanup,

@@ -35,6 +35,13 @@ const (
 	defaultSSHRetryDelay      = 500 * time.Millisecond
 	defaultShutdownDelay      = 15 * time.Second
 	sshRetryOutputRevealDelay = 250 * time.Millisecond
+	// defaultWriteBackTimeout bounds the whole teardown write-back phase:
+	// reconnecting to the guest agent and copying changed files back to the
+	// host. Individual guest commands are bounded separately.
+	defaultWriteBackTimeout = time.Minute
+	// defaultGuestInfoTimeout bounds collecting guest diagnostics: waiting
+	// for the guest agent and running the process listing.
+	defaultGuestInfoTimeout = 10 * time.Second
 )
 
 type manager struct {
@@ -321,10 +328,6 @@ func (m *manager) effectiveQMPMigrationTimeout() time.Duration {
 func (m *manager) migrationContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	timeout := m.effectiveQMPMigrationTimeout()
 	return context.WithTimeoutCause(ctx, timeout, fmt.Errorf("migration timed out after %s", timeout))
-}
-
-func (m *manager) effectiveQMPCommandTimeout() time.Duration {
-	return m.effectiveQMPConnectTimeout()
 }
 
 type launchSuspendHandler struct {

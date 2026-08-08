@@ -173,7 +173,7 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 		Cleanup: func() error {
 			return errors.Join(launch.RemoveStaleSockets(plan.RuntimeSocketCleanupFiles()...), cleanupRuntime())
 		},
-		QMPTimeout:       m.effectiveQMPCommandTimeout(),
+		WriteBackTimeout: defaultWriteBackTimeout,
 		Logger:           m.logger,
 		SavedSuspendExit: launch.IsSavedSuspendExit,
 	})

@@ -16,7 +16,7 @@ import (
 
 // DefaultRPCTimeout bounds a single QMP operation when the dialer does not
 // configure one.
-const DefaultRPCTimeout = 5 * time.Second
+const DefaultRPCTimeout = qmpwire.DefaultRPCTimeout
 
 // RawRunner runs raw QMP monitor commands.
 type RawRunner interface {

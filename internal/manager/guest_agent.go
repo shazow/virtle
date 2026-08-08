@@ -20,7 +20,7 @@ const guestShutdownResponseTimeout = time.Second
 func (m *manager) requestGuestShutdown(ctx context.Context, socketPath string, exec []string) error {
 	dialer := m.guestAgentDialer
 	if dialer == nil {
-		dialer = &qga.SocketDialer{RPCTimeout: m.effectiveQMPCommandTimeout()}
+		dialer = &qga.SocketDialer{}
 	}
 	client, err := dialer.Dial(ctx, socketPath, m.effectiveQMPConnectTimeout())
 	if err != nil {
@@ -249,7 +249,7 @@ func (m *manager) waitForGuestAgent(ctx context.Context, socketPath string, watc
 func (m *manager) waitForGuestAgentStage(ctx context.Context, stage string, socketPath string, watchers executor.Group) (qga.Client, error) {
 	dialer := m.guestAgentDialer
 	if dialer == nil {
-		dialer = &qga.SocketDialer{RPCTimeout: m.effectiveQMPCommandTimeout()}
+		dialer = &qga.SocketDialer{}
 	}
 	retryDelay := m.qmpRetryDelay
 	if retryDelay <= 0 {

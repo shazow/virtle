@@ -1042,8 +1042,8 @@ func TestWaitForRunningLaunchSavedSuspendSkipsCloseWriteBack(t *testing.T) {
 			writeBackCalls++
 			return nil
 		},
-		QMPTimeout: time.Second,
-		Logger:     slog.New(slog.DiscardHandler),
+		WriteBackTimeout: time.Second,
+		Logger:           slog.New(slog.DiscardHandler),
 	})
 	lifecycle := newTestLaunchLifecycle()
 	lifecycle.Suspend().Request()

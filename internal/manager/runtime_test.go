@@ -29,11 +29,11 @@ func TestRuntimeStatusAndBalloonUseOwnedQMP(t *testing.T) {
 			ControlSocket: filepath.Join(tmpDir, "virtle.sock"),
 			QMPSocket:     filepath.Join(tmpDir, "qmp.sock"),
 		},
-		CID:        9,
-		Stats:      stats,
-		QMP:        qmp,
-		QMPTimeout: time.Second,
-		Logger:     slog.New(slog.DiscardHandler),
+		CID:              9,
+		Stats:            stats,
+		QMP:              qmp,
+		WriteBackTimeout: time.Second,
+		Logger:           slog.New(slog.DiscardHandler),
 	})
 	runtime.SetReady()
 
@@ -66,11 +66,11 @@ func TestRuntimeBalloonMapsMissingDeviceToFailedPrecondition(t *testing.T) {
 			ControlSocket: filepath.Join(tmpDir, "virtle.sock"),
 			QMPSocket:     filepath.Join(tmpDir, "qmp.sock"),
 		},
-		CID:        9,
-		Stats:      launch.NewStats(time.Now()),
-		QMP:        &fakeQMPClient{},
-		QMPTimeout: time.Second,
-		Logger:     slog.New(slog.DiscardHandler),
+		CID:              9,
+		Stats:            launch.NewStats(time.Now()),
+		QMP:              &fakeQMPClient{},
+		WriteBackTimeout: time.Second,
+		Logger:           slog.New(slog.DiscardHandler),
 	})
 
 	_, err := runtime.Balloon(context.Background(), control.BalloonRequest{})
@@ -98,7 +98,7 @@ func TestRuntimeSuspendQueuesAndWaitsForLaunchLoop(t *testing.T) {
 		Stats:            launch.NewStats(time.Now()),
 		QMP:              qmp,
 		SuspendRequests:  coordinator,
-		QMPTimeout:       time.Second,
+		WriteBackTimeout: time.Second,
 		Logger:           slog.New(slog.DiscardHandler),
 		SavedSuspendExit: launch.IsSavedSuspendExit,
 	})
@@ -150,11 +150,11 @@ func TestRuntimeSuspendMapsMissingCoordinatorToFailedPrecondition(t *testing.T) 
 			ControlSocket: filepath.Join(tmpDir, "virtle.sock"),
 			QMPSocket:     filepath.Join(tmpDir, "qmp.sock"),
 		},
-		CID:        9,
-		Stats:      launch.NewStats(time.Now()),
-		QMP:        &fakeQMPClient{},
-		QMPTimeout: time.Second,
-		Logger:     slog.New(slog.DiscardHandler),
+		CID:              9,
+		Stats:            launch.NewStats(time.Now()),
+		QMP:              &fakeQMPClient{},
+		WriteBackTimeout: time.Second,
+		Logger:           slog.New(slog.DiscardHandler),
 	})
 	runtime.SetReady()
 
@@ -178,11 +178,11 @@ func TestRuntimeStartControlServesStatus(t *testing.T) {
 			ControlSocket: controlPath,
 			QMPSocket:     filepath.Join(tmpDir, "qmp.sock"),
 		},
-		CID:        11,
-		Stats:      launch.NewStats(time.Now()),
-		QMP:        &fakeQMPClient{},
-		QMPTimeout: time.Second,
-		Logger:     slog.New(slog.DiscardHandler),
+		CID:              11,
+		Stats:            launch.NewStats(time.Now()),
+		QMP:              &fakeQMPClient{},
+		WriteBackTimeout: time.Second,
+		Logger:           slog.New(slog.DiscardHandler),
 	})
 	runtime.SetReady()
 	if _, err := runtime.StartControl(context.Background(), control.Handlers{}); err != nil {
@@ -224,7 +224,7 @@ func TestRuntimeMarkSavedSuspendSkipsCloseWriteBack(t *testing.T) {
 			writeBackCalls++
 			return nil
 		},
-		QMPTimeout:       time.Second,
+		WriteBackTimeout: time.Second,
 		Logger:           slog.New(slog.DiscardHandler),
 		SavedSuspendExit: launch.IsSavedSuspendExit,
 	})
@@ -251,13 +251,13 @@ func TestRuntimeCloseStopsProcessesAndDisconnectsQMPOnce(t *testing.T) {
 			ControlSocket: filepath.Join(tmpDir, "virtle.sock"),
 			QMPSocket:     filepath.Join(tmpDir, "qmp.sock"),
 		},
-		CID:           11,
-		Stats:         launch.NewStats(time.Now()),
-		QMP:           qmp,
-		Processes:     processes,
-		ShutdownDelay: time.Millisecond,
-		QMPTimeout:    time.Second,
-		Logger:        slog.New(slog.DiscardHandler),
+		CID:              11,
+		Stats:            launch.NewStats(time.Now()),
+		QMP:              qmp,
+		Processes:        processes,
+		ShutdownDelay:    time.Millisecond,
+		WriteBackTimeout: time.Second,
+		Logger:           slog.New(slog.DiscardHandler),
 	})
 
 	if err := runtime.Close(); err != nil {

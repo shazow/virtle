@@ -21,7 +21,7 @@ type RuntimeConfig struct {
 	ShutdownDelay    time.Duration
 	WriteBack        func(context.Context) error
 	Cleanup          func() error
-	QMPTimeout       time.Duration
+	WriteBackTimeout time.Duration
 	Logger           *slog.Logger
 	SavedSuspendExit func(error) bool
 }

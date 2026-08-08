@@ -418,4 +418,3 @@ func TestServerCancelsHandlerWhenPeerDisconnects(t *testing.T) {
 		t.Fatal("handler was not canceled after the peer disconnected")
 	}
 }
-

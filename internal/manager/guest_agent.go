@@ -177,6 +177,7 @@ const (
 	guestInstallPath = "install"
 	guestMountPath   = "mount"
 	guestPSPath      = "ps"
+	guestShellPath   = "sh"
 	guestTestPath    = "test"
 )
 
@@ -195,29 +196,21 @@ func (m *manager) mountWorkspaceCWD(ctx context.Context, client qga.Client) erro
 	})
 }
 
-// installGuestFileDirectory ensures that the parent directory for guestPath exists.
-// It walks upward until it finds an existing ancestor, then creates only the
-// missing directories from top to bottom. owner and mode are passed to install(1)
-// for newly-created directories only; existing directories are left unchanged.
-// mode is expected to be a file mode and is converted to a directory mode by
-// adding execute bits wherever read bits are set.
+// installGuestFileDirectory ensures that the parent directory for guestPath
+// exists. It runs a single POSIX sh script that walks upward to the existing
+// ancestor and creates only the missing directories from top to bottom.
+// owner and mode are applied to newly created directories only; existing
+// directories are left unchanged. mode is expected to be a file mode and is
+// converted to a directory mode by adding execute bits wherever read bits
+// are set.
 func (m *manager) installGuestFileDirectory(ctx context.Context, client qga.Client, guestPath string, owner string, mode string) error {
 	return launch.InstallGuestFileDirectory(ctx, launch.GuestDirectoryInstaller{
-		Exists: func(ctx context.Context, guestDir string) (bool, error) {
-			return m.guestDirectoryExists(ctx, client, guestDir)
-		},
-		Install: func(ctx context.Context, guestDir string, args []string) error {
-			return m.runGuestFileCommand(ctx, client, "install -d", guestInstallPath, args, guestDir)
+		InstallTree: func(ctx context.Context, guestDir string, owner string, mode string) error {
+			return m.runGuestFileCommand(ctx, client, "install dirs", guestShellPath,
+				[]string{"-c", launch.GuestDirectoryInstallScript(), "sh", guestDir, owner, mode},
+				guestDir)
 		},
 	}, guestPath, owner, mode)
-}
-
-func (m *manager) guestDirectoryExists(ctx context.Context, client qga.Client, guestDir string) (bool, error) {
-	status, err := m.runGuestCommandStatus(ctx, client, "test -d", guestTestPath, []string{"-d", guestDir}, guestDir)
-	if err != nil {
-		return false, err
-	}
-	return status.ExitCode == 0, nil
 }
 
 func (m *manager) guestPathExists(ctx context.Context, client qga.Client, guestPath string) (bool, error) {

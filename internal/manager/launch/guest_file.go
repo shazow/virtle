@@ -7,7 +7,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"strings"
 
 	"github.com/shazow/virtle/internal/manifest"
 )
@@ -102,11 +101,6 @@ func WriteHostFileAtomic(hostPath string, data []byte) error {
 	}
 	cleanup = false
 	return nil
-}
-
-type GuestDirectoryInstaller struct {
-	Exists  func(ctx context.Context, guestDir string) (bool, error)
-	Install func(ctx context.Context, guestDir string, args []string) error
 }
 
 type GuestFileWriter struct {
@@ -224,80 +218,4 @@ func WriteBackGuestFiles(ctx context.Context, files []manifest.ResolvedWriteFile
 		}
 	}
 	return nil
-}
-
-// InstallGuestFileDirectory ensures that the parent directory for guestPath exists.
-// It walks upward until it finds an existing ancestor, then creates only the
-// missing directories from top to bottom. owner and mode are applied to newly
-// created directories only.
-func InstallGuestFileDirectory(ctx context.Context, installer GuestDirectoryInstaller, guestPath string, owner string, mode string) error {
-	guestDir := path.Clean(path.Dir(guestPath))
-	if guestDir == "." || guestDir == "/" {
-		return nil
-	}
-
-	missingDirs := make([]string, 0, 4)
-	current := guestDir
-	for {
-		exists, err := installer.Exists(ctx, current)
-		if err != nil {
-			return err
-		}
-		if exists {
-			break
-		}
-		missingDirs = append(missingDirs, current)
-		parent := path.Dir(current)
-		if parent == current {
-			return fmt.Errorf("resolve existing parent for %q", guestDir)
-		}
-		current = parent
-	}
-
-	for i := len(missingDirs) - 1; i >= 0; i-- {
-		dir := missingDirs[i]
-		if err := installer.Install(ctx, dir, guestInstallDirectoryArgs(dir, owner, mode)); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func guestInstallDirectoryArgs(guestDir string, owner string, mode string) []string {
-	args := []string{"-d"}
-	if owner != "" {
-		user, group, _ := strings.Cut(owner, ":")
-		if user != "" {
-			args = append(args, "-o", user)
-		}
-		if group != "" {
-			args = append(args, "-g", group)
-		}
-	}
-	if mode != "" {
-		args = append(args, "-m", guestDirectoryMode(mode))
-	}
-	return append(args, guestDir)
-}
-
-func guestDirectoryMode(mode string) string {
-	prefix := ""
-	digits := mode
-	if strings.HasPrefix(mode, "0") {
-		prefix = "0"
-		digits = mode[1:]
-	}
-	if len(digits) != 3 {
-		return mode
-	}
-
-	out := make([]byte, 3)
-	for i := 0; i < 3; i++ {
-		d := digits[i] - '0'
-		if d&0b100 != 0 {
-			d |= 0b001
-		}
-		out[i] = '0' + d
-	}
-	return prefix + string(out)
 }

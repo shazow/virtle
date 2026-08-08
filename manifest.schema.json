@@ -284,7 +284,8 @@
         },
         "serial": {
           "type": "string",
-          "description": "Serial console mode: off print or console."
+          "description": "Serial console mode: off print or console.",
+          "default": "off"
         }
       },
       "additionalProperties": false,
@@ -294,7 +295,8 @@
       "properties": {
         "type": {
           "type": "string",
-          "description": "QEMU machine type to use when resolving device transports."
+          "description": "QEMU machine type to use when resolving device transports.",
+          "default": "microvm"
         },
         "vcpu": {
           "type": "integer",
@@ -306,7 +308,8 @@
         },
         "memory": {
           "type": "integer",
-          "description": "Guest memory size in MiB."
+          "description": "Guest memory size in MiB.",
+          "default": 1024
         },
         "cpu": {
           "type": "string",
@@ -398,15 +401,18 @@
         },
         "qmp_socket": {
           "type": "string",
-          "description": "Path to the QEMU Machine Protocol socket relative to the runtime state directory unless absolute."
+          "description": "Path to the QEMU Machine Protocol socket relative to the runtime state directory unless absolute.",
+          "default": "qmp.sock"
         },
         "guest_agent_socket": {
           "type": "string",
-          "description": "Path to the QEMU guest agent socket relative to the runtime state directory unless absolute."
+          "description": "Path to the QEMU guest agent socket relative to the runtime state directory unless absolute.",
+          "default": "qga.sock"
         },
         "guest_default_timeout": {
           "type": "string",
-          "description": "Timeout for guest agent commands virtle issues itself such as file writes and workspace mounts as a duration like 30s. Guest-exec requests sent through the control socket carry their own timeout and are not affected. Zero disables the timeout and omitting the key uses the default of 30s."
+          "description": "Timeout for guest agent commands virtle issues itself such as file writes and workspace mounts. Guest-exec requests sent through the control socket carry their own timeout. Zero disables the timeout.",
+          "default": "30s"
         },
         "shutdown_exec": {
           "items": {
@@ -417,7 +423,8 @@
         },
         "shutdown_timeout": {
           "type": "string",
-          "description": "Duration to wait for graceful shutdown before forcing QEMU to quit"
+          "description": "Duration to wait for graceful shutdown before forcing QEMU to quit",
+          "default": "90s"
         }
       },
       "additionalProperties": false,
@@ -465,7 +472,8 @@
         },
         "user": {
           "type": "string",
-          "description": "Guest SSH username."
+          "description": "Guest SSH username.",
+          "default": "agent"
         },
         "ready_socket": {
           "type": "string",
@@ -473,7 +481,8 @@
         },
         "retry_delay": {
           "type": "string",
-          "description": "Delay between SSH readiness or connection retry attempts as a duration such as 500ms; must be greater than zero. Omitting the key uses the default of 500ms."
+          "description": "Delay between SSH readiness or connection retry attempts; must be greater than zero.",
+          "default": "500ms"
         },
         "autoprovision": {
           "type": "boolean",
@@ -553,15 +562,18 @@
   "properties": {
     "host_name": {
       "type": "string",
-      "description": "Guest-visible VM name used for QEMU naming and derived runtime files."
+      "description": "Guest-visible VM name used for QEMU naming and derived runtime files.",
+      "default": "virtle"
     },
     "working_dir": {
       "type": "string",
-      "description": "Host working directory used to resolve relative paths in the manifest."
+      "description": "Host working directory used to resolve relative paths in the manifest.",
+      "default": "."
     },
     "state_dir": {
       "type": "string",
-      "description": "Host directory used for runtime state such as locks sockets and generated files."
+      "description": "Host directory used for runtime state such as locks sockets and generated files.",
+      "default": ".virtle"
     },
     "host": {
       "$ref": "#/$defs/HostInput",

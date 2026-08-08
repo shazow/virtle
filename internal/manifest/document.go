@@ -50,7 +50,7 @@ type QEMUInput struct {
 	MachineOptions      map[string]string `json:"machine_options,omitempty" toml:"machine_options" jsonschema:"description=Additional QEMU machine options merged into the resolved machine option list."`
 	QMPSocket           string            `json:"qmp_socket,omitempty" toml:"qmp_socket" default:"qmp.sock" jsonschema:"description=Path to the QEMU Machine Protocol socket relative to the runtime state directory unless absolute."`
 	GuestAgentSocket    string            `json:"guest_agent_socket,omitempty" toml:"guest_agent_socket" default:"qga.sock" jsonschema:"description=Path to the QEMU guest agent socket relative to the runtime state directory unless absolute."`
-	GuestDefaultTimeout units.Duration    `json:"guest_default_timeout,omitempty" toml:"guest_default_timeout" default:"30s" jsonschema:"description=Timeout for guest agent commands virtle issues itself such as file writes and workspace mounts as a duration like 30s. Guest-exec requests sent through the control socket carry their own timeout and are not affected. Zero disables the timeout and omitting the key uses the default of 30s."`
+	GuestDefaultTimeout units.Duration    `json:"guest_default_timeout,omitempty" toml:"guest_default_timeout" default:"30s" jsonschema:"description=Timeout for guest agent commands virtle issues itself such as file writes and workspace mounts. Guest-exec requests sent through the control socket carry their own timeout. Zero disables the timeout."`
 	ShutdownExec        []string          `json:"shutdown_exec,omitempty" toml:"shutdown_exec" jsonschema:"description=Optional guest command tuple invoked through QGA to shut down the VM gracefully."`
 	ShutdownTimeout     units.Duration    `json:"shutdown_timeout,omitempty" toml:"shutdown_timeout" default:"90s" jsonschema:"description=Duration to wait for graceful shutdown before forcing QEMU to quit"`
 }
@@ -249,7 +249,7 @@ type SSHInput struct {
 	Exec          []string       `json:"exec,omitempty" toml:"exec" jsonschema:"description=SSH command template used to attach to the guest."`
 	User          string         `json:"user,omitempty" toml:"user" default:"agent" jsonschema:"description=Guest SSH username."`
 	ReadySocket   string         `json:"ready_socket,omitempty" toml:"ready_socket" jsonschema:"description=Guest readiness socket path relative to the runtime state directory unless absolute."`
-	RetryDelay    units.Duration `json:"retry_delay,omitempty" toml:"retry_delay" default:"500ms" jsonschema:"description=Delay between SSH readiness or connection retry attempts as a duration such as 500ms; must be greater than zero. Omitting the key uses the default of 500ms."`
+	RetryDelay    units.Duration `json:"retry_delay,omitempty" toml:"retry_delay" default:"500ms" jsonschema:"description=Delay between SSH readiness or connection retry attempts; must be greater than zero."`
 	Autoprovision bool           `json:"autoprovision,omitempty" toml:"autoprovision" jsonschema:"description=Automatically provision an SSH key after authentication failure."`
 }
 

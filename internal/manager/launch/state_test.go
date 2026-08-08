@@ -237,6 +237,6 @@ func testManifest(t *testing.T) *manifest.Manifest {
 				VSOCK: manifest.QEMUVSOCKDevice{ID: "vsock0", Transport: "pci"},
 			},
 		},
-		SSH: manifest.SSH{User: "agent"},
+		SSH: manifest.SSH{User: "agent", RetryDelay: 500 * time.Millisecond},
 	}
 }

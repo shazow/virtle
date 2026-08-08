@@ -247,7 +247,7 @@ type SSHInput struct {
 	Exec          []string       `json:"exec,omitempty" toml:"exec" jsonschema:"description=SSH command template used to attach to the guest."`
 	User          string         `json:"user,omitempty" toml:"user" default:"agent" jsonschema:"description=Guest SSH username."`
 	ReadySocket   string         `json:"ready_socket,omitempty" toml:"ready_socket" jsonschema:"description=Guest readiness socket path relative to the runtime state directory unless absolute."`
-	RetryDelay    units.Duration `json:"retry_delay,omitempty" toml:"retry_delay" default:"500ms" jsonschema:"description=Delay between SSH readiness or connection retry attempts as a duration such as 500ms. Zero retries immediately and omitting the key uses the default of 500ms."`
+	RetryDelay    units.Duration `json:"retry_delay,omitempty" toml:"retry_delay" default:"500ms" jsonschema:"description=Delay between SSH readiness or connection retry attempts as a duration such as 500ms; must be greater than zero. Omitting the key uses the default of 500ms."`
 	Autoprovision bool           `json:"autoprovision,omitempty" toml:"autoprovision" jsonschema:"description=Automatically provision an SSH key after authentication failure."`
 }
 

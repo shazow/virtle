@@ -75,8 +75,9 @@ func validManifest() *Manifest {
 			LockPath:   "/tmp/virtle.lock",
 		},
 		SSH: SSH{
-			Argv: []string{"/bin/ssh"},
-			User: "agent",
+			Argv:       []string{"/bin/ssh"},
+			User:       "agent",
+			RetryDelay: 500 * time.Millisecond,
 		},
 		QEMU: QEMU{
 			BinaryPath: "/bin/qemu-system-x86_64",

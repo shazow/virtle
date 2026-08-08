@@ -2,6 +2,7 @@ package units
 
 import (
 	"encoding/json"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -30,6 +31,19 @@ func TestParseDurationAcceptsUnitsAndBareSeconds(t *testing.T) {
 
 	if _, err := ParseDuration("nope"); err == nil || !strings.Contains(err.Error(), `invalid duration "nope"`) {
 		t.Fatalf("expected parse error, got %v", err)
+	}
+
+	// Positive infinity and overflow saturate to the maximum duration.
+	for _, in := range []string{"inf", "1e300"} {
+		got, err := ParseDuration(in)
+		if err != nil || got != Duration(math.MaxInt64) {
+			t.Fatalf("parse %q: got %s err %v, want max duration", in, got, err)
+		}
+	}
+	for _, in := range []string{"nan", "-inf"} {
+		if _, err := ParseDuration(in); err == nil {
+			t.Fatalf("expected error for %q", in)
+		}
 	}
 }
 

@@ -763,18 +763,14 @@ func TestManifestSSHRetryDelayDefaultsAndValidation(t *testing.T) {
 
 	zeroDoc := validDocument()
 	zeroDoc.SSH.RetryDelay = 0
-	zero, err := zeroDoc.Manifest()
-	if err != nil {
-		t.Fatalf("resolve zero retry delay: %v", err)
-	}
-	if got := zero.SSHRetryDelay(time.Second); got != 0 {
-		t.Fatalf("unexpected zero ssh retry delay: got %s want 0", got)
+	if _, err := zeroDoc.Manifest(); err == nil || !strings.Contains(err.Error(), "manifest.ssh.retryDelay must be greater than zero") {
+		t.Fatalf("expected zero retry delay error, got %v", err)
 	}
 
 	invalid := validDocument()
 	invalid.SSH.RetryDelay = units.Duration(-time.Second)
 	_, err = invalid.Manifest()
-	if err == nil || !strings.Contains(err.Error(), "manifest.ssh.retryDelay must be greater than or equal to zero") {
+	if err == nil || !strings.Contains(err.Error(), "manifest.ssh.retryDelay must be greater than zero") {
 		t.Fatalf("expected retry delay validation error, got %v", err)
 	}
 }
@@ -2653,8 +2649,9 @@ func validDocument() Document {
 			},
 		},
 		SSH: SSHInput{
-			Exec: []string{"/bin/ssh"},
-			User: "agent",
+			Exec:       []string{"/bin/ssh"},
+			User:       "agent",
+			RetryDelay: units.Duration(500 * time.Millisecond),
 		},
 	}
 }

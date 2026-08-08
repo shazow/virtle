@@ -462,7 +462,7 @@
         },
         "retry_delay": {
           "type": "string",
-          "description": "Delay between SSH readiness or connection retry attempts as a duration such as 500ms. Zero retries immediately and omitting the key uses the default of 500ms."
+          "description": "Delay between SSH readiness or connection retry attempts as a duration such as 500ms; must be greater than zero. Omitting the key uses the default of 500ms."
         },
         "autoprovision": {
           "type": "boolean",

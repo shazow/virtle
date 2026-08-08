@@ -63,8 +63,8 @@ func (m *Manifest) Validate() error {
 		return fmt.Errorf("manifest.paths.lockPath is required")
 	case m.SSH.User == "":
 		return fmt.Errorf("manifest.ssh.user is required")
-	case m.SSH.RetryDelay < 0:
-		return fmt.Errorf("manifest.ssh.retryDelay must be greater than or equal to zero")
+	case m.SSH.RetryDelay <= 0:
+		return fmt.Errorf("manifest.ssh.retryDelay must be greater than zero; omit manifest.ssh.retry_delay for the 500ms default")
 	case m.QEMU.BinaryPath == "":
 		return fmt.Errorf("manifest.qemu.binaryPath is required")
 	case m.QEMU.QMP.SocketPath == "":

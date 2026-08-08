@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/shazow/virtle/internal/manifest"
 )
@@ -47,8 +48,9 @@ func validPlanManifest(workingDir string) *manifest.Manifest {
 			LockPath:   filepath.Join(workingDir, "virtle.lock"),
 		},
 		SSH: manifest.SSH{
-			Argv: []string{"/bin/ssh"},
-			User: "agent",
+			Argv:       []string{"/bin/ssh"},
+			User:       "agent",
+			RetryDelay: 500 * time.Millisecond,
 		},
 		QEMU: manifest.QEMU{
 			BinaryPath: "/bin/qemu-system-x86_64",

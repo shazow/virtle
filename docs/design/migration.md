@@ -182,7 +182,7 @@ to the supported API:
 | `internal/balloon` | `backend.MemoryResizer` |
 | `internal/hotplug` | `backend.DeviceAttacher` |
 | `internal/manager/control` `Dial` | unchanged host socket (§4); Go client promotion deferred |
-| `internal/units` | promoted to public `units`; `vm.Spec` uses its typed scalars (`units.MiB`, `units.Duration`) |
+| `internal/units` | promoted to public `units`, rebased on `units.Bytes` + size constants (`2048 * units.Mebibyte`) plus `units.Duration`; manifest TOML numbers stay MiB-denominated, converted at load |
 
 API stability posture: the module is untagged v0; promoted packages carry an
 experimental notice until the API settles, then a `v0.x` tag makes versions

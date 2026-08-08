@@ -56,7 +56,7 @@ github.com/shazow/virtle/backend/qemu         QEMU backend + its QGA-based vm.Gu
 github.com/shazow/virtle/backend/firecracker  (future) example sibling backend
 github.com/shazow/virtle/guest                virtle-native guest daemon + host-side client (implements vm.Guest)
 github.com/shazow/virtle/manifest             TOML ⇄ (vm.Spec, backend.Backend) loader
-github.com/shazow/virtle/units                typed scalars (units.MiB, units.Duration, ...)
+github.com/shazow/virtle/units                typed scalars (units.Bytes + size constants, units.Duration, ...)
 internal/...                                  protocol clients (QMP, QGA wire), process supervision, etc.
 ```
 
@@ -80,8 +80,8 @@ package vm // github.com/shazow/virtle/vm
 // Spec describes a virtual machine, independent of backend.
 // The zero value plus a boot source is launchable; backends apply defaults.
 type Spec struct {
-	CPUs   int       // default: runtime.NumCPU
-	Memory units.MiB // default: 2048
+	CPUs   int         // default: runtime.NumCPU
+	Memory units.Bytes // default: 2048 * units.Mebibyte
 	Kernel *Kernel   // direct kernel boot (microVM style)
 	Shares []Share   // host dirs shared into the guest (virtio-fs or similar)
 	Disks  []Disk    // block devices / volume images
@@ -97,7 +97,7 @@ type Share struct {
 }
 type Disk struct {
 	Path, GuestPath, Format string
-	Size                    units.MiB // created if absent
+	Size                    units.Bytes // created if absent
 }
 type Forward struct{ HostAddr, GuestAddr, Proto string } // Proto defaults to "tcp"
 type File struct {
@@ -297,7 +297,7 @@ orchestration, not VM description (see D5).
 spec := &vm.Spec{
 	Kernel: &vm.Kernel{Path: "vmlinuz", Initrd: "initrd.img"},
 	Shares: []vm.Share{{Tag: "src", HostPath: ".", GuestPath: "/workspace"}},
-	Memory: 2048, // units.MiB
+	Memory: 2048 * units.Mebibyte,
 }
 b, err := qemu.BackendWithQGA(qemu.Config{})
 if err != nil {
@@ -387,9 +387,12 @@ Resolved by this revision:
   the virtle-native daemon lives in `./guest` with host-side constructors
   returning `vm.Guest` implementations.
 - **D6 — sizes** (PR #67 review): lean on the type system — `./units`
-  becomes public and `vm.Spec` uses typed scalars (`units.MiB`,
-  `units.Duration`, more as needed) instead of plumbed `int64`s whose
-  meaning can be misread.
+  becomes public and `vm.Spec` uses typed scalars instead of plumbed
+  `int64`s whose meaning can be misread. Base size type is `units.Bytes`
+  with constant multipliers for readable literals —
+  `2048 * units.Mebibyte`, mirroring `2 * time.Second` (singular constant
+  per the `time.Second` convention). Manifest TOML numbers remain
+  MiB-denominated as today; `manifest.Load` converts to `units.Bytes`.
 - **D7 — RemoteControl selection** (PR #67 review): backend constructors
   select the guest-control implementation — `qemu.BackendWithQGA(...)
   (backend.Backend, error)` first, a `qemu.BackendWithGuest` equivalent

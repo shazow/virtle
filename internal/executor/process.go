@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -8,13 +9,18 @@ import (
 	"time"
 )
 
+// DefaultGracePeriod paces stop escalation for processes that do not
+// configure their own grace period.
+const DefaultGracePeriod = 15 * time.Second
+
 // Process tracks a process lifecycle and caches its wait result.
 type Process struct {
 	handle RunningProcess
 	done   chan struct{}
 
-	shutdown func() error
-	waitErr  error
+	shutdown    func() error
+	gracePeriod time.Duration
+	waitErr     error
 }
 
 // Wrap starts tracking completion for an already-running process handle.
@@ -38,6 +44,20 @@ func (p *Process) Wait() error {
 	}
 	<-p.done
 	return p.waitErr
+}
+
+// WaitContext blocks until the process exits or ctx ends. It returns the
+// process's wait result, or context.Cause(ctx) if ctx ended first.
+func (p *Process) WaitContext(ctx context.Context) error {
+	if p == nil {
+		return nil
+	}
+	select {
+	case <-p.done:
+		return p.waitErr
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	}
 }
 
 func (p *Process) Signal(sig os.Signal) error {
@@ -99,12 +119,32 @@ func (p *Process) SetShutdown(shutdown func() error) {
 	p.shutdown = shutdown
 }
 
+// SetGracePeriod overrides how long each Stop escalation rung waits before
+// escalating. Zero keeps DefaultGracePeriod. Like SetShutdown, it must be
+// called before Stop may run concurrently; the field is not synchronized.
+func (p *Process) SetGracePeriod(gracePeriod time.Duration) {
+	if p == nil {
+		return
+	}
+	p.gracePeriod = gracePeriod
+}
+
+func (p *Process) getGracePeriod() time.Duration {
+	if p.gracePeriod > 0 {
+		return p.gracePeriod
+	}
+	return DefaultGracePeriod
+}
+
 // minKillWait bounds how long Stop waits for a SIGKILLed process to be
 // reaped before giving up on it.
 const minKillWait = time.Second
 
-// Stop gracefully stops the process, escalating to Kill after delay.
-func (p *Process) Stop(delay time.Duration) error {
+// Stop gracefully stops the process, escalating shutdown → SIGTERM → SIGKILL
+// with the grace period between rungs. When ctx ends — canceled or past its
+// deadline — the remaining graceful rungs are abandoned and the process is
+// killed; Stop never returns with the process left running.
+func (p *Process) Stop(ctx context.Context) error {
 	if p == nil {
 		return nil
 	}
@@ -112,25 +152,28 @@ func (p *Process) Stop(delay time.Duration) error {
 		return nil
 	}
 
+	gracePeriod := p.getGracePeriod()
 	var shutdownErr error
-	if p.shutdown != nil {
+	if p.shutdown != nil && ctx.Err() == nil {
 		if err := p.shutdown(); err != nil {
 			shutdownErr = fmt.Errorf("shutdown %s: %w", p.Name(), err)
-		} else if p.WaitForExit(delay) {
+		} else if p.waitGrace(ctx, gracePeriod) {
 			return nil
 		}
 	}
 
-	if err := p.Signal(syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) {
-		if shutdownErr != nil {
-			return errors.Join(shutdownErr, fmt.Errorf("stop %s: %w", p.Name(), err))
+	if ctx.Err() == nil {
+		if err := p.Signal(syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			if shutdownErr != nil {
+				return errors.Join(shutdownErr, fmt.Errorf("stop %s: %w", p.Name(), err))
+			}
+			return fmt.Errorf("stop %s: %w", p.Name(), err)
 		}
-		return fmt.Errorf("stop %s: %w", p.Name(), err)
+		if p.waitGrace(ctx, gracePeriod) {
+			return shutdownErr
+		}
 	}
 
-	if p.WaitForExit(delay) {
-		return shutdownErr
-	}
 	if err := p.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
 		if shutdownErr != nil {
 			return errors.Join(shutdownErr, fmt.Errorf("kill %s: %w", p.Name(), err))
@@ -139,13 +182,16 @@ func (p *Process) Stop(delay time.Duration) error {
 	}
 	// Bound the post-kill wait: a process wedged in uninterruptible sleep must
 	// not hang teardown forever. The background Wait goroutine still reaps it
-	// whenever it eventually exits. A floor keeps zero or tiny delays from
-	// racing the asynchronous reaper of a process that did die from SIGKILL.
-	killWait := delay
+	// whenever it eventually exits. A floor keeps zero or tiny grace periods
+	// from racing the asynchronous reaper of a process that did die from
+	// SIGKILL. This wait deliberately ignores ctx: the kill is already sent,
+	// and reporting failure before the reaper confirms exit would misattribute
+	// a process that died moments later.
+	killWait := gracePeriod
 	if killWait < minKillWait {
 		killWait = minKillWait
 	}
-	if !p.WaitForExit(killWait) {
+	if !p.waitForExit(killWait) {
 		err := fmt.Errorf("kill %s: process did not exit", p.Name())
 		if shutdownErr != nil {
 			return errors.Join(shutdownErr, err)
@@ -184,8 +230,27 @@ func SignalProcessGroup(pid int, sig syscall.Signal) error {
 	return nil
 }
 
-// WaitForExit waits up to delay for the process to exit.
-func (p *Process) WaitForExit(delay time.Duration) bool {
+// waitGrace waits up to gracePeriod for the process to exit; ctx ending cuts
+// the wait short so Stop can escalate immediately.
+func (p *Process) waitGrace(ctx context.Context, gracePeriod time.Duration) bool {
+	if gracePeriod <= 0 {
+		exited, _ := p.PollExit()
+		return exited
+	}
+	timer := time.NewTimer(gracePeriod)
+	defer timer.Stop()
+	select {
+	case <-p.done:
+		return true
+	case <-timer.C:
+		return false
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// waitForExit waits up to delay for the process to exit.
+func (p *Process) waitForExit(delay time.Duration) bool {
 	if delay <= 0 {
 		select {
 		case <-p.done:

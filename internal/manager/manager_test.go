@@ -1033,11 +1033,10 @@ func TestWaitForRunningLaunchSavedSuspendSkipsCloseWriteBack(t *testing.T) {
 	processes.SetQEMU((&executortest.Process{OverrideName: "qemu-system-x86_64"}).Process())
 	var writeBackCalls int
 	runtime := runtimepkg.New(runtimepkg.RuntimeConfig{
-		Manifest:      cfg,
-		Stats:         stats,
-		QMP:           &fakeQMPClient{},
-		Processes:     processes,
-		ShutdownDelay: time.Millisecond,
+		Manifest:  cfg,
+		Stats:     stats,
+		QMP:       &fakeQMPClient{},
+		Processes: processes,
 		WriteBack: func(context.Context) error {
 			writeBackCalls++
 			return nil
@@ -3825,6 +3824,7 @@ func TestLaunchRuntimeRegistersHotplugAtControlPeriphery(t *testing.T) {
 		logger:            slog.New(slog.DiscardHandler),
 		qmpConnectTimeout: time.Second,
 		qmpRetryDelay:     time.Millisecond,
+		shutdownDelay:     time.Millisecond,
 	}
 	plan, err := manager.planLaunch(launch.Spec{Manifest: cfg, Options: LaunchOptions{Resume: ResumeModeNo, SSH: false}})
 	if err != nil {
@@ -3890,6 +3890,7 @@ func TestLaunchRuntimeRegistersGuestRPCsAtControlPeriphery(t *testing.T) {
 		logger:            slog.New(slog.DiscardHandler),
 		qmpConnectTimeout: time.Second,
 		qmpRetryDelay:     time.Millisecond,
+		shutdownDelay:     time.Millisecond,
 	}
 	plan, err := manager.planLaunch(launch.Spec{Manifest: cfg, Options: LaunchOptions{Resume: ResumeModeNo, SSH: false}})
 	if err != nil {
@@ -3981,6 +3982,7 @@ func TestLaunchRuntimeGuestPSMapsFailureToFailedPrecondition(t *testing.T) {
 		logger:            slog.New(slog.DiscardHandler),
 		qmpConnectTimeout: time.Second,
 		qmpRetryDelay:     time.Millisecond,
+		shutdownDelay:     time.Millisecond,
 	}
 	plan, err := manager.planLaunch(launch.Spec{Manifest: cfg, Options: LaunchOptions{Resume: ResumeModeNo, SSH: false}})
 	if err != nil {

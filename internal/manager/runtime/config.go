@@ -18,7 +18,6 @@ type RuntimeConfig struct {
 	QMP              qmpclient.Client
 	SuspendRequests  *launch.SuspendCoordinator
 	Processes        *launch.ProcessSet
-	ShutdownDelay    time.Duration
 	WriteBack        func(context.Context) error
 	Cleanup          func() error
 	WriteBackTimeout time.Duration

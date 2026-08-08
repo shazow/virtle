@@ -21,7 +21,6 @@ type Core struct {
 	qmp              qmpclient.Client
 	suspendRequests  *launch.SuspendCoordinator
 	processes        *launch.ProcessSet
-	shutdownDelay    time.Duration
 	writeBackTimeout time.Duration
 	logger           *slog.Logger
 	savedSuspendExit func(error) bool
@@ -47,7 +46,6 @@ func New(config RuntimeConfig) *Core {
 		logger:           config.Logger,
 		savedSuspendExit: config.SavedSuspendExit,
 		processes:        config.Processes,
-		shutdownDelay:    config.ShutdownDelay,
 		writeBack:        config.WriteBack,
 		cleanup:          config.Cleanup,
 		state:            state,
@@ -85,9 +83,8 @@ func (r *Core) StartControl(ctx context.Context, handlers control.Handlers) (*co
 func (r *Core) Close() error {
 	return r.closer.Close(closeActions{
 		shutdownResources: shutdownResources{
-			Processes:     r.processes,
-			ShutdownDelay: r.shutdownDelay,
-			QMP:           r.qmp,
+			Processes: r.processes,
+			QMP:       r.qmp,
 		},
 		WriteBack:        r.writeBack,
 		WriteBackTimeout: r.writeBackTimeout,

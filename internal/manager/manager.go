@@ -230,7 +230,12 @@ func (m *manager) waitForLaunchForeground(
 }
 
 func (m *manager) startManagedProcess(cmd *exec.Cmd) (*executor.Process, error) {
-	return m.runner.Start(cmd)
+	process, err := m.runner.Start(cmd)
+	if err != nil {
+		return nil, err
+	}
+	process.SetGracePeriod(m.shutdownDelay)
+	return process, nil
 }
 
 func (m *manager) startRuns(cid int) (executor.Group, error) {
@@ -256,9 +261,9 @@ func (m *manager) startRuns(cid int) (executor.Group, error) {
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		cmd.Stdout = os.Stderr
 		cmd.Stderr = os.Stderr
-		process, err := m.runner.Start(cmd)
+		process, err := m.startManagedProcess(cmd)
 		if err != nil {
-			_ = started.StopAll(m.shutdownDelay)
+			_ = started.StopAll(context.Background())
 			return executor.Group{}, &launch.StageError{Stage: "run startup", Err: err}
 		}
 		started.Add(process)

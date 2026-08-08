@@ -59,7 +59,9 @@ func (s managedProcessStarter) Stop(process *executor.Process) error {
 	if process == nil {
 		return nil
 	}
-	return process.Stop(s.m.shutdownDelay)
+	// Cleanup of a failed attach must run to completion even when the attach
+	// ctx is already canceled.
+	return process.Stop(context.Background())
 }
 
 func (s managedProcessStarter) SignalPIDGroup(pid int, signal syscall.Signal) error {

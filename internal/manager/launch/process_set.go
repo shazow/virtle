@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"sync"
-	"time"
 
 	"github.com/shazow/virtle/internal/executor"
 )
@@ -77,10 +76,10 @@ func (p *ProcessSet) StartTasks(ctx context.Context, tasks ...func(context.Conte
 	p.tasks = started
 }
 
-func (p *ProcessSet) Close(delay time.Duration) error {
+func (p *ProcessSet) Close(ctx context.Context) error {
 	p.mu.Lock()
 	tasks := taskGroup{tasks: append([]*task(nil), p.tasks.tasks...)}
 	group := p.group.Snapshot()
 	p.mu.Unlock()
-	return errors.Join(tasks.Stop(), group.StopAll(delay))
+	return errors.Join(tasks.Stop(), group.StopAll(ctx))
 }

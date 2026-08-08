@@ -1,8 +1,8 @@
 package executor
 
 import (
+	"context"
 	"errors"
-	"time"
 )
 
 // Group tracks a set of managed processes.
@@ -73,14 +73,16 @@ func (g *Group) FirstExit() (*Process, error, bool) {
 	return nil, nil, false
 }
 
-// StopAll stops processes in reverse order.
-func (g *Group) StopAll(delay time.Duration) error {
+// StopAll stops processes in reverse order. Each process escalates on its
+// own grace period; ctx ending abandons the remaining graceful waits and
+// kills (see Process.Stop).
+func (g *Group) StopAll(ctx context.Context) error {
 	if g == nil {
 		return nil
 	}
 	var errs []error
 	for i := len(g.processes) - 1; i >= 0; i-- {
-		if err := g.processes[i].Stop(delay); err != nil {
+		if err := g.processes[i].Stop(ctx); err != nil {
 			errs = append(errs, err)
 		}
 	}

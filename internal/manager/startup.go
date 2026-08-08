@@ -61,7 +61,7 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 		}
 
 		var cleanupErr error
-		cleanupErr = errors.Join(cleanupErr, processes.Close(m.shutdownDelay))
+		cleanupErr = errors.Join(cleanupErr, processes.Close(context.Background()))
 		cleanupErr = errors.Join(cleanupErr, cleanupRuntime())
 		if qmp != nil {
 			cleanupErr = errors.Join(cleanupErr, qmp.Disconnect())
@@ -133,11 +133,15 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 			m.logger.Info("guest shutdown request failed; forcing qemu quit", "err", err)
 		} else {
 			m.logger.Info("waiting for guest shutdown", "timeout", shutdown.ShutdownTimeout)
-			if qemu.WaitForExit(shutdown.ShutdownTimeout) {
+			waitCtx, cancel := context.WithTimeoutCause(context.Background(), shutdown.ShutdownTimeout,
+				fmt.Errorf("guest did not exit within %s", shutdown.ShutdownTimeout))
+			waitErr := qemu.WaitContext(waitCtx)
+			cancel()
+			if waitErr == nil {
 				m.logger.Info("guest shutdown completed")
 				return nil
 			}
-			m.logger.Info("guest shutdown timed out; forcing qemu quit", "timeout", shutdown.ShutdownTimeout)
+			m.logger.Info("guest shutdown timed out; forcing qemu quit", "err", waitErr)
 		}
 		m.logger.Info("forcing qemu quit through QMP")
 		ctx, cancel := context.WithTimeout(context.Background(), m.effectiveQMPQuitTimeout())
@@ -163,7 +167,6 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 		QMP:             qmp,
 		SuspendRequests: lifecycle.Suspend(),
 		Processes:       processes,
-		ShutdownDelay:   m.shutdownDelay,
 		WriteBack: func(ctx context.Context) error {
 			if !writeBackOnExit {
 				return nil
@@ -307,5 +310,5 @@ func (m *manager) startQEMU(cmd *exec.Cmd) (*executor.Process, error) {
 	if m.logger != nil {
 		m.logger.Info("starting qemu", "command", shellquote.Join(cmd.Args...))
 	}
-	return m.runner.Start(cmd)
+	return m.startManagedProcess(cmd)
 }

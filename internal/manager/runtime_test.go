@@ -215,11 +215,10 @@ func TestRuntimeMarkSavedSuspendSkipsCloseWriteBack(t *testing.T) {
 			ControlSocket: filepath.Join(tmpDir, "virtle.sock"),
 			QMPSocket:     filepath.Join(tmpDir, "qmp.sock"),
 		},
-		CID:           11,
-		Stats:         launch.NewStats(time.Now()),
-		QMP:           qmp,
-		Processes:     processes,
-		ShutdownDelay: time.Millisecond,
+		CID:       11,
+		Stats:     launch.NewStats(time.Now()),
+		QMP:       qmp,
+		Processes: processes,
 		WriteBack: func(context.Context) error {
 			writeBackCalls++
 			return nil
@@ -255,7 +254,6 @@ func TestRuntimeCloseStopsProcessesAndDisconnectsQMPOnce(t *testing.T) {
 		Stats:            launch.NewStats(time.Now()),
 		QMP:              qmp,
 		Processes:        processes,
-		ShutdownDelay:    time.Millisecond,
 		WriteBackTimeout: time.Second,
 		Logger:           slog.New(slog.DiscardHandler),
 	})

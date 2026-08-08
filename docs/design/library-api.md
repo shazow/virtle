@@ -79,12 +79,12 @@ package vm // github.com/shazow/virtle/vm
 
 // Spec describes a virtual machine, independent of backend. The zero value
 // plus a boot source is launchable; backends apply defaults. A Spec holds
-// no live resources, so the same value can be passed to multiple Start and
-// Resume calls.
+// no live resources and is reusable across Start and Resume calls, with
+// one caveat: Files content readers are consumed by Start (see File).
 type Spec struct {
 	CPUs   int         // default: runtime.NumCPU
 	Memory units.Bytes // default: 2048 * units.Mebibyte
-	Kernel *Kernel     // direct kernel boot (microVM style)
+	Kernel Kernel      // direct kernel boot (microVM style); zero value: none
 	Shares []Share     // host dirs shared into the guest (virtio-fs or similar)
 	Disks  []Disk      // block devices / volume images
 	Ports  []Forward   // host↔guest port forwards
@@ -103,12 +103,13 @@ type Disk struct {
 }
 type Forward struct{ HostAddr, GuestAddr, Proto string } // Proto defaults to "tcp"
 
-// File is inline content, not a stream: Specs are reusable, and a consumed
-// io.Reader would poison the second Start. Large trees go through
-// GuestWithCopy after boot instead.
+// File is a small file placed in the guest before the workload starts;
+// large trees go through GuestWithCopy after boot. Content is consumed by
+// Start — refresh it (e.g. a fresh bytes.NewReader) before reusing the
+// Spec.
 type File struct {
 	GuestPath string
-	Content   []byte
+	Content   io.Reader
 	Mode      fs.FileMode
 }
 
@@ -272,7 +273,9 @@ type GuestWithCopy interface {
 
 // CopyOptions controls extraction ownership in the guest. fs.FS sources
 // carry no uid/gid (host uids are meaningless in-guest), so overrides only
-// *set* ownership; nil keeps the target's defaults.
+// *set* ownership; nil keeps the target's defaults. Pointers are load-
+// bearing here: 0 (root) is a valid uid/gid, so nil must be
+// distinguishable from it.
 type CopyOptions struct {
 	UID, GID *int
 }
@@ -358,7 +361,7 @@ orchestration, not VM description (see D5).
 
 ```go
 spec := &vm.Spec{
-	Kernel: &vm.Kernel{Path: "vmlinuz", Initrd: "initrd.img"},
+	Kernel: vm.Kernel{Path: "vmlinuz", Initrd: "initrd.img"},
 	Shares: []vm.Share{{Tag: "src", HostPath: ".", GuestPath: "/workspace"}},
 	Memory: 2048 * units.Mebibyte,
 }

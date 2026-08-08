@@ -45,6 +45,12 @@ func (d Duration) Duration() time.Duration { return time.Duration(d) }
 
 func (d Duration) String() string { return time.Duration(d).String() }
 
+// MarshalText encodes the duration in Go's duration-string form so text-based
+// encoders such as TOML emit values the decoder reads back unchanged.
+func (d Duration) MarshalText() ([]byte, error) {
+	return []byte(time.Duration(d).String()), nil
+}
+
 func (d Duration) MarshalJSON() ([]byte, error) {
 	return json.Marshal(time.Duration(d).String())
 }
@@ -76,7 +82,11 @@ func (d *Duration) UnmarshalJSON(data []byte) error {
 func (d *Duration) UnmarshalTOML(value any) error {
 	switch v := value.(type) {
 	case int64:
-		*d = Duration(time.Duration(v) * time.Second)
+		parsed, err := secondsDuration(float64(v))
+		if err != nil {
+			return err
+		}
+		*d = parsed
 	case float64:
 		parsed, err := secondsDuration(v)
 		if err != nil {

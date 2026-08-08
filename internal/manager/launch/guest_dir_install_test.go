@@ -12,14 +12,23 @@ import (
 	"testing"
 )
 
-// runGuestDirScript executes the directory install script under sh the same
-// way the manager does: sh -c <script> sh <target> <owner> <mode>.
+// runGuestDirScriptIn executes the exact guest command that the script
+// installer issues, from workDir (or the current directory when empty), so
+// the tests exercise the same invocation production wires to the guest.
+func runGuestDirScriptIn(workDir, target, owner, mode string) error {
+	installer := ScriptGuestDirectoryInstaller(func(_ context.Context, _ string, path string, args []string) error {
+		cmd := exec.Command(path, args...)
+		cmd.Dir = workDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("%v: %s", err, out)
+		}
+		return nil
+	})
+	return installer.InstallTree(context.Background(), target, owner, mode)
+}
+
 func runGuestDirScript(target, owner, mode string) error {
-	cmd := exec.Command("sh", "-c", GuestDirectoryInstallScript(), "sh", target, owner, mode)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("%v: %s", err, out)
-	}
-	return nil
+	return runGuestDirScriptIn("", target, owner, mode)
 }
 
 // statUIDGID reports the uid:gid of a path, or fails the test.

@@ -177,7 +177,6 @@ const (
 	guestInstallPath = "install"
 	guestMountPath   = "mount"
 	guestPSPath      = "ps"
-	guestShellPath   = "sh"
 	guestTestPath    = "test"
 )
 
@@ -197,20 +196,16 @@ func (m *manager) mountWorkspaceCWD(ctx context.Context, client qga.Client) erro
 }
 
 // installGuestFileDirectory ensures that the parent directory for guestPath
-// exists. It runs a single POSIX sh script that walks upward to the existing
-// ancestor and creates only the missing directories from top to bottom.
-// owner and mode are applied to newly created directories only; existing
-// directories are left unchanged. mode is expected to be a file mode and is
-// converted to a directory mode by adding execute bits wherever read bits
-// are set.
+// exists. owner and mode are applied to newly created directories only;
+// existing directories are left unchanged. mode is expected to be a file mode
+// and is converted to a directory mode by adding execute bits wherever read
+// bits are set. How the directories are created inside the guest is up to the
+// installer; the manager only supplies the guest command transport.
 func (m *manager) installGuestFileDirectory(ctx context.Context, client qga.Client, guestPath string, owner string, mode string) error {
-	return launch.InstallGuestFileDirectory(ctx, launch.GuestDirectoryInstaller{
-		InstallTree: func(ctx context.Context, guestDir string, owner string, mode string) error {
-			return m.runGuestFileCommand(ctx, client, "install dirs", guestShellPath,
-				[]string{"-c", launch.GuestDirectoryInstallScript(), "sh", guestDir, owner, mode},
-				guestDir)
-		},
-	}, guestPath, owner, mode)
+	installer := launch.ScriptGuestDirectoryInstaller(func(ctx context.Context, guestDir string, path string, args []string) error {
+		return m.runGuestFileCommand(ctx, client, "install dirs", path, args, guestDir)
+	})
+	return launch.InstallGuestFileDirectory(ctx, installer, guestPath, owner, mode)
 }
 
 func (m *manager) guestPathExists(ctx context.Context, client qga.Client, guestPath string) (bool, error) {

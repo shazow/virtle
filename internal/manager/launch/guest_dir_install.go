@@ -7,17 +7,45 @@ import (
 	"strings"
 )
 
-// GuestDirectoryInstallScript returns a POSIX sh script that ensures guestDir
-// and all of its missing ancestors exist in a single command. The script takes
-// three positional arguments: the target directory, an optional "user" or
-// "user:group" owner, and an optional directory mode. It walks upward to the
-// existing ancestor, then creates only the missing directories from top to
-// bottom, applying owner and mode to each newly created directory only;
-// existing directories are left unchanged.
-func GuestDirectoryInstallScript() string {
-	return guestDirectoryInstallScript
+// GuestDirectoryInstaller installs a directory tree inside the guest. It is
+// the seam between the host-side install policy in InstallGuestFileDirectory
+// and whatever guest-side mechanism realizes it; ScriptGuestDirectoryInstaller
+// is the current mechanism.
+type GuestDirectoryInstaller struct {
+	// InstallTree creates guestDir and any missing ancestors, applying owner
+	// and mode to each newly created directory only and leaving existing
+	// directories unchanged. owner is "user", "user:group", ":group", or
+	// empty; mode is the directory mode to apply (see guestDirectoryMode) or
+	// empty.
+	InstallTree func(ctx context.Context, guestDir string, owner string, mode string) error
 }
 
+// GuestCommandRunner runs a program inside the guest. subject names what the
+// command operates on for error reporting; path is the program to execute and
+// args are its arguments.
+type GuestCommandRunner func(ctx context.Context, subject string, path string, args []string) error
+
+// ScriptGuestDirectoryInstaller returns a GuestDirectoryInstaller that
+// realizes InstallTree as a single POSIX sh script executed through run. The
+// script and its invocation are implementation details of this constructor:
+// nothing outside it depends on them, so the installer can be swapped for a
+// different mechanism (such as a guest-side daemon) without touching call
+// sites.
+func ScriptGuestDirectoryInstaller(run GuestCommandRunner) GuestDirectoryInstaller {
+	return GuestDirectoryInstaller{
+		InstallTree: func(ctx context.Context, guestDir string, owner string, mode string) error {
+			return run(ctx, guestDir, "sh", []string{"-c", guestDirectoryInstallScript, "sh", guestDir, owner, mode})
+		},
+	}
+}
+
+// guestDirectoryInstallScript ensures the directory $1 and all of its missing
+// ancestors exist in one guest command. It takes the target directory, an
+// optional "user", "user:group", or ":group" owner, and an optional directory
+// mode. It walks upward to the existing ancestor, then creates only the
+// missing directories from top to bottom, applying owner and mode to each
+// newly created directory; existing directories are left unchanged. Pure
+// POSIX sh (verified under dash).
 const guestDirectoryInstallScript = `set -e
 d=$1
 owner=$2
@@ -48,23 +76,11 @@ while [ -n "$rest" ]; do
 done
 `
 
-// GuestDirectoryInstaller installs the parent directory tree for a guest
-// file in a single guest command.
-type GuestDirectoryInstaller struct {
-	// InstallTree creates guestDir and any missing ancestors, applying owner
-	// and mode to each newly created directory only and leaving existing
-	// directories unchanged. owner is "user" or "user:group"; mode is the
-	// directory mode to apply (see guestDirectoryMode) or empty.
-	InstallTree func(ctx context.Context, guestDir, owner, mode string) error
-}
-
 // InstallGuestFileDirectory ensures that the parent directory for guestPath
-// exists. It runs one scripted guest command that walks upward to the
-// existing ancestor and creates only the missing directories from top to
-// bottom. owner and mode are applied to newly created directories only;
-// existing directories are left unchanged. mode is expected to be a file mode
-// and is converted to a directory mode by adding execute bits wherever read
-// bits are set.
+// exists, creating any missing directories through installer. owner and mode
+// apply to newly created directories only; existing directories are left
+// unchanged. mode is expected to be a file mode and is converted to a
+// directory mode by adding execute bits wherever read bits are set.
 func InstallGuestFileDirectory(ctx context.Context, installer GuestDirectoryInstaller, guestPath string, owner string, mode string) error {
 	guestDir := path.Clean(path.Dir(guestPath))
 	if guestDir == "." || guestDir == "/" {

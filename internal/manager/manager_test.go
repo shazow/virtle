@@ -1557,11 +1557,7 @@ func TestManagerLaunchWritesGuestFilesBeforeSSHSession(t *testing.T) {
 		t.Fatalf("unexpected host write text: got %q want %q", got, want)
 	}
 	if got, want := guestAgent.execs, []guestExecCall{
-		{
-			path:          guestShellPath,
-			args:          []string{"-c", launch.GuestDirectoryInstallScript(), "sh", "/etc/virtle", "agent:users", "0750"},
-			captureOutput: true,
-		},
+		guestDirInstallCall(t, "/etc/virtle", "agent:users", "0750"),
 		{
 			path:          guestChownPath,
 			args:          []string{"agent:users", "/etc/virtle/inline"},
@@ -1572,23 +1568,19 @@ func TestManagerLaunchWritesGuestFilesBeforeSSHSession(t *testing.T) {
 			args:          []string{"0640", "/etc/virtle/inline"},
 			captureOutput: true,
 		},
-		{
-			path:          guestShellPath,
-			args:          []string{"-c", launch.GuestDirectoryInstallScript(), "sh", "/var/lib/virtle", "", ""},
-			captureOutput: true,
-		},
+		guestDirInstallCall(t, "/var/lib/virtle", "", ""),
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected guest execs: got %#v want %#v", got, want)
 	}
 
 	firstSSH := indexString(events, "start:ssh")
 	ping := indexString(events, "guest-ping")
-	installInline := indexString(events, "guest-shell-dir:/etc/virtle")
+	installInline := indexString(events, "guest-install-tree:/etc/virtle")
 	openInline := indexString(events, "guest-open:/etc/virtle/inline")
 	closeInline := indexString(events, "guest-close:/etc/virtle/inline")
 	chownInline := indexString(events, "guest-chown:/etc/virtle/inline:agent:users")
 	chmodInline := indexString(events, "guest-chmod:/etc/virtle/inline:0640")
-	installHost := indexString(events, "guest-shell-dir:/var/lib/virtle")
+	installHost := indexString(events, "guest-install-tree:/var/lib/virtle")
 	openHost := indexString(events, "guest-open:/var/lib/virtle/host")
 	closeHost := indexString(events, "guest-close:/var/lib/virtle/host")
 	sshReady := indexString(events, "ssh-ready-dial:"+filepath.Join(tmpDir, "ready.sock"))
@@ -1941,11 +1933,7 @@ func TestManagerLaunchRunsGuestDirectoryInstallScript(t *testing.T) {
 	}
 
 	if got, want := guestAgent.execs, []guestExecCall{
-		{
-			path:          guestShellPath,
-			args:          []string{"-c", launch.GuestDirectoryInstallScript(), "sh", "/etc/virtle", "agent:users", ""},
-			captureOutput: true,
-		},
+		guestDirInstallCall(t, "/etc/virtle", "agent:users", ""),
 		{
 			path:          guestChownPath,
 			args:          []string{"agent:users", "/etc/virtle/inline"},
@@ -2066,11 +2054,7 @@ func TestManagerLaunchCreatesAllMissingGuestParentDirectoriesWithOwnerAndMode(t 
 	}
 
 	if got, want := guestAgent.execs, []guestExecCall{
-		{
-			path:          guestShellPath,
-			args:          []string{"-c", launch.GuestDirectoryInstallScript(), "sh", "/etc/virtle/nested", "agent:users", "0750"},
-			captureOutput: true,
-		},
+		guestDirInstallCall(t, "/etc/virtle/nested", "agent:users", "0750"),
 		{
 			path:          guestChownPath,
 			args:          []string{"agent:users", "/etc/virtle/nested/new"},
@@ -2138,11 +2122,7 @@ func TestManagerLaunchWritesGuestFileWhenOverwriteFalseAndPathMissing(t *testing
 			args:          []string{"-e", "/etc/virtle/new"},
 			captureOutput: true,
 		},
-		{
-			path:          guestShellPath,
-			args:          []string{"-c", launch.GuestDirectoryInstallScript(), "sh", "/etc/virtle", "", ""},
-			captureOutput: true,
-		},
+		guestDirInstallCall(t, "/etc/virtle", "", ""),
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected guest execs: got %#v want %#v", got, want)
 	}
@@ -2202,11 +2182,7 @@ func TestManagerLaunchFailsOnGuestFileChownFailure(t *testing.T) {
 		}
 	}
 	if got, want := guestAgent.execs, []guestExecCall{
-		{
-			path:          guestShellPath,
-			args:          []string{"-c", launch.GuestDirectoryInstallScript(), "sh", "/etc", "agent:users", "0700"},
-			captureOutput: true,
-		},
+		guestDirInstallCall(t, "/etc", "agent:users", "0700"),
 		{
 			path:          guestChownPath,
 			args:          []string{"agent:users", "/etc/inline"},
@@ -2269,11 +2245,7 @@ func TestManagerLaunchFailsOnGuestFileDirectoryFailure(t *testing.T) {
 		}
 	}
 	if got, want := guestAgent.execs, []guestExecCall{
-		{
-			path:          guestShellPath,
-			args:          []string{"-c", launch.GuestDirectoryInstallScript(), "sh", "/etc/virtle", "agent:users", ""},
-			captureOutput: true,
-		},
+		guestDirInstallCall(t, "/etc/virtle", "agent:users", ""),
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected guest execs after install failure: got %#v want %#v", got, want)
 	}
@@ -4781,6 +4753,67 @@ type guestExecCall struct {
 	timeout time.Duration
 }
 
+// guestDirInstallCall returns the exact guest command that the launch
+// package's directory installer issues for guestDir, so expected exec lists
+// don't re-encode the installer's script or argument layout.
+func guestDirInstallCall(t *testing.T, guestDir string, owner string, mode string) guestExecCall {
+	t.Helper()
+	var call guestExecCall
+	captured := false
+	installer := launch.ScriptGuestDirectoryInstaller(func(_ context.Context, _ string, path string, args []string) error {
+		call = guestExecCall{path: path, args: args, captureOutput: true}
+		captured = true
+		return nil
+	})
+	if err := installer.InstallTree(context.Background(), guestDir, owner, mode); err != nil {
+		t.Fatalf("capture guest dir install call: %v", err)
+	}
+	if !captured {
+		t.Fatal("script installer issued no guest command")
+	}
+	return call
+}
+
+// guestDirInstallTarget reports the directory a guest exec installs when the
+// exec matches the launch directory installer's invocation. It compares
+// against a template captured through the same seam production uses, keeping
+// the fake client ignorant of the installer's script and argument layout.
+var guestDirInstallTarget = func() func(path string, args []string) (string, bool) {
+	const (
+		sentinelDir   = "\x00dir"
+		sentinelOwner = "\x00owner"
+		sentinelMode  = "\x00mode"
+	)
+	tmplPath := ""
+	var tmplArgs []string
+	installer := launch.ScriptGuestDirectoryInstaller(func(_ context.Context, _ string, path string, args []string) error {
+		tmplPath, tmplArgs = path, args
+		return nil
+	})
+	if err := installer.InstallTree(context.Background(), sentinelDir, sentinelOwner, sentinelMode); err != nil || tmplArgs == nil {
+		panic("capture guest dir install template")
+	}
+	return func(path string, args []string) (string, bool) {
+		if path != tmplPath || len(args) != len(tmplArgs) {
+			return "", false
+		}
+		dir := ""
+		for i, tmpl := range tmplArgs {
+			switch tmpl {
+			case sentinelDir:
+				dir = args[i]
+			case sentinelOwner, sentinelMode:
+				// Varies per call.
+			default:
+				if args[i] != tmpl {
+					return "", false
+				}
+			}
+		}
+		return dir, true
+	}
+}()
+
 func (c *fakeGuestAgentClient) Ping(ctx context.Context) error {
 	if c.record != nil {
 		c.record("guest-ping")
@@ -4907,8 +4940,10 @@ func (c *fakeGuestAgentClient) Exec(ctx context.Context, path string, args []str
 	if c.record != nil && path == guestInstallPath && len(args) > 0 {
 		c.record("guest-install-dir:" + args[len(args)-1])
 	}
-	if c.record != nil && path == guestShellPath && len(args) > 3 {
-		c.record("guest-shell-dir:" + args[3])
+	if c.record != nil {
+		if dir, ok := guestDirInstallTarget(path, args); ok {
+			c.record("guest-install-tree:" + dir)
+		}
 	}
 	if c.record != nil && path == guestTestPath && len(args) > 0 {
 		c.record("guest-test-dir:" + args[len(args)-1])

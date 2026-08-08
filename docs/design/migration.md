@@ -6,7 +6,7 @@ Status: proposal, companion to [library-api.md](library-api.md)
 This document inventories every surface a consumer of virtle touches today —
 CLI users, manifest authors, control-socket clients, guest-image builders,
 and would-be Go library consumers — and states how each one changes (or
-doesn't) as the codebase migrates onto the `vm` / `vm/qemu` / `guest` /
+doesn't) as the codebase migrates onto the `vm` / `backend` / `backend/qemu` / `guest` /
 `manifest` library API.
 
 Dispositions used below:
@@ -35,8 +35,8 @@ becomes the first consumer:
 - `launch` → `manifest.Load` → `Backend.Start` → `Instance` +
   `RemoteControl()` for guest setup, plus CLI-layer session handling (SSH,
   host `[run]` processes, notifications, control socket).
-- `suspend` → assert `vm.BackendWithSuspend`, call `Suspend`.
-- `hotplug` → assert `vm.BackendWithHotplug`.
+- `suspend` → assert `backend.Suspender`, call `Suspend`.
+- `hotplug` → assert `backend.DeviceAttacher`.
 - `manifest *` subcommands → `manifest` package (decode/defaults/validate/
   schema exactly as today).
 
@@ -47,8 +47,8 @@ becomes the first consumer:
 
 The repo root remains `package main`, so
 `go install github.com/shazow/virtle@latest` keeps working. This was a
-deciding factor for namespacing the library under `vm/` instead of claiming
-the root package.
+deciding factor for namespacing the library under subpackages (`vm`,
+`backend`, ...) instead of claiming the root package.
 
 ## 3. Manifest TOML format and JSON schema — Compatible rewire
 
@@ -68,8 +68,8 @@ sections onto the new API:
 | `[write_files]` | `vm.Spec.Files` |
 | volumes / persistence / state dirs | `vm.Spec.Disks`, `vm.Spec.Dir` |
 | `[qemu]` (exec, machine_options, seccomp, sockets, devices, passthrough args) | `qemu.Backend` fields |
-| `[hotplug]` | CLI-held device set, applied via `vm.BackendWithHotplug` |
-| balloon device/controller config | `qemu.Backend` + `vm.BackendWithMemoryResize` policy loop in the CLI layer |
+| `[hotplug]` | CLI-held device set, applied via `backend.DeviceAttacher` |
+| balloon device/controller config | `qemu.Backend` + `backend.MemoryResizer` policy loop in the CLI layer |
 | `[run]` host helper commands | CLI layer (session orchestration, per D5) |
 | `[ssh]`, autoprovision | CLI layer, over `Guest` file operations |
 | `[notifications]` | CLI layer |
@@ -96,7 +96,7 @@ the QMP-named fields in `status` responses (`qmpSocket`, `guestAgentSocket`,
 behind them get neutral names. The server's implementation rewires: `guest-*`
 methods dispatch over `vm.Guest` (so they work identically whether the VM
 runs QGA or the virtle guest daemon), `suspend`/`hotplug`/`balloon` dispatch
-over the `BackendWith*` interfaces.
+over the `backend` capability interfaces.
 
 Deferred redesign: once the guest daemon exists, `guest-*` over the host
 control socket duplicates what `guest.Dial` offers directly. Whether the
@@ -118,9 +118,9 @@ Current state on disk, all produced by `internal/manager/launch` +
 - Hotplug state JSON (`internal/hotplug`).
 - Volume images created on demand (`launch/filesystem.go`).
 
-Target: all of this becomes **`vm/qemu`-private implementation detail**
+Target: all of this becomes **`backend/qemu`-private implementation detail**
 (except the control socket, which stays a CLI-layer contract, §4). The
-suspend state dir is whatever `BackendWithSuspend.Suspend(ctx, inst,
+suspend state dir is whatever `backend.Suspender.Suspend(ctx, inst,
 stateDir)` writes; its format is owned by the backend and explicitly not a
 public contract going forward.
 
@@ -152,13 +152,13 @@ unsupported.
 
 Transition (matches D7 in library-api.md):
 
-1. `vm/qemu` ships both `vm.Guest` implementations: the guest-daemon client
+1. `backend/qemu` ships both `vm.Guest` implementations: the guest-daemon client
    (preferred) and the QGA adapter (fallback, equivalent to today).
    `RemoteControl()` returns whichever the spec/backend config selects —
    default: daemon if configured into the guest, else QGA.
 2. Guest images add the `virtle` binary (or a stripped `virtle-guest`) to
    their init; getting-started docs gain a section on this.
-3. After a deprecation window, the QGA adapter is removed from `vm/qemu` and
+3. After a deprecation window, the QGA adapter is removed from `backend/qemu` and
    qemu-guest-agent disappears from image requirements.
 
 Image builders are the affected consumers; until step 3 nothing breaks for
@@ -172,15 +172,15 @@ to the supported API:
 
 | Reached for today | Supported replacement |
 |---|---|
-| `internal/manifest` `DecodeDocumentBytes` → `doc.Manifest()` | `manifest.Load(r) (*vm.Spec, vm.Backend, error)` |
+| `internal/manifest` `DecodeDocumentBytes` → `doc.Manifest()` | `manifest.Load(r) (*vm.Spec, backend.Backend, error)` |
 | `internal/manager` `LaunchWithOptions` | `backend.Start(ctx, spec)` + CLI-layer composition |
-| `internal/manager/launch` `BuildPlan` / `AcquireCID` / `WaitForSockets` / `ProcessSet` | `vm/qemu` internals — no longer consumer-facing; the plan/CID/socket dance happens inside `Backend.Start` |
+| `internal/manager/launch` `BuildPlan` / `AcquireCID` / `WaitForSockets` / `ProcessSet` | `backend/qemu` internals — no longer consumer-facing; the plan/CID/socket dance happens inside `Backend.Start` |
 | `internal/manager/qemu.go` argv building | `qemu.Backend` fields; argv construction is private |
-| `internal/executor` `Runner` / `Command` / `Group` | private to backends; consumers hold a `vm.Instance`, not a process |
+| `internal/executor` `Runner` / `Command` / `Group` | private to backends; consumers hold a `backend.Instance`, not a process |
 | `internal/qga` client | `inst.RemoteControl()` → `vm.Guest` |
-| `internal/qmpclient` (suspend/migration) | `vm.BackendWithSuspend` |
-| `internal/balloon` | `vm.BackendWithMemoryResize` |
-| `internal/hotplug` | `vm.BackendWithHotplug` |
+| `internal/qmpclient` (suspend/migration) | `backend.Suspender` |
+| `internal/balloon` | `backend.MemoryResizer` |
+| `internal/hotplug` | `backend.DeviceAttacher` |
 | `internal/manager/control` `Dial` | unchanged host socket (§4); Go client promotion deferred |
 | `internal/units` | `int64` bytes in `vm.Spec` (D6, pending) |
 
@@ -192,7 +192,7 @@ readable. No compatibility promise before v1.
 
 | Phase | What lands | Consumer impact |
 |---|---|---|
-| 1 | `vm` core types + `vm/qemu` backend wrapping existing internals; CLI rewired onto them | None intended (CLI/manifest/control byte-compatible); suspend-state version marker introduced |
+| 1 | `vm` core types + `backend/qemu` backend wrapping existing internals; CLI rewired onto them | None intended (CLI/manifest/control byte-compatible); suspend-state version marker introduced |
 | 2 | `manifest.Load` public; examples + README library section | New Go API available |
 | 3 | `guest` daemon + client; `virtle guest` subcommand; `RemoteControl` prefers daemon | Additive; image builders may opt in |
 | 4 | QGA fallback deprecated, then removed | Image builders must ship the guest daemon |

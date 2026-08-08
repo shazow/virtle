@@ -22,22 +22,25 @@ current `./internal` packages in place. Three requirements shape the design:
 
 ## Design principles
 
-- **stdlib-shaped.** The backend seam follows the `database/sql/driver`
-  design: a small required interface (`vm.Backend`, `vm.Instance`) that
-  implementations satisfy, with optional functionality declared through
-  `XWithY` extension interfaces (`vm.BackendWithSuspend`, ...) discovered by
-  type assertion — the way `driver.Conn` implementations opt into
-  `driver.ConnBeginTx`. Config is plain structs with usable zero values, not
-  functional options. Blocking calls take a `context.Context` first. Data
-  flows through `io` interfaces. Errors use sentinels plus `errors.Is`, and
-  absent capabilities return `errors.ErrUnsupported`.
-- **Interfaces are discovered, not designed.** `vm.Backend` and `vm.Guest`
-  are cut to the minimum provably needed today; everything else is an
-  extension interface, so adding capabilities never breaks implementers.
+- **stdlib-shaped.** The design mirrors the `database/sql` /
+  `database/sql/driver` split: a consumer-facing package (`vm`) and an
+  implementer-facing contract package (`backend`), where optional
+  functionality is declared through small capability interfaces
+  (`backend.Suspender`, ...) discovered by type assertion — the way
+  `driver.Conn` implementations opt into `driver.ConnBeginTx`. Config is
+  plain structs with usable zero values, not functional options. Blocking
+  calls take a `context.Context` first. Data flows through `io` interfaces.
+  Errors use sentinels plus `errors.Is`, and absent capabilities return
+  `errors.ErrUnsupported`.
+- **Interfaces are discovered, not designed.** `backend.Backend` and
+  `vm.Guest` are cut to the minimum provably needed today; everything else
+  is a capability interface, so adding functionality never breaks
+  implementers.
 - **The Spec is neutral and constructable in Go.** The TOML manifest becomes
   one loader among many, not the center of the API.
 - **Backend-specific knobs live on the backend's config struct**, in a
-  backend-named package under `vm/`. Zero QEMU vocabulary outside `vm/qemu`.
+  backend-named package under `backend/`. Zero QEMU vocabulary outside
+  `backend/qemu`.
 
 ## Package layout
 
@@ -46,23 +49,29 @@ The repo root remains `package main` (the CLI, including the new
 the module:
 
 ```
-github.com/shazow/virtle                 package main — the virtle CLI
-github.com/shazow/virtle/vm              core: Spec, Backend, Instance, Guest, capability interfaces
-github.com/shazow/virtle/vm/qemu         QEMU backend + its QGA-based vm.Guest (equivalent to today)
-github.com/shazow/virtle/vm/firecracker  (future) example sibling backend
-github.com/shazow/virtle/guest           virtle-native guest daemon + host-side client (implements vm.Guest)
-github.com/shazow/virtle/manifest        TOML ⇄ (vm.Spec, vm.Backend) loader
-internal/...                             protocol clients (QMP, QGA wire), process supervision, etc.
+github.com/shazow/virtle                      package main — the virtle CLI
+github.com/shazow/virtle/vm                   consumer-facing: Spec, Guest
+github.com/shazow/virtle/backend              implementer contract: Backend, Instance, capability interfaces
+github.com/shazow/virtle/backend/qemu         QEMU backend + its QGA-based vm.Guest (equivalent to today)
+github.com/shazow/virtle/backend/firecracker  (future) example sibling backend
+github.com/shazow/virtle/guest                virtle-native guest daemon + host-side client (implements vm.Guest)
+github.com/shazow/virtle/manifest             TOML ⇄ (vm.Spec, backend.Backend) loader
+internal/...                                  protocol clients (QMP, QGA wire), process supervision, etc.
 ```
 
-A structural consequence worth noting: `vm` cannot import `vm/qemu` without
-an import cycle, so the core has no default backend — consumers always name
-their backend explicitly (`&qemu.Backend{}`). The layering question answers
-itself.
+Import direction is one-way: `backend` imports `vm` (for `Spec` and `Guest`
+in signatures); `vm` never imports `backend`. Two structural consequences:
+
+- There is no default backend anywhere in the core — `backend` cannot
+  import `backend/qemu` without a cycle, so consumers always name their
+  backend explicitly (`&qemu.Backend{}`). The layering question answers
+  itself.
+- `vm` cannot alias the contract types, so consumers of both import both
+  packages — the same shape `database/sql` users live with.
 
 ## The API
 
-### Core: `vm`
+### Consumer-facing types: `vm`
 
 ```go
 package vm // github.com/shazow/virtle/vm
@@ -98,65 +107,8 @@ type File struct {
 ```
 
 ```go
-// Backend starts virtual machines. Implementations live under vm/
-// (vm/qemu today; vm/firecracker, an in-process libkrun backend, ... later).
-type Backend interface {
-	Start(ctx context.Context, spec *Spec) (Instance, error)
-}
-
-// Instance is a virtual machine started by a Backend. It deliberately says
-// nothing about processes, sockets, or protocols, so exec'd (QEMU) and
-// in-process (libkrun) backends satisfy it equally.
-type Instance interface {
-	Wait(ctx context.Context) error // blocks until the VM exits
-	Kill() error                    // hard stop, always available
-
-	// RemoteControl returns guest control for this instance, wired up by
-	// the backend, or an error wrapping errors.ErrUnsupported when the VM
-	// has no reachable guest agent. Most virtle functionality is built on
-	// the expectation that this succeeds.
-	RemoteControl() (Guest, error)
-}
-
-// Optional backend functionality, discovered by type assertion
-// (the database/sql/driver pattern):
-
-// BackendWithSuspend is implemented by backends that can save a running
-// instance's state to disk and later restore it.
-type BackendWithSuspend interface {
-	Backend
-	Suspend(ctx context.Context, inst Instance, stateDir string) error
-	Resume(ctx context.Context, spec *Spec, stateDir string) (Instance, error)
-}
-
-// BackendWithMemoryResize is implemented by backends that can grow or
-// shrink a running instance's memory (e.g. virtio-balloon).
-type BackendWithMemoryResize interface {
-	Backend
-	ResizeMemory(ctx context.Context, inst Instance, bytes int64) error
-}
-
-// BackendWithHotplug is implemented by backends that can attach and detach
-// devices on a running instance.
-type BackendWithHotplug interface {
-	Backend
-	Attach(ctx context.Context, inst Instance, dev any) error // dev: Share, Disk, Forward
-	Detach(ctx context.Context, inst Instance, dev any) error
-}
-```
-
-```go
-// Shutdown stops an instance gracefully: guest shutdown via RemoteControl
-// when available, falling back to Kill when the guest is unreachable or the
-// context expires.
-func Shutdown(ctx context.Context, inst Instance) error
-```
-
-### Guest control: `vm.Guest`
-
-```go
 // Guest performs operations inside a running VM. Implemented by the
-// host-side client in ./guest (virtle-native daemon) and by vm/qemu's
+// host-side client in ./guest (virtle-native daemon) and by backend/qemu's
 // QGA adapter. Shapes are os/exec- and io/fs-flavored, never protocol-
 // flavored.
 type Guest interface {
@@ -183,6 +135,76 @@ type GuestResult struct {
 Daemon-only features (streaming exec, file watching, richer process
 control, ...) arrive later as `GuestWithX` extension interfaces on the
 ./guest client without touching `vm.Guest`.
+
+### Implementer contract: `backend`
+
+```go
+package backend // github.com/shazow/virtle/backend
+
+// Backend starts virtual machines. Implementations live under backend/
+// (backend/qemu today; backend/firecracker, an in-process libkrun
+// backend, ... later).
+type Backend interface {
+	Start(ctx context.Context, spec *vm.Spec) (Instance, error)
+}
+
+// Instance is a virtual machine started by a Backend. It deliberately says
+// nothing about processes, sockets, or protocols, so exec'd (QEMU) and
+// in-process (libkrun) backends satisfy it equally.
+type Instance interface {
+	Wait(ctx context.Context) error // blocks until the VM exits
+	Kill() error                    // hard stop, always available
+
+	// RemoteControl returns guest control for this instance, wired up by
+	// the backend, or an error wrapping errors.ErrUnsupported when the VM
+	// has no reachable guest agent. Most virtle functionality is built on
+	// the expectation that this succeeds.
+	RemoteControl() (vm.Guest, error)
+}
+```
+
+Optional functionality is declared as standalone capability interfaces —
+short `-er` names qualified by the package, so use sites read as one family
+(`backend.Suspender`, `backend.MemoryResizer`) without a common prefix
+baked into the type names. They deliberately do **not** embed `Backend`:
+the caller asserting a capability already holds the `Backend`, standalone
+interfaces compose freely (`interface { backend.Backend;
+backend.Suspender }`), and this matches `driver.Pinger` / `http.Flusher`
+precedent (the embedding variant, `fs.ReadDirFS`-style, buys nothing
+here).
+
+```go
+// Suspender is implemented by backends that can save a running instance's
+// state to disk and later restore it.
+type Suspender interface {
+	Suspend(ctx context.Context, inst Instance, stateDir string) error
+	Resume(ctx context.Context, spec *vm.Spec, stateDir string) (Instance, error)
+}
+
+// MemoryResizer is implemented by backends that can grow or shrink a
+// running instance's memory (e.g. virtio-balloon).
+type MemoryResizer interface {
+	ResizeMemory(ctx context.Context, inst Instance, bytes int64) error
+}
+
+// DeviceAttacher is implemented by backends that can attach and detach
+// devices on a running instance.
+type DeviceAttacher interface {
+	Attach(ctx context.Context, inst Instance, dev any) error // dev: vm.Share, vm.Disk, vm.Forward
+	Detach(ctx context.Context, inst Instance, dev any) error
+}
+
+// Shutdown stops an instance gracefully: guest shutdown via RemoteControl
+// when available, falling back to Kill when the guest is unreachable or the
+// context expires.
+func Shutdown(ctx context.Context, inst Instance) error
+```
+
+Naming notes: `backend.Backend` stutters, but so does `driver.Driver`; the
+stutter is accepted for greppability over `backend.Interface`
+(`sort.Interface` precedent, a style the stdlib has moved away from). One
+ergonomic caveat: callers cannot name a variable `backend`, so examples and
+docs model `b := &qemu.Backend{}`.
 
 ### The virtle guest daemon: `guest`
 
@@ -214,12 +236,12 @@ keep that true and leave room for a minimal guest-only binary later
 `./guest`'s dependency budget is stdlib plus `golang.org/x/sys` (vsock)
 only.
 
-### Backend: `vm/qemu`
+### Backend: `backend/qemu`
 
 ```go
-package qemu // github.com/shazow/virtle/vm/qemu
+package qemu // github.com/shazow/virtle/backend/qemu
 
-// Backend implements vm.Backend by exec'ing QEMU.
+// Backend implements backend.Backend by exec'ing QEMU.
 // The zero value works; fields are the QEMU-only knobs.
 type Backend struct {
 	Binary    string   // default: qemu-system-<arch>
@@ -230,17 +252,18 @@ type Backend struct {
 	// ... QMP/QGA socket placement, virtiofsd path, etc.
 }
 
-func (b *Backend) Start(ctx context.Context, spec *vm.Spec) (vm.Instance, error)
+func (b *Backend) Start(ctx context.Context, spec *vm.Spec) (backend.Instance, error)
 ```
 
-`qemu.Backend` also implements `vm.BackendWithSuspend` (QMP migration
-save/restore), `vm.BackendWithMemoryResize` (virtio-balloon), and
-`vm.BackendWithHotplug` (QMP device_add/del). Its instances' `RemoteControl`
-returns the virtle guest daemon client when the spec boots one, and
-otherwise falls back to the package's QGA-based `vm.Guest` implementation —
-equivalent to today's codebase (see D7). virtiofsd helper processes are an
-implementation detail inside the backend. `qmpclient`, `qga`, and `qmpwire`
-stay internal; nothing in `vm/qemu`'s exported surface names QMP.
+`qemu.Backend` also implements `backend.Suspender` (QMP migration
+save/restore), `backend.MemoryResizer` (virtio-balloon), and
+`backend.DeviceAttacher` (QMP device_add/del). Its instances'
+`RemoteControl` returns the virtle guest daemon client when the spec boots
+one, and otherwise falls back to the package's QGA-based `vm.Guest`
+implementation — equivalent to today's codebase (see D7). virtiofsd helper
+processes are an implementation detail inside the backend. `qmpclient`,
+`qga`, and `qmpwire` stay internal; nothing in `backend/qemu`'s exported
+surface names QMP.
 
 ### Config files: `manifest`
 
@@ -249,7 +272,7 @@ package manifest
 
 // Load reads a virtle manifest (TOML) and lowers it to a neutral Spec plus
 // the backend it configures.
-func Load(r io.Reader) (*vm.Spec, vm.Backend, error)
+func Load(r io.Reader) (*vm.Spec, backend.Backend, error)
 ```
 
 The `[qemu]` TOML table maps onto `qemu.Backend` fields. CLI-only concerns —
@@ -267,12 +290,12 @@ spec := &vm.Spec{
 	Shares: []vm.Share{{Tag: "src", HostPath: ".", GuestPath: "/workspace"}},
 	Memory: 2 << 30,
 }
-backend := &qemu.Backend{}
-inst, err := backend.Start(ctx, spec)
+b := &qemu.Backend{}
+inst, err := b.Start(ctx, spec)
 if err != nil {
 	log.Fatal(err)
 }
-defer vm.Shutdown(ctx, inst)
+defer backend.Shutdown(ctx, inst)
 
 g, err := inst.RemoteControl()
 if err != nil {
@@ -285,11 +308,11 @@ fmt.Printf("exit=%d\n%s", out.ExitCode, out.Stdout)
 **2. Swapping the backend — the abstraction paying off:**
 
 ```go
-var backend vm.Backend = &qemu.Backend{Machine: "microvm"}
+var b backend.Backend = &qemu.Backend{Machine: "microvm"}
 if useFirecracker {
-	backend = &firecracker.Backend{} // hypothetical sibling
+	b = &firecracker.Backend{} // hypothetical sibling
 }
-inst, err := backend.Start(ctx, spec)
+inst, err := b.Start(ctx, spec)
 ```
 
 Nothing after `Start` changes: `Instance` never exposed a process or a
@@ -299,22 +322,22 @@ QEMU does.
 **3. Optional functionality — suspend if the backend supports it:**
 
 ```go
-if s, ok := backend.(vm.BackendWithSuspend); ok {
+if s, ok := b.(backend.Suspender); ok {
 	if err := s.Suspend(ctx, inst, stateDir); err != nil {
 		return err
 	}
 	// later, possibly in another process:
 	inst, err = s.Resume(ctx, spec, stateDir)
 } else {
-	err = vm.Shutdown(ctx, inst) // graceful fallback
+	err = backend.Shutdown(ctx, inst) // graceful fallback
 }
 ```
 
 **4. Manifest-driven — what the CLI does:**
 
 ```go
-spec, backend, err := manifest.Load(f)
-inst, err := backend.Start(ctx, spec)
+spec, b, err := manifest.Load(f)
+inst, err := b.Start(ctx, spec)
 ```
 
 **5. Inside the guest — the daemon the host talks to:**
@@ -329,18 +352,24 @@ What the examples validate: the minimal case is a few lines to a running VM
 with no orchestrator type to learn — `Backend.Start` → `Instance` →
 `RemoteControl` is the whole model; guest operations read like `os/exec` +
 `io/fs`; choosing a backend is one assignment; optional functionality is a
-type assertion, exactly as in `database/sql/driver`.
+package-qualified type assertion, exactly as in `database/sql/driver`.
 
 ## Decision points
 
 Resolved by this revision:
 
-- Root stays `package main`; the core library is `vm` (`vm.Spec`,
-  `vm.Backend`, `vm.Instance`).
-- Optional functionality uses `XWithY` interfaces on the backend
-  (`vm.BackendWithSuspend` covering both Suspend and Resume, etc.).
-- No default backend in core — enforced structurally by the `vm/qemu`
-  import direction.
+- Root stays `package main`; the library splits `database/sql`-style into
+  consumer-facing `vm` (`Spec`, `Guest`) and the implementer contract
+  `backend` (`Backend`, `Instance`, capabilities), with implementations
+  under `backend/` (`backend/qemu`, ...).
+- Optional functionality uses standalone package-qualified `-er` capability
+  interfaces (`backend.Suspender` covering both Suspend and Resume,
+  `backend.MemoryResizer`, `backend.DeviceAttacher`) — no `Backend`
+  embedding, composed where needed.
+- The core interface is named `backend.Backend` (accepting the
+  `driver.Driver`-style stutter over `backend.Interface`).
+- No default backend in core — enforced structurally by the import
+  direction.
 - Guest control is obtained from the instance via
   `Instance.RemoteControl() (vm.Guest, error)`, not from a dialer option;
   the virtle-native daemon lives in `./guest` with host-side constructors
@@ -372,13 +401,13 @@ Still open:
   wiring at Start proves too eager.
 
 - **D8 — where instance-scoped optional ops live.**
-  This design puts Suspend/ResizeMemory/Attach on backend-level `XWithY`
+  This design puts Suspend/ResizeMemory/Attach on backend-level capability
   interfaces taking the `Instance` as an argument (capability is a property
   of the backend, matching the sql/driver framing). The alternative is
-  instance-level interfaces (`vm.InstanceWithSuspend`, asserted on the
-  instance). Backend-level keeps discovery in one place; instance-level
-  reads slightly more naturally at call sites. Recommend backend-level as
-  specified, revisit only if call sites get awkward.
+  instance-level interfaces asserted on the instance itself. Backend-level
+  keeps discovery in one place; instance-level reads slightly more
+  naturally at call sites. Recommend backend-level as specified, revisit
+  only if call sites get awkward.
 
 ## Appendix: mapping to existing internals
 
@@ -388,12 +417,12 @@ implementation to be adapted:
 | New API piece | Existing code that becomes its implementation |
 |---|---|
 | `qemu.Backend.Start` | `internal/manager/qemu.go` lowering + `internal/manager/launch` (`BuildPlan`, `AcquireCID`, socket waits) + `internal/executor` supervision |
-| `vm.Instance` | `internal/executor.Process` (later, libkrun: a cgo handle) |
-| `vm/qemu`'s QGA `vm.Guest` | `internal/qga` client behind the new shapes (`guest-exec` → `Run`, base64 file chunks → `Open`/`Create`) |
+| `backend.Instance` | `internal/executor.Process` (later, libkrun: a cgo handle) |
+| `backend/qemu`'s QGA `vm.Guest` | `internal/qga` client behind the new shapes (`guest-exec` → `Run`, base64 file chunks → `Open`/`Create`) |
 | `guest` daemon + client | new code; protocol can grow from `internal/manager/control`'s JSON-RPC framing |
-| `vm.BackendWithSuspend` | `internal/qmpclient` migration save/restore + `launch.SuspendState` |
-| `vm.BackendWithMemoryResize` | `internal/balloon` controller / QMP path |
-| `vm.BackendWithHotplug` | `internal/hotplug` + its QMP adapter |
+| `backend.Suspender` | `internal/qmpclient` migration save/restore + `launch.SuspendState` |
+| `backend.MemoryResizer` | `internal/balloon` controller / QMP path |
+| `backend.DeviceAttacher` | `internal/hotplug` + its QMP adapter |
 | `manifest.Load` | `internal/manifest` decode + resolve, retargeted at (Spec, Backend) |
 
 ## Non-goals

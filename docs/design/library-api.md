@@ -229,6 +229,36 @@ type Client struct{ ... } // implements vm.Guest (+ future GuestWithX extensions
 Both halves live in one package so the protocol has a single home; the
 daemon binary is just the CLI running `guest.Serve`.
 
+Protocol requirements (PR #67 review): the host↔guest transport is
+**binary-safe, concurrent, and streaming** — no base64 payload encoding
+(exactly the QGA limitation this daemon replaces), multiple requests in
+flight on one connection, and bulk data as streams rather than chunked
+request/response rounds. Bulk directory provisioning is the motivating
+case: expressed as a streamed tar archive (stdlib `archive/tar`, optionally
+wrapped in `compress/gzip`), surfaced as a `GuestWithX` extension on the
+client:
+
+```go
+// GuestWithInstallDir installs a directory tree from a streamed tar
+// archive (e.g. workspace provisioning) without buffering it in memory.
+type GuestWithInstallDir interface {
+	InstallDir(ctx context.Context, guestPath string, archive io.Reader, opts InstallDirOptions) error
+}
+
+// InstallDirOptions controls extraction. Owner overrides cover archives
+// whose recorded uid/gid should not apply in the guest.
+type InstallDirOptions struct {
+	UID, GID *int // nil keeps the archive's values
+}
+```
+
+The wire framing that delivers this is an implementation detail of the
+protocol, with two candidate shapes: length-prefixed JSON control frames
+with dedicated binary stream channels, or — if the daemon embeds an sshd
+(D9) — reusing SSH's channel multiplexing for RPC and streams alike, one
+mux instead of two. Decided during implementation; the API above doesn't
+change either way.
+
 Portability requirements (decided in PR #67 review): the guest daemon ships
 inside the regular `virtle` binary as `virtle guest`, injected into guest
 images as-is, so release builds must be fully static —
@@ -440,7 +470,7 @@ implementation to be adapted:
 | `qemu.Backend.Start` | `internal/manager/qemu.go` lowering + `internal/manager/launch` (`BuildPlan`, `AcquireCID`, socket waits) + `internal/executor` supervision |
 | `backend.Instance` | `internal/executor.Process` (later, libkrun: a cgo handle) |
 | `backend/qemu`'s QGA `vm.Guest` | `internal/qga` client behind the new shapes (`guest-exec` → `Run`, base64 file chunks → `Open`/`Create`) |
-| `guest` daemon + client | new code; protocol can grow from `internal/manager/control`'s JSON-RPC framing |
+| `guest` daemon + client | new code; binary-safe, concurrent, streaming protocol (see protocol requirements) — supersedes both QGA's base64 chunking and `control`'s request/response-only framing |
 | `backend.Suspender` | `internal/qmpclient` migration save/restore + `launch.SuspendState` |
 | `backend.MemoryResizer` | `internal/balloon` controller / QMP path |
 | `backend.DeviceAttacher` | `internal/hotplug` + its QMP adapter |

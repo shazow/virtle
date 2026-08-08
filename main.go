@@ -2,6 +2,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -63,6 +64,10 @@ type Options struct {
 		Schema   struct{} `command:"schema" description:"Print the manifest JSON Schema" long-description:"Print the generated JSON Schema for the virtle manifest input format."`
 	} `command:"manifest" description:"Inspect and work with virtle manifests" long-description:"Inspect and work with the virtle manifest input format."`
 }
+
+const extraHelp = `Run 'virtle <command> --help' for more information on a command.
+Project repository: https://github.com/shazow/virtle
+`
 
 func runLaunch(options *Options) error {
 	if len(options.Launch.Args.RemoteCommand) > 0 && !options.Launch.SSH {
@@ -292,6 +297,8 @@ func main() {
 	if err := run(os.Args[1:]); err != nil {
 		var flagsErr *flags.Error
 		if errors.As(err, &flagsErr) && flagsErr.Type == flags.ErrHelp {
+			fmt.Fprintln(os.Stdout, flagsErr.Message)
+			fmt.Fprint(os.Stdout, extraHelp)
 			os.Exit(0)
 		}
 
@@ -305,6 +312,16 @@ func run(args []string) error {
 	parser := newParserForOptions(opts)
 
 	if _, err := parser.ParseArgs(args); err != nil {
+		var flagsErr *flags.Error
+		if errors.As(err, &flagsErr) && flagsErr.Type == flags.ErrCommandRequired {
+			// Missing command: show the relevant help instead of only the
+			// bare "Please specify one command" message.
+			var help bytes.Buffer
+			parser.WriteHelp(&help)
+			help.WriteString("\n")
+			help.WriteString(extraHelp)
+			return &flags.Error{Type: flags.ErrCommandRequired, Message: strings.TrimRight(help.String(), "\n")}
+		}
 		return err
 	}
 
@@ -336,5 +353,7 @@ func run(args []string) error {
 }
 
 func newParserForOptions(opts *Options) *flags.Parser {
-	return flags.NewParser(opts, flags.Default|flags.PassDoubleDash)
+	// PrintErrors is deliberately left out of the parser options: main is the
+	// single place parse errors get printed, so they never appear twice.
+	return flags.NewParser(opts, flags.HelpFlag|flags.PassDoubleDash)
 }

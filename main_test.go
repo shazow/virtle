@@ -84,6 +84,16 @@ func TestParserRejectsInvalidCommandLines(t *testing.T) {
 		wantErr string
 	}{
 		{
+			name:    "no command shows help",
+			args:    nil,
+			wantErr: "Available commands",
+		},
+		{
+			name:    "manifest without subcommand shows help",
+			args:    []string{"manifest"},
+			wantErr: "Available commands",
+		},
+		{
 			name:    "launch missing manifest",
 			args:    []string{"launch"},
 			wantErr: "no manifest path provided",

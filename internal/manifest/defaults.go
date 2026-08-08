@@ -36,7 +36,11 @@ func DefaultDocument() Document {
 
 // DocumentWithDefaults returns document overlaid on DefaultDocument. Pointer,
 // slice, and map fields keep omission semantics: nil means omitted and receives
-// the default; non-nil empty values are preserved.
+// the default; non-nil empty values are preserved. Scalar durations whose zero
+// is meaningful (guest_default_timeout, shutdown_timeout) or invalid
+// (ssh.retry_delay) are always taken from document; DecodeDocumentBytes seeds
+// their defaults before decoding, so documents built in code must set them
+// explicitly.
 func DocumentWithDefaults(document Document) Document {
 	defaults := DefaultDocument()
 
@@ -188,8 +192,9 @@ func mergeSSHInput(base SSHInput, override SSHInput) SSHInput {
 	if override.ReadySocket != "" {
 		base.ReadySocket = override.ReadySocket
 	}
-	// Always taken from the override: zero means retry immediately, and decode
-	// seeds the default for omitted keys.
+	// Always taken from the override: decode seeds the default for omitted
+	// keys, and validation rejects a zero delay, so a zero here means the
+	// document skipped decode-time seeding.
 	base.RetryDelay = override.RetryDelay
 	if override.Autoprovision {
 		base.Autoprovision = override.Autoprovision

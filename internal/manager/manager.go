@@ -32,7 +32,6 @@ import (
 )
 
 const (
-	defaultSSHRetryDelay      = 500 * time.Millisecond
 	defaultShutdownDelay      = 15 * time.Second
 	sshRetryOutputRevealDelay = 250 * time.Millisecond
 	// defaultWriteBackTimeout bounds the whole teardown write-back phase:
@@ -59,7 +58,6 @@ type manager struct {
 	sshReadyDialer      launch.SSHReadyDialer
 	logger              *slog.Logger
 	logWriter           io.Writer
-	sshRetryDelay       time.Duration
 	sshReadyTimeout     time.Duration
 	shutdownDelay       time.Duration
 	qmpRetryDelay       time.Duration
@@ -87,7 +85,6 @@ func newManagerFromConfig(config Config) *manager {
 		sshReadyDialer:      config.SSHReadyDialer,
 		logger:              config.Logger,
 		logWriter:           config.LogWriter,
-		sshRetryDelay:       config.SSHRetryDelay,
 		sshReadyTimeout:     config.SSHReadyTimeout,
 		shutdownDelay:       config.ShutdownDelay,
 		qmpRetryDelay:       config.QMPRetryDelay,
@@ -434,12 +431,9 @@ func (m *manager) runSSHSession(
 }
 
 func (m *manager) waitBeforeSSHRetry(ctx context.Context, lifecycle *launch.Lifecycle, suspendHandler suspendHandler, guestAgentSocketPath string, watchers executor.Group) error {
-	// Validation rejects non-positive retry delays; the manager default applies
-	// only when no manifest is bound.
-	delay := m.launchManifest.SSHRetryDelay(m.sshRetryDelay)
-	if delay <= 0 {
-		return nil
-	}
+	// Validation rejects non-positive retry delays, so the manifest value is
+	// always usable directly.
+	delay := m.launchManifest.SSH.RetryDelay
 
 	return m.waitForLifecycleEvent(ctx, "active session", delay, lifecycle, suspendHandler, guestAgentSocketPath, watchers)
 }

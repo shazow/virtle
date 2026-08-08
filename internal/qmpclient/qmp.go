@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"sync"
 	"time"
 
 	doQMP "github.com/digitalocean/go-qemu/qmp"
@@ -137,15 +136,13 @@ func (c *socketMonitorClient) DeviceDelAndWait(ctx context.Context, id string) e
 		return err
 	}
 	err = c.session.Do(ctx, func() error {
-		c.monitor.mu.Lock()
-		defer c.monitor.mu.Unlock()
 		if _, err := c.monitor.conn.Write(qmpwire.AppendDelimiter(command)); err != nil {
 			return &qmpwire.WireError{Err: err}
 		}
-		if _, err := c.monitor.readResponseLocked(); err != nil {
+		if _, err := c.monitor.readResponse(); err != nil {
 			return err
 		}
-		return c.monitor.waitDeviceDeletedLocked(id)
+		return c.monitor.waitDeviceDeleted(id)
 	})
 	return c.opError(ctx, fmt.Sprintf("qmp device_del %q", id), err)
 }
@@ -265,18 +262,15 @@ func (c *socketMonitorClient) opError(ctx context.Context, name string, err erro
 }
 
 // socketMonitor adapts the shared unix socket to go-qemu's raw monitor
-// interface. Deadlines and cancellation are owned by the client's session;
-// this layer only frames commands and decodes replies.
+// interface. It only frames commands and decodes replies: deadlines,
+// cancellation, and serialization are owned by the client's Session, so every
+// method must be called inside Session.Do/DoSlow.
 type socketMonitor struct {
 	conn    net.Conn
 	decoder *json.Decoder
-	mu      sync.Mutex
 }
 
 func (m *socketMonitor) Connect() error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	var banner struct {
 		QMP struct {
 			Version      doQMP.Version `json:"version"`
@@ -295,7 +289,7 @@ func (m *socketMonitor) Connect() error {
 		return &qmpwire.WireError{Err: err}
 	}
 
-	_, err = m.readResponseLocked()
+	_, err = m.readResponse()
 	return err
 }
 
@@ -307,20 +301,17 @@ func (m *socketMonitor) Disconnect() error {
 }
 
 func (m *socketMonitor) Run(command []byte) ([]byte, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	if _, err := m.conn.Write(qmpwire.AppendDelimiter(command)); err != nil {
 		return nil, &qmpwire.WireError{Err: err}
 	}
-	return m.readResponseLocked()
+	return m.readResponse()
 }
 
 func (m *socketMonitor) Events(context.Context) (<-chan doQMP.Event, error) {
 	return nil, doQMP.ErrEventsNotSupported
 }
 
-func (m *socketMonitor) readResponseLocked() ([]byte, error) {
+func (m *socketMonitor) readResponse() ([]byte, error) {
 	for {
 		envelope, err := qmpwire.DecodeRawEnvelope(m.decoder)
 		if err != nil {
@@ -336,7 +327,7 @@ func (m *socketMonitor) readResponseLocked() ([]byte, error) {
 	}
 }
 
-func (m *socketMonitor) waitDeviceDeletedLocked(id string) error {
+func (m *socketMonitor) waitDeviceDeleted(id string) error {
 	for {
 		envelope, err := qmpwire.DecodeEnvelope(m.decoder)
 		if err != nil {

@@ -44,7 +44,6 @@ func DefaultConfig() Config {
 		SSHReadyDialer:      &unixSSHReadyDialer{},
 		Logger:              logger,
 		LogWriter:           os.Stderr,
-		SSHRetryDelay:       defaultSSHRetryDelay,
 		SSHReadyTimeout:     configuredSSHReadyTimeout(),
 		ShutdownDelay:       defaultShutdownDelay,
 		QMPRetryDelay:       defaultQMPRetryDelay,

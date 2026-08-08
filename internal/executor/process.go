@@ -231,12 +231,10 @@ func SignalProcessGroup(pid int, sig syscall.Signal) error {
 }
 
 // waitGrace waits up to gracePeriod for the process to exit; ctx ending cuts
-// the wait short so Stop can escalate immediately.
+// the wait short so Stop can escalate immediately. gracePeriod is always
+// positive: getGracePeriod floors it and the post-kill wait floors at
+// minKillWait.
 func (p *Process) waitGrace(ctx context.Context, gracePeriod time.Duration) bool {
-	if gracePeriod <= 0 {
-		exited, _ := p.PollExit()
-		return exited
-	}
 	timer := time.NewTimer(gracePeriod)
 	defer timer.Stop()
 	select {
@@ -249,24 +247,11 @@ func (p *Process) waitGrace(ctx context.Context, gracePeriod time.Duration) bool
 	}
 }
 
-// waitForExit waits up to delay for the process to exit.
+// waitForExit waits up to delay for the process to exit, deliberately
+// ignoring any caller context (see Stop's post-kill comment): Background's
+// nil Done channel means that select arm never fires.
 func (p *Process) waitForExit(delay time.Duration) bool {
-	if delay <= 0 {
-		select {
-		case <-p.done:
-			return true
-		default:
-			return false
-		}
-	}
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	select {
-	case <-p.done:
-		return true
-	case <-timer.C:
-		return false
-	}
+	return p.waitGrace(context.Background(), delay)
 }
 
 func closedDone() <-chan struct{} {

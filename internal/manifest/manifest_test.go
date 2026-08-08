@@ -733,7 +733,7 @@ func TestManifestSSHRetryDelayDefaultsAndValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve manifest: %v", err)
 	}
-	if got, want := manifest.SSHRetryDelay(25*time.Millisecond), 500*time.Millisecond; got != want {
+	if got, want := manifest.SSH.RetryDelay, 500*time.Millisecond; got != want {
 		t.Fatalf("unexpected default ssh retry delay: got %s want %s", got, want)
 	}
 	if got, want := manifest.QEMU.SSHReady.SocketPath, ""; got != want {
@@ -757,7 +757,7 @@ func TestManifestSSHRetryDelayDefaultsAndValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve custom retry delay: %v", err)
 	}
-	if got, want := custom.SSHRetryDelay(time.Second), 250*time.Millisecond; got != want {
+	if got, want := custom.SSH.RetryDelay, 250*time.Millisecond; got != want {
 		t.Fatalf("unexpected custom ssh retry delay: got %s want %s", got, want)
 	}
 

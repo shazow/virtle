@@ -204,6 +204,16 @@ type Client struct{ ... } // implements vm.Guest (+ future GuestWithX extensions
 Both halves live in one package so the protocol has a single home; the
 daemon binary is just the CLI running `guest.Serve`.
 
+Portability requirements (decided in PR #67 review): the guest daemon ships
+inside the regular `virtle` binary as `virtle guest`, injected into guest
+images as-is, so release builds must be fully static —
+`CGO_ENABLED=0` (verified: no current dependency needs cgo; ~8.7 MB with
+`-ldflags "-s -w"`), enforced by a CI check on the release artifact. To
+keep that true and leave room for a minimal guest-only binary later
+(~3 MB via a separate `cmd/virtle-guest` main, no build tags needed),
+`./guest`'s dependency budget is stdlib plus `golang.org/x/sys` (vsock)
+only.
+
 ### Backend: `vm/qemu`
 
 ```go

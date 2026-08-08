@@ -140,7 +140,3 @@ when illustrative of the change.
 - virtle became its own project: the codebase (~32k lines across 179 files)
   was migrated out of [agentspace](https://github.com/shazow/agentspace)'s
   `virtie` tree into this repo, and lingering `virtie` references renamed. (#1, #2)
-
-## 2026-06-11
-
-- Repo created: a README and a LICENSE.

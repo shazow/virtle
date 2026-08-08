@@ -4,7 +4,6 @@ package schema
 import (
 	"encoding/json"
 	"reflect"
-	"strconv"
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/shazow/virtle/internal/manifest"
@@ -39,7 +38,7 @@ func Generate() (*jsonschema.Schema, error) {
 	schema.ID = "https://shazow.github.io/virtle/manifest.schema.json"
 	schema.Title = "Virtle manifest"
 	schema.Description = "JSON Schema for the virtle manifest input format emitted by virtle."
-	if err := applyDefaultTags(schema, reflect.TypeOf(manifest.Document{})); err != nil {
+	if err := applyDocumentDefaults(schema); err != nil {
 		return nil, err
 	}
 	return schema, nil
@@ -77,92 +76,57 @@ func mountSchema(opts *jsonschema.ForOptions) (*jsonschema.Schema, error) {
 	}, nil
 }
 
-// applyDefaultTags copies each field's `default` struct tag — the same tag the
-// decoder seeds omitted keys from — into the generated schema's default
-// keyword, so defaults are self-documenting without restating them in
-// descriptions.
-func applyDefaultTags(s *jsonschema.Schema, t reflect.Type) error {
-	for t.Kind() == reflect.Pointer {
-		t = t.Elem()
+// applyDocumentDefaults copies DefaultDocument's non-zero values into the
+// schema's default keywords, so the schema self-documents what an omitted key
+// resolves to — including the defaults the decoder seeds from struct tags.
+func applyDocumentDefaults(s *jsonschema.Schema) error {
+	data, err := json.Marshal(manifest.DefaultDocument())
+	if err != nil {
+		return err
 	}
-	if s == nil || t.Kind() != reflect.Struct {
-		return nil
+	var defaults map[string]any
+	if err := json.Unmarshal(data, &defaults); err != nil {
+		return err
 	}
-
-	for i := 0; i < t.NumField(); i++ {
-		field := t.Field(i)
-		if field.Anonymous {
-			// Embedded fields flatten into the same property set.
-			if err := applyDefaultTags(s, field.Type); err != nil {
-				return err
-			}
-			continue
-		}
-		property := s.Properties[jsonName(field)]
-		if property == nil {
-			continue
-		}
-		if tag, ok := field.Tag.Lookup("default"); ok {
-			raw, err := json.Marshal(defaultValue(field.Type, tag))
-			if err != nil {
-				return err
-			}
-			property.Default = raw
-		}
-
-		fieldType := field.Type
-	deref:
-		for property != nil {
-			switch fieldType.Kind() {
-			case reflect.Pointer:
-				fieldType = fieldType.Elem()
-			case reflect.Slice:
-				fieldType = fieldType.Elem()
-				property = property.Items
-			default:
-				break deref
-			}
-		}
-		if err := applyDefaultTags(property, fieldType); err != nil {
-			return err
-		}
-	}
+	setDefaults(s, defaults)
 	return nil
 }
 
-func jsonName(field reflect.StructField) string {
-	name := field.Tag.Get("json")
-	for i, r := range name {
-		if r == ',' {
-			return name[:i]
+func setDefaults(s *jsonschema.Schema, defaults map[string]any) {
+	if s == nil {
+		return
+	}
+	for name, value := range defaults {
+		property := s.Properties[name]
+		if property == nil || isZeroJSON(value) {
+			continue
+		}
+		if object, ok := value.(map[string]any); ok {
+			setDefaults(property, object)
+			continue
+		}
+		if raw, err := json.Marshal(value); err == nil {
+			property.Default = raw
 		}
 	}
-	return name
 }
 
-// defaultValue renders a `default` tag with the same type the schema gives the
-// field: durations stay strings and numeric fields become numbers.
-func defaultValue(t reflect.Type, tag string) any {
-	if t == reflect.TypeOf(units.Duration(0)) {
-		return tag
+// isZeroJSON reports whether a decoded JSON value is its type's zero value,
+// which marks a field DefaultDocument leaves unset rather than a default.
+func isZeroJSON(value any) bool {
+	switch v := value.(type) {
+	case nil:
+		return true
+	case string:
+		return v == ""
+	case float64:
+		return v == 0
+	case bool:
+		return !v
+	case []any:
+		return len(v) == 0
+	case map[string]any:
+		return len(v) == 0
 	}
-	switch t.Kind() {
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		if n, err := strconv.ParseInt(tag, 10, 64); err == nil {
-			return n
-		}
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		if n, err := strconv.ParseUint(tag, 10, 64); err == nil {
-			return n
-		}
-	case reflect.Float32, reflect.Float64:
-		if f, err := strconv.ParseFloat(tag, 64); err == nil {
-			return f
-		}
-	case reflect.Bool:
-		if b, err := strconv.ParseBool(tag); err == nil {
-			return b
-		}
-	}
-	return tag
+	return false
 }

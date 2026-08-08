@@ -88,7 +88,7 @@
         "shutdown_timeout": {
           "type": "string",
           "description": "Duration to wait for graceful shutdown before forcing QEMU to quit",
-          "default": "90s"
+          "default": "1m30s"
         }
       },
       "description": "QEMU executable and host-side socket settings.",
@@ -172,7 +172,8 @@
       "properties": {
         "backend": {
           "type": "string",
-          "description": "Display backend; headless disables graphical output."
+          "description": "Display backend; headless disables graphical output.",
+          "default": "headless"
         }
       },
       "description": "Graphical display backend settings.",
@@ -418,7 +419,14 @@
         },
         "additionalProperties": false
       },
-      "description": "Network devices and port forwards attached at launch."
+      "description": "Network devices and port forwards attached at launch.",
+      "default": [
+        {
+          "id": "microvm1",
+          "mac": "02:02:00:00:00:01",
+          "type": "user"
+        }
+      ]
     },
     "balloon": {
       "type": [
@@ -494,7 +502,10 @@
           "items": {
             "type": "string"
           },
-          "description": "SSH command template used to attach to the guest."
+          "description": "SSH command template used to attach to the guest.",
+          "default": [
+            "ssh"
+          ]
         },
         "user": {
           "type": "string",
@@ -526,11 +537,13 @@
           "properties": {
             "min": {
               "type": "integer",
-              "description": "Inclusive minimum value."
+              "description": "Inclusive minimum value.",
+              "default": 3
             },
             "max": {
               "type": "integer",
-              "description": "Inclusive maximum value."
+              "description": "Inclusive maximum value.",
+              "default": 65535
             }
           },
           "description": "Inclusive range of vsock CIDs virtle may allocate at launch.",

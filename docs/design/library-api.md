@@ -255,21 +255,23 @@ wrapped in `compress/gzip`), surfaced as a `GuestWithX` extension on the
 client:
 
 ```go
-// In vm: GuestWithCopy streams file trees between host and guest. The wire
-// format (tar via stdlib archive/tar) is a protocol detail, never part of
-// the API.
+// In vm: GuestWithCopy streams file trees between host and guest as tar
+// archives. Both directions speak the same shape (the Docker
+// CopyToContainer/CopyFromContainer model), so a guest→guest copy is a
+// direct pipe with no host filesystem and no buffering, and transforms
+// compose as ordinary io.Reader middleware.
 type GuestWithCopy interface {
-	// CopyToGuest copies fsys into guestPath, mirroring os.CopyFS.
-	// Callers pass os.DirFS(path), an embed.FS, or a fstest.MapFS; the
-	// client streams it as tar under the hood (tar.Writer.AddFS), so
-	// nothing is buffered in memory.
-	CopyToGuest(ctx context.Context, guestPath string, fsys fs.FS, opts CopyOptions) error
-
-	// CopyFromGuest returns a streamed tar archive of the guest path
-	// (the Docker CopyFromContainer shape — a stream, not an fs.FS,
-	// because tar arrives sequentially).
+	CopyToGuest(ctx context.Context, guestPath string, archive io.Reader, opts CopyOptions) error
 	CopyFromGuest(ctx context.Context, guestPath string) (io.ReadCloser, error)
 }
+
+// ArchiveFS adapts the common host case — "copy this directory" — to the
+// stream API: it returns a reader that lazily produces a tar stream of
+// fsys as it is read, so nothing is buffered. Callers pass os.DirFS(path),
+// an embed.FS, or a fstest.MapFS. Generation errors surface from Read.
+//
+//	err := g.CopyToGuest(ctx, "/workspace", vm.ArchiveFS(os.DirFS(src)), opts)
+func ArchiveFS(fsys fs.FS) io.ReadCloser
 
 // CopyOptions carries the options prior art shows are necessary for safe
 // usage; nice-to-haves (preserve-times, mode masks, exclusions) wait until
@@ -279,8 +281,8 @@ type CopyOptions struct {
 	// satisfying errors.Is(err, fs.ErrExist) — the os.CopyFS default.
 	Overwrite bool
 
-	// UID/GID set ownership of created entries; nil keeps the target's
-	// defaults (fs.FS sources carry no ownership, and host uids are
+	// UID/GID override ownership of created entries; nil keeps whatever
+	// the archive recorded (ArchiveFS records none, since host uids are
 	// meaningless in-guest). Pointers are load-bearing: 0 (root) is a
 	// valid value, so nil must be distinguishable from it.
 	UID, GID *int
@@ -292,8 +294,14 @@ and symlinks that escape the target root (the zip-slip / `docker cp`
 CVE-2018-15664 class). The guest daemon extracts as root, so this is
 enforced on the guest side with no opt-out.
 
-An archive-stream passthrough variant (for content that already is a
-tarball) can be added later as its own extension if a consumer needs it.
+Guest→guest then needs no special API — it is the two halves piped
+together, optionally through a tar-rewriting `io.Reader` middleware:
+
+```go
+rc, err := src.CopyFromGuest(ctx, "/data")
+defer rc.Close()
+err = dst.CopyToGuest(ctx, "/data", rc, vm.CopyOptions{})
+```
 
 The wire framing that delivers this is an implementation detail of the
 protocol, with two candidate shapes: length-prefixed JSON control frames

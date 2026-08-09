@@ -1,12 +1,11 @@
 //go:build !linux
 
-package manager
-
-import "github.com/shazow/virtle/internal/manager/launch"
+package launch
 
 type hostVSockCIDChecker struct{}
 
-func newHostVSockCIDChecker() launch.VSockCIDChecker {
+// NewHostVSockCIDChecker reports which vsock CIDs the host has free.
+func NewHostVSockCIDChecker() VSockCIDChecker {
 	return &hostVSockCIDChecker{}
 }
 

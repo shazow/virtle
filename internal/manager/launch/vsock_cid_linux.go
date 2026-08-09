@@ -1,12 +1,10 @@
-package manager
+package launch
 
 import (
 	"fmt"
 	"os"
 	"syscall"
 	"unsafe"
-
-	"github.com/shazow/virtle/internal/manager/launch"
 )
 
 const (
@@ -16,7 +14,8 @@ const (
 
 type hostVSockCIDChecker struct{}
 
-func newHostVSockCIDChecker() launch.VSockCIDChecker {
+// NewHostVSockCIDChecker reports which vsock CIDs the host has free.
+func NewHostVSockCIDChecker() VSockCIDChecker {
 	return &hostVSockCIDChecker{}
 }
 

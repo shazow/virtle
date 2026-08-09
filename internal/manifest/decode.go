@@ -12,9 +12,19 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-func DecodeDocumentBytes(data []byte, name string) (Document, error) {
+// NewDocument returns an empty Document with its scalar defaults seeded, the
+// same starting point DecodeDocumentBytes uses. Documents built in code rather
+// than decoded need it: DocumentWithDefaults cannot tell an omitted duration
+// from an explicit zero, so the durations whose zero value is meaningful have
+// to arrive already set.
+func NewDocument() Document {
 	var doc Document
 	applyDefaultTags(&doc)
+	return doc
+}
+
+func DecodeDocumentBytes(data []byte, name string) (Document, error) {
+	doc := NewDocument()
 	var err error
 	if manifestLooksTOML(data, name) {
 		err = decodeTOML(data, &doc)

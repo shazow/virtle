@@ -2,6 +2,7 @@ package qga
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -180,11 +181,22 @@ func (c *socketClient) CloseFile(ctx context.Context, handle int) error {
 }
 
 func (c *socketClient) Exec(ctx context.Context, path string, args []string, captureOutput bool) (int, error) {
-	response, err := c.run(ctx, "guest-exec", map[string]any{
+	return c.ExecWithOptions(ctx, path, args, ExecOptions{CaptureOutput: captureOutput})
+}
+
+func (c *socketClient) ExecWithOptions(ctx context.Context, path string, args []string, opts ExecOptions) (int, error) {
+	command := map[string]any{
 		"path":           path,
 		"arg":            args,
-		"capture-output": captureOutput,
-	})
+		"capture-output": opts.CaptureOutput,
+	}
+	if len(opts.Env) > 0 {
+		command["env"] = opts.Env
+	}
+	if len(opts.InputData) > 0 {
+		command["input-data"] = base64.StdEncoding.EncodeToString(opts.InputData)
+	}
+	response, err := c.run(ctx, "guest-exec", command)
 	if err != nil {
 		return 0, fmt.Errorf("guest agent exec %q: %w", path, err)
 	}

@@ -271,15 +271,26 @@ type GuestWithCopy interface {
 	CopyFromGuest(ctx context.Context, guestPath string) (io.ReadCloser, error)
 }
 
-// CopyOptions controls extraction ownership in the guest. fs.FS sources
-// carry no uid/gid (host uids are meaningless in-guest), so overrides only
-// *set* ownership; nil keeps the target's defaults. Pointers are load-
-// bearing here: 0 (root) is a valid uid/gid, so nil must be
-// distinguishable from it.
+// CopyOptions carries the options prior art shows are necessary for safe
+// usage; nice-to-haves (preserve-times, mode masks, exclusions) wait until
+// a consumer needs them. The zero value is the safe default.
 type CopyOptions struct {
+	// Overwrite replaces existing files instead of failing with an error
+	// satisfying errors.Is(err, fs.ErrExist) — the os.CopyFS default.
+	Overwrite bool
+
+	// UID/GID set ownership of created entries; nil keeps the target's
+	// defaults (fs.FS sources carry no ownership, and host uids are
+	// meaningless in-guest). Pointers are load-bearing: 0 (root) is a
+	// valid value, so nil must be distinguishable from it.
 	UID, GID *int
 }
 ```
+
+One safety rule is an invariant, not an option: extraction rejects entries
+and symlinks that escape the target root (the zip-slip / `docker cp`
+CVE-2018-15664 class). The guest daemon extracts as root, so this is
+enforced on the guest side with no opt-out.
 
 An archive-stream passthrough variant (for content that already is a
 tarball) can be added later as its own extension if a consumer needs it.

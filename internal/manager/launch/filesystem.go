@@ -14,7 +14,7 @@ import (
 )
 
 func CreateVolumeImage(volume manifest.Volume) error {
-	sizeBytes := volume.Size.Bytes()
+	sizeBytes := volume.Size.Bytes().Int64()
 	file, err := os.OpenFile(volume.ImagePath, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		return fmt.Errorf("create volume image %q: %w", volume.ImagePath, err)

@@ -2,7 +2,7 @@ package manifest
 
 import (
 	"github.com/shazow/virtle/internal/manifest/tagged"
-	"github.com/shazow/virtle/internal/units"
+	"github.com/shazow/virtle/units"
 )
 
 const (

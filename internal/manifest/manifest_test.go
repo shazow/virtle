@@ -16,7 +16,7 @@ import (
 
 	"github.com/adrg/xdg"
 	"github.com/shazow/virtle/internal/hotplug"
-	"github.com/shazow/virtle/internal/units"
+	"github.com/shazow/virtle/units"
 )
 
 func writeFileText(text string) WriteFile {

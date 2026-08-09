@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/shazow/virtle/internal/balloon"
-	"github.com/shazow/virtle/internal/units"
+	"github.com/shazow/virtle/units"
 )
 
 func applyBalloonDefaults(memory units.MiB, device *balloon.Device) {

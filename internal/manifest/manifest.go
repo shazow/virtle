@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/shazow/virtle/internal/hotplug"
-	"github.com/shazow/virtle/internal/units"
+	"github.com/shazow/virtle/units"
 )
 
 type ResolveOptions struct {

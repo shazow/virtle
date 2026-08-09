@@ -35,7 +35,7 @@ import (
 	"github.com/shazow/virtle/internal/manifest"
 	"github.com/shazow/virtle/internal/qga"
 	"github.com/shazow/virtle/internal/qmpclient"
-	"github.com/shazow/virtle/internal/units"
+	"github.com/shazow/virtle/units"
 )
 
 const (
@@ -789,7 +789,7 @@ func TestCreateVolumeImageCreatesNativeExt4(t *testing.T) {
 
 			if info, err := os.Stat(imagePath); err != nil {
 				t.Fatalf("expected volume image to exist: %v", err)
-			} else if got, want := info.Size(), tt.sizeMiB.Bytes(); got != want {
+			} else if got, want := info.Size(), tt.sizeMiB.Bytes().Int64(); got != want {
 				t.Fatalf("unexpected volume size: got %d want %d", got, want)
 			}
 

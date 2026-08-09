@@ -11,7 +11,7 @@ import (
 	"time"
 
 	hotplugpkg "github.com/shazow/virtle/internal/hotplug"
-	"github.com/shazow/virtle/internal/units"
+	"github.com/shazow/virtle/units"
 )
 
 const (

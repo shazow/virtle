@@ -7,7 +7,7 @@ import (
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/shazow/virtle/internal/manifest"
-	"github.com/shazow/virtle/internal/units"
+	"github.com/shazow/virtle/units"
 )
 
 // Generate returns the JSON Schema for the virtle manifest input format.

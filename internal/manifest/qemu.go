@@ -4,7 +4,7 @@ import (
 	"time"
 
 	"github.com/shazow/virtle/internal/balloon"
-	"github.com/shazow/virtle/internal/units"
+	"github.com/shazow/virtle/units"
 )
 
 type QEMU struct {

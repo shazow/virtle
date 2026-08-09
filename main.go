@@ -66,6 +66,24 @@ type Options struct {
 }
 
 const extraHelp = `Run 'virtle <command> --help' for more information on a command.
+
+Quick start:
+  1. Copy examples/manifest-simple.toml to a working directory.
+  2. Set [kernel].path and [kernel].initrd_path to guest boot artifacts.
+  3. Run 'virtle --manifest=manifest.toml manifest validate'.
+  4. Boot and attach with 'virtle --manifest=manifest.toml launch --ssh'.
+
+After SSH readiness, append '-- <command> [args...]' to launch a command in the guest,
+for example 'virtle --manifest=manifest.toml launch --ssh -- uname -a'.
+When --manifest is omitted, virtle looks for ./manifest.toml or ./manifest.json.
+
+Useful commands:
+  virtle manifest defaults [--resolved]  Print the input or resolved manifest defaults.
+  virtle manifest schema                   Print the JSON Schema for manifest files.
+  virtle manifest resolve                  Validate and print a resolved manifest.
+  virtle suspend                           Save a running VM for a later resume.
+  virtle rpc METHOD [JSON_ARGS]            Call the running VM's control socket.
+
 Project repository: https://github.com/shazow/virtle
 `
 

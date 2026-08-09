@@ -77,6 +77,21 @@ func TestOptionsDeclaresCommands(t *testing.T) {
 	}
 }
 
+func TestExtraHelpProvidesQuickStartContext(t *testing.T) {
+	for _, want := range []string{
+		"Quick start:",
+		"examples/manifest-simple.toml",
+		"manifest validate",
+		"launch --ssh",
+		"-- <command> [args...]",
+		"virtle manifest schema",
+	} {
+		if !strings.Contains(extraHelp, want) {
+			t.Errorf("extraHelp does not contain %q", want)
+		}
+	}
+}
+
 func TestParserRejectsInvalidCommandLines(t *testing.T) {
 	tests := []struct {
 		name    string

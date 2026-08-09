@@ -69,6 +69,49 @@ process environment is available as `.Env` on every surface.
 | `run[].exec` | `CID`, `StateDir`, `Workspace.GuestPath`, `Workspace.HostPath`, user vars, `.Env` | scalar top-level values only |
 | `notifications.exec` | `State`, `Message`, notification context values, `.Env` | `STATE`, `MESSAGE`, normalized context values |
 
+## Library
+
+virtle is also a Go library, so a program can boot a VM, run commands in it, and
+tear it down without the CLI:
+
+```go
+spec := &vm.Spec{
+	Kernel: vm.Kernel{Path: "vmlinuz", Initrd: "initrd.img"},
+	Shares: []vm.Share{{Tag: "src", HostPath: ".", GuestPath: "/workspace"}},
+	Memory: 2048 * units.Mebibyte,
+}
+b, err := qemu.BackendWithQGA(qemu.Config{})
+inst, err := b.Start(ctx, spec)
+defer backend.Shutdown(ctx, inst)
+
+guest, err := inst.RemoteControl()
+out, err := guest.Run(ctx, &vm.GuestCmd{Path: "make", Dir: "/workspace"})
+```
+
+The packages split the way `database/sql` and `database/sql/driver` do:
+
+| Package | What it holds |
+| --- | --- |
+| [`vm`](https://pkg.go.dev/github.com/shazow/virtle/vm) | `Spec` describes a machine; `Guest` operates inside a running one |
+| [`backend`](https://pkg.go.dev/github.com/shazow/virtle/backend) | `Backend`/`Instance`, plus the capability interfaces optional functionality is discovered through |
+| [`backend/qemu`](https://pkg.go.dev/github.com/shazow/virtle/backend/qemu) | the QEMU backend and its QEMU-only `Config` |
+| [`manifest`](https://pkg.go.dev/github.com/shazow/virtle/manifest) | loads a manifest into a `(vm.Spec, backend.Backend)` pair |
+| [`units`](https://pkg.go.dev/github.com/shazow/virtle/units) | typed sizes and durations, so no plumbed int is ambiguous |
+
+Optional functionality — suspend/resume, live memory resize — is a type
+assertion on the backend rather than a method every backend must have:
+
+```go
+if suspender, ok := b.(backend.Suspender); ok {
+	err = suspender.Suspend(ctx, inst, stateDir)
+}
+```
+
+The library API is new and experimental: the module is untagged v0 and these
+packages may change until it settles. The design and the migration plan behind
+it are in [docs/design/](./docs/design/). The CLI still runs on
+`./internal/manager`; moving it onto these packages is the next step.
+
 ## License
 
 MIT

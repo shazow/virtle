@@ -213,7 +213,7 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 			return nil, err
 		}
 		stats.Timer(launch.TimerFilesReady, time.Now())
-		if plan.Paths.SSHReadySocket != "" {
+		if plan.Paths.SSHReadySocket != "" && !plan.Options.SkipSSHReadyWait {
 			if m.logger != nil {
 				m.logger.Info("waiting for ssh readiness")
 			}

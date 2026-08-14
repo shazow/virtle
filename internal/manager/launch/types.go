@@ -20,6 +20,12 @@ type Options struct {
 	Resume    ResumeMode
 	SSH       bool
 	Verbosity int
+
+	// SkipSSHReadyWait skips blocking on the guest's ssh-ready socket
+	// signal during fresh boots. Library starts (manager.StartVM) set it:
+	// ssh readiness is a CLI session concern, and guests without the ready
+	// notifier would otherwise stall startup until the timeout.
+	SkipSSHReadyWait bool
 }
 
 func (o Options) WaitMode() WaitMode {

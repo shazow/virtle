@@ -1,6 +1,7 @@
 # Design: a public library API for virtle
 
-Status: proposal (refs [#66](https://github.com/shazow/virtle/issues/66))
+Status: accepted; phases 1–2 of [migration.md](migration.md) are implemented
+(refs [#66](https://github.com/shazow/virtle/issues/66))
 
 ## Goal
 

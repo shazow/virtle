@@ -26,19 +26,19 @@ Today (`main.go`): `virtle launch [--resume no|auto|force] [--ssh]
 [remote-cmd...]`, `virtle suspend`, `virtle hotplug [--detach] <id>`,
 `virtle rpc <method> [json-args]`, `virtle manifest
 {defaults [--resolved], validate, resolve, schema}`, `-v/--verbose`,
-`--manifest`, and error exit codes via `manager.ExitCode`.
+`--manifest`, and error exit codes via `session.ExitCode`.
 
 Target: identical commands, flags, output, and exit codes. The CLI's
-implementation moves from `internal/manager` onto the public API — it
+implementation moves from the internal machinery onto the public API — it
 becomes the first consumer:
 
-- `launch` → started VM handle + foreground session as separate seams.
-  **Done**: `runLaunch` composes `StartSessionVM` (boot with CLI
-  semantics) with `manager.RunSession` (the extracted session layer), and
-  the legacy blocking entrypoint is reimplemented on the same pieces so
-  the existing launch test suite exercises the rewired path. The backend
-  knows nothing about sessions; launch flows through the backend itself
-  once the manager machinery folds into `backend/qemu`.
+- `launch` → the session layer over the backend's machinery. **Done**:
+  `runLaunch` calls `session.Run` (backend/qemu/session — boot with CLI
+  semantics plus the foreground session), the legacy blocking entrypoint
+  is reimplemented on the same pieces so the existing launch test suite
+  exercises the rewired path, and the VM machinery is folded into
+  `backend/qemu/internal/` (see the §7 layout and session-architecture
+  notes). The backend type itself knows nothing about sessions.
 - `suspend` / `hotplug` / `rpc` → stay **control-socket clients**, by
   design rather than migration debt: these commands run out-of-process
   and talk to an already-running session, so there is no backend instance
@@ -93,7 +93,7 @@ compatible surface.
 
 ## 4. Control socket JSON-RPC (`virtle.sock`) — Frozen, revisit later
 
-Today (`internal/manager/control`): methods `status`, `methods`, `suspend`,
+Today (`internal/control`): methods `status`, `methods`, `suspend`,
 `hotplug`, `balloon`, `guest-ps`, `guest-exec`, `guest-read`, `guest-write`;
 JSON envelope with typed error codes (`unknown_method`, `invalid_params`,
 ...); consumed by `virtle rpc` and any external tooling scripted against the
@@ -115,8 +115,8 @@ phase.
 
 ## 5. On-disk and runtime state — Breaking (backend-private), with transition
 
-Current state on disk, all produced by `internal/manager/launch` +
-`internal/manager`:
+Current state on disk, all produced by the machinery under
+`backend/qemu/internal/`:
 
 - Runtime dir (working-dir, XDG `$XDG_RUNTIME_DIR/agentspace/<hostname>/`,
   or explicit path) holding sockets: QMP, guest-agent, ssh-ready, control,
@@ -153,7 +153,7 @@ Transition rules:
 Today a functional guest requires **qemu-guest-agent** listening on the
 virtio-serial channel; guest exec, file read/write, `ps`, SSH key
 autoprovision, and graceful shutdown all route through it
-(`internal/qga`, `internal/manager/guest_*.go`).
+(`internal/qga`, `backend/qemu/internal/vmm/guest_*.go`).
 
 Target: guests run the **virtle guest daemon** (`virtle guest`, package
 `./guest`) over vsock or serial socket; QGA becomes optional and eventually
@@ -183,26 +183,47 @@ to the supported API:
 | Reached for today | Supported replacement |
 |---|---|
 | `internal/manifest` `DecodeDocumentBytes` → `doc.Manifest()` | `manifest.Load(r) (*vm.Spec, backend.Backend, error)` |
-| `internal/manager` `LaunchWithOptions` | `b.Start(ctx, spec)` on a constructed backend + CLI-layer composition |
-| `internal/manager/launch` `BuildPlan` / `AcquireCID` / `WaitForSockets` / `ProcessSet` | `backend/qemu` internals — no longer consumer-facing; the plan/CID/socket dance happens inside `Backend.Start` |
-| `internal/manager/qemu.go` argv building | `qemu.Config` fields; argv construction is private |
+| the internal machinery's blocking launch | `b.Start(ctx, spec)` on a constructed backend + CLI-layer composition |
+| `backend/qemu/internal/launch` `BuildPlan` / `AcquireCID` / `WaitForSockets` / `ProcessSet` | `backend/qemu` internals — no longer consumer-facing; the plan/CID/socket dance happens inside `Backend.Start` |
+| `backend/qemu/internal/vmm/qemu.go` argv building | `qemu.Config` fields; argv construction is private |
 | `internal/executor` `Runner` / `Command` / `Group` | private to backends; consumers hold a `backend.Instance`, not a process |
 | `internal/qga` client | `inst.RemoteControl()` → `vm.Guest` |
 | `internal/qmpclient` (suspend/migration) | `backend.Suspender` |
 | `internal/balloon` | `backend.MemoryResizer` |
 | `internal/hotplug` | `backend.DeviceAttacher` |
-| `internal/manager/control` `Dial` | unchanged host socket (§4); Go client promotion deferred |
+| `internal/control` `Dial` | unchanged host socket (§4); Go client promotion deferred |
 | `internal/units` | promoted to public `units`, rebased on `units.Bytes` + size constants (`2048 * units.Mebibyte`) plus `units.Duration`; manifest TOML numbers stay MiB-denominated, converted at load |
 
-Package layout note (PR #71 review): `internal/manifest` stays the shared
-home of the document/resolution machinery only while the CLI still consumes
-it through `internal/manager` — consolidating it into the public `manifest`
-package today would close an import cycle (`internal/manager` → `manifest`
-→ `backend/qemu` → `internal/manager`). Once the CLI rewires onto the
-public API and the manager machinery folds into `backend/qemu`, the
-manifest input contract (document, decode, defaults, validation, schema)
-consolidates into the public `manifest` package with resolution unexported,
-and the `qemu.NewBackendFromDocument` bridge disappears.
+Package layout note (PR #71/#76 review): the VM machinery is
+`backend/qemu/internal/{vmm,launch,runtime}` — compiler-enforced private
+to the backend subtree — and the CLI consumes it only through
+`backend/qemu/session`, a deliberately minimal public facade for the CLI
+session layer (see the session-architecture note below). The
+control-socket contract lives at `internal/control`, qemu-free and shared
+by its two consumers: the CLI client and the runtime server.
+`internal/manifest` stays the shared home of the document/resolution
+machinery for now — consolidating it into the public `manifest` package
+would close an import cycle (machinery → `manifest` → `backend/qemu` →
+machinery); breaking that cycle (e.g. splitting the input contract into a
+leaf package so `Load` can keep returning a configured backend) is the
+next consolidation step, and the `qemu.NewBackendFromDocument` bridge
+disappears with it.
+
+Session-architecture note (PR #76 review): the session layer keeps the
+driver shape — the CLI owns the foreground loop — because the interactive
+attach hands the terminal to a child process and signals are
+process-global, both of which pin the main loop to the CLI process.
+Lifecycle hooks stay observation-only (the existing notifications sink);
+control flow is never inverted into callbacks. Most of the session layer
+is QGA-era scaffolding with a demolition date: the guest daemon (D9)
+replaces the ssh-ready gate with its readiness handshake and the
+autoprovision dance with a host-pushed key, leaving a thin loop over the
+public backend API. The daemon swap points are already seams in the
+machinery: `GuestReadiness` (the readiness gate) and the guest-control
+dialer. When the daemon lands, the residual loop is rebuilt over public
+API using an event-channel shape (machinery emits events, CLI selects),
+which also dissolves the saved-suspend sentinel into a command/event
+pair.
 
 API stability posture: the module is untagged v0; promoted packages carry an
 experimental notice until the API settles, then a `v0.x` tag makes versions

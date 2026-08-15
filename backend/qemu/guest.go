@@ -13,7 +13,7 @@ import (
 	"github.com/shazow/virtle/vm"
 )
 
-// guestHost is the slice of manager.VM the QGA adapter needs; an interface
+// guestHost is the slice of vmm.VM the QGA adapter needs; an interface
 // so the adapter is testable against fakes.
 type guestHost interface {
 	DialGuestAgent(ctx context.Context) (qga.Client, error)

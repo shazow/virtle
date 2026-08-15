@@ -17,11 +17,9 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/jessevdk/go-flags"
-	"github.com/shazow/virtle/backend"
-	"github.com/shazow/virtle/backend/qemu"
+	"github.com/shazow/virtle/backend/qemu/session"
 	"github.com/shazow/virtle/internal/balloon"
-	"github.com/shazow/virtle/internal/manager"
-	"github.com/shazow/virtle/internal/manager/control"
+	"github.com/shazow/virtle/internal/control"
 	"github.com/shazow/virtle/internal/manifest"
 	manifestschema "github.com/shazow/virtle/internal/manifest/schema"
 )
@@ -79,11 +77,11 @@ func runLaunch(options *Options) error {
 	baseLogger := slog.Default()
 	discardLogger := slog.New(slog.DiscardHandler)
 	manifestLogger := discardLogger
-	manager.SetLogger(discardLogger)
+	session.SetLogger(discardLogger)
 	balloon.SetLogger(discardLogger)
 	if len(options.Verbose) > 0 {
 		manifestLogger = baseLogger.With("package", "manifest")
-		manager.SetLogger(baseLogger.With("package", "manager"))
+		session.SetLogger(baseLogger.With("package", "qemuvm"))
 	}
 	if len(options.Verbose) > 1 {
 		balloon.SetLogger(baseLogger.With("package", "balloon"))
@@ -94,37 +92,14 @@ func runLaunch(options *Options) error {
 		return err
 	}
 
-	// The CLI launches the qemu backend. Backend-owned facts — the suspend
-	// state version stamped on saves and compared on resume — come from
-	// the backend as the single source of truth, while start and session
-	// run on the manager machinery directly until it folds into the
-	// backend.
-	qemuBackend, err := qemu.New(qemu.Config{RemoteControl: qemu.QGA{}})
-	if err != nil {
-		return err
-	}
-	suspender, ok := qemuBackend.(backend.Suspender)
-	if !ok {
-		return fmt.Errorf("qemu backend does not support suspend state")
-	}
-
-	ctx := context.Background()
-	session := manager.SessionOptions{
+	// The session layer owns the whole foreground lifecycle; backend
+	// details (suspend-state versioning, readiness, guest control) live
+	// inside the machinery it wraps.
+	return session.Run(context.Background(), loaded, session.Options{
+		Resume:        options.Launch.Resume,
 		SSH:           options.Launch.SSH,
 		RemoteCommand: options.Launch.Args.RemoteCommand,
-	}
-	vmHandle, err := manager.StartSessionVM(ctx, loaded, manager.StartOptions{
-		Resume: manager.ResumeMode(options.Launch.Resume),
-	}, session, manager.Config{
-		SuspendStateVersion: suspender.StateVersion(),
 	})
-	if err != nil {
-		if manager.IsSavedSuspendExit(err) {
-			return nil
-		}
-		return err
-	}
-	return manager.RunSession(ctx, vmHandle, session)
 }
 
 func runSuspend(options *Options) error {
@@ -136,7 +111,7 @@ func runSuspend(options *Options) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	return manager.Suspend(ctx, manifest)
+	return session.Suspend(ctx, manifest)
 }
 
 func runManifestDefaults(options *Options) error {
@@ -180,10 +155,10 @@ func runHotplug(options *Options) error {
 	baseLogger := slog.Default()
 	discardLogger := slog.New(slog.DiscardHandler)
 	manifestLogger := discardLogger
-	manager.SetLogger(discardLogger)
+	session.SetLogger(discardLogger)
 	if len(options.Verbose) > 0 {
 		manifestLogger = baseLogger.With("package", "manifest")
-		manager.SetLogger(baseLogger.With("package", "manager"))
+		session.SetLogger(baseLogger.With("package", "qemuvm"))
 	}
 
 	manifest, err := loadLaunchManifest(options.Manifest, manifestLogger)
@@ -194,7 +169,7 @@ func runHotplug(options *Options) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	return manager.Hotplug(ctx, manifest, options.Hotplug.Args.ID, options.Hotplug.Detach)
+	return session.Hotplug(ctx, manifest, options.Hotplug.Args.ID, options.Hotplug.Detach)
 }
 
 func runRPC(options *Options) error {
@@ -331,7 +306,7 @@ func main() {
 		}
 
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(manager.ExitCode(err))
+		os.Exit(session.ExitCode(err))
 	}
 }
 

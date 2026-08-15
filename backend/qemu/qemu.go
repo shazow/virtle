@@ -12,8 +12,8 @@ import (
 	"log/slog"
 
 	"github.com/shazow/virtle/backend"
+	"github.com/shazow/virtle/backend/qemu/internal/vmm"
 	"github.com/shazow/virtle/internal/hotplug"
-	"github.com/shazow/virtle/internal/manager"
 	imanifest "github.com/shazow/virtle/internal/manifest"
 	"github.com/shazow/virtle/units"
 	"github.com/shazow/virtle/vm"
@@ -94,19 +94,11 @@ type qemuBackend struct {
 
 func (b *qemuBackend) hasRemoteControl() bool { return b.cfg.RemoteControl != nil }
 
-// stateVersion is the qemu backend's suspend-state version. Suspend state
-// is stamped with it and resume compares it before loading: the saved VM
-// state is a backend-owned format (a QEMU migration stream), so state
-// written by any other backend or format revision is not resumable. Bump
-// the revision when the format changes incompatibly.
-//
-// The manager's DefaultConfig carries the same token for CLI launches
-// until the manager machinery folds into this package; a test pins the
-// two together.
-const stateVersion = "qemu-v1"
-
-// StateVersion implements backend.Suspender.
-func (b *qemuBackend) StateVersion() string { return stateVersion }
+// StateVersion implements backend.Suspender: it reports the suspend-state
+// version this backend's machinery stamps on saves and compares on
+// resume. Only an exact match is resumable, since the saved VM state is a
+// QEMU migration stream.
+func (b *qemuBackend) StateVersion() string { return vmm.StateVersion }
 
 // NewBackendFromDocument is the bridge for the public manifest package:
 // the returned backend starts from the loaded document, preserving
@@ -122,7 +114,7 @@ func NewBackendFromDocument(doc imanifest.Document, cfg Config) backend.Backend 
 }
 
 func (b *qemuBackend) Start(ctx context.Context, spec *vm.Spec) (backend.Instance, error) {
-	return b.start(ctx, spec, manager.ResumeModeNo)
+	return b.start(ctx, spec, vmm.ResumeModeNo)
 }
 
 func (b *qemuBackend) logger() *slog.Logger {
@@ -146,17 +138,16 @@ func (b *qemuBackend) resolveSpec(spec *vm.Spec) (*imanifest.Manifest, error) {
 	return mf, nil
 }
 
-func (b *qemuBackend) start(ctx context.Context, spec *vm.Spec, resume manager.ResumeMode) (backend.Instance, error) {
+func (b *qemuBackend) start(ctx context.Context, spec *vm.Spec, resume vmm.ResumeMode) (backend.Instance, error) {
 	mf, err := b.resolveSpec(spec)
 	if err != nil {
 		return nil, err
 	}
-	handle, err := manager.StartVM(ctx, mf, manager.StartOptions{
+	handle, err := vmm.StartVM(ctx, mf, vmm.StartOptions{
 		Resume:           resume,
 		HasRemoteControl: b.hasRemoteControl(),
-	}, manager.Config{
-		Logger:              b.logger(),
-		SuspendStateVersion: stateVersion,
+	}, vmm.Config{
+		Logger: b.logger(),
 	})
 	if err != nil {
 		return nil, err
@@ -165,7 +156,7 @@ func (b *qemuBackend) start(ctx context.Context, spec *vm.Spec, resume manager.R
 }
 
 type instance struct {
-	vm               *manager.VM
+	vm               *vmm.VM
 	hasRemoteControl bool
 }
 
@@ -216,7 +207,7 @@ func (b *qemuBackend) Suspend(ctx context.Context, inst backend.Instance, stateD
 // instance. The spec (plus this backend's config) must resolve to the same
 // state directory the suspend wrote to.
 func (b *qemuBackend) Resume(ctx context.Context, spec *vm.Spec, stateDir string) (backend.Instance, error) {
-	inst, err := b.start(ctx, spec, manager.ResumeModeForce)
+	inst, err := b.start(ctx, spec, vmm.ResumeModeForce)
 	if err != nil {
 		return nil, err
 	}

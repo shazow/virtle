@@ -538,7 +538,7 @@ implementation to be adapted:
 
 | New API piece | Existing code that becomes its implementation |
 |---|---|
-| `backend/qemu` `Start` | `internal/manager/qemu.go` lowering + `internal/manager/launch` (`BuildPlan`, `AcquireCID`, socket waits) + `internal/executor` supervision |
+| `backend/qemu` `Start` | `backend/qemu/internal/vmm/qemu.go` lowering + `backend/qemu/internal/launch` (`BuildPlan`, `AcquireCID`, socket waits) + `internal/executor` supervision |
 | `backend.Instance` | `internal/executor.Process` (later, libkrun: a cgo handle) |
 | `backend/qemu`'s QGA `vm.Guest` | `internal/qga` client behind the new shapes (`guest-exec` → `Run`, base64 file chunks → `Open`/`Create`) |
 | `guest` daemon + client | new code; binary-safe, concurrent, streaming protocol (see protocol requirements) — supersedes both QGA's base64 chunking and `control`'s request/response-only framing |

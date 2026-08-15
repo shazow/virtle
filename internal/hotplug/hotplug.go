@@ -64,7 +64,7 @@ func (r Runner) Detach(ctx context.Context, id string) error {
 
 // BusName is the PCIe root port a hotplug device with the given manifest
 // index attaches to. It must match the pcie-root-port IDs created at QEMU
-// boot (see buildQEMUArgs in internal/manager).
+// boot (see buildQEMUArgs in internal/qemuvm).
 func BusName(index int) string {
 	return fmt.Sprintf("pcie.hotplug.%d", index)
 }

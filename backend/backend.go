@@ -8,9 +8,6 @@
 // There is deliberately no default backend: this package cannot import its
 // implementations without a cycle, so consumers always name their backend
 // explicitly (qemu.BackendWithQGA(...)).
-//
-// The package is experimental: the module is untagged v0 and this API may
-// change without notice until it settles (see docs/design/library-api.md).
 package backend
 
 import (

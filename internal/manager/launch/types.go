@@ -21,11 +21,17 @@ type Options struct {
 	SSH       bool
 	Verbosity int
 
-	// SkipSSHReadyWait skips blocking on the guest's ssh-ready socket
-	// signal during fresh boots. Library starts (manager.StartVM) set it:
-	// ssh readiness is a CLI session concern, and guests without the ready
-	// notifier would otherwise stall startup until the timeout.
-	SkipSSHReadyWait bool
+	// HasRemoteControl declares whether the VM image runs a guest control
+	// agent (QGA today, the virtle guest daemon later). When false, launch
+	// skips guest-dependent steps (guest file writes, workspace mounts)
+	// and guest control is reported unsupported. nil defaults to true.
+	HasRemoteControl *bool
+}
+
+// RemoteControlEnabled reports whether the guest is expected to run a
+// control agent; unset means yes.
+func (o Options) RemoteControlEnabled() bool {
+	return o.HasRemoteControl == nil || *o.HasRemoteControl
 }
 
 func (o Options) WaitMode() WaitMode {

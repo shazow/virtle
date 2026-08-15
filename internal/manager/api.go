@@ -16,6 +16,10 @@ import (
 // StartOptions configures a non-blocking StartVM.
 type StartOptions struct {
 	Resume ResumeMode // defaults to ResumeModeNo
+
+	// HasRemoteControl declares whether the VM image runs a guest control
+	// agent; see launch.Options. nil defaults to true.
+	HasRemoteControl *bool
 }
 
 // StartVM starts a VM from a resolved manifest and returns a handle without
@@ -35,7 +39,7 @@ func StartVM(ctx context.Context, mf *manifest.Manifest, options StartOptions, c
 	m := newManagerFromConfig(config)
 	plan, err := m.planLaunch(launch.Spec{Manifest: mf, Options: launch.Options{
 		Resume:           options.Resume,
-		SkipSSHReadyWait: true,
+		HasRemoteControl: options.HasRemoteControl,
 	}})
 	if err != nil {
 		return nil, err
@@ -110,6 +114,12 @@ func (v *VM) close() error {
 	return v.closeErr
 }
 
+// RemoteControlEnabled reports whether the VM was started expecting a
+// guest control agent.
+func (v *VM) RemoteControlEnabled() bool {
+	return v.running.plan.Options.RemoteControlEnabled()
+}
+
 // CID returns the vsock CID allocated to the VM.
 func (v *VM) CID() int { return v.running.plan.CID }
 
@@ -122,6 +132,9 @@ func (v *VM) GuestAgentSocketPath() string { return v.running.plan.Paths.GuestAg
 // DialGuestAgent waits for guest agent readiness and returns a connected
 // client. The caller owns the client and must Disconnect it.
 func (v *VM) DialGuestAgent(ctx context.Context) (qga.Client, error) {
+	if !v.RemoteControlEnabled() {
+		return nil, fmt.Errorf("guest agent: vm has no remote control: %w", errors.ErrUnsupported)
+	}
 	return v.m.waitForGuestAgent(ctx, v.running.plan.Paths.GuestAgentSocket, v.running.processes.Watchers())
 }
 
@@ -129,6 +142,9 @@ func (v *VM) DialGuestAgent(ctx context.Context) (qga.Client, error) {
 // the manifest's shutdown_exec command). It does not wait for the VM to
 // exit; pair it with Wait.
 func (v *VM) ShutdownGuest(ctx context.Context) error {
+	if !v.RemoteControlEnabled() {
+		return fmt.Errorf("guest shutdown: vm has no remote control: %w", errors.ErrUnsupported)
+	}
 	shutdown := v.running.plan.Manifest.QEMU.GuestAgent
 	return v.m.requestGuestShutdown(ctx, v.running.plan.Paths.GuestAgentSocket, shutdown.ShutdownExec)
 }

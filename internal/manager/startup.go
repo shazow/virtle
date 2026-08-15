@@ -209,20 +209,15 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 		return nil, err
 	}
 	if plan.ResumeState == nil {
-		if err := m.writeGuestFiles(launchCtx, stats, processes.Watchers()); err != nil {
-			return nil, err
-		}
-		stats.Timer(launch.TimerFilesReady, time.Now())
-		if plan.Paths.SSHReadySocket != "" && !plan.Options.SkipSSHReadyWait {
-			if m.logger != nil {
-				m.logger.Info("waiting for ssh readiness")
-			}
-			if err := m.waitForSSHReady(launchCtx, plan.Paths.SSHReadySocket, processes.Watchers()); err != nil {
+		if plan.Options.RemoteControlEnabled() {
+			if err := m.writeGuestFiles(launchCtx, stats, processes.Watchers()); err != nil {
 				return nil, err
 			}
+		} else if len(plan.Manifest.ResolvedWriteFiles()) > 0 || plan.Manifest.Workspace.MountCWD {
+			return nil, &launch.StageError{Stage: "guest agent", Err: errors.New("guest file writes require remote control (write_files, workspace.mount_cwd)")}
 		}
-		stats.Timer(launch.TimerSSHReady, time.Now())
-		writeBackOnExit = true
+		stats.Timer(launch.TimerFilesReady, time.Now())
+		writeBackOnExit = plan.Options.RemoteControlEnabled()
 	}
 	return started, nil
 }

@@ -1,9 +1,6 @@
 // Package vm holds the consumer-facing types for describing and controlling
 // virtual machines: the neutral Spec a backend launches, and the Guest
 // interface for operating inside a running VM.
-//
-// The package is experimental: the module is untagged v0 and this API may
-// change without notice until it settles (see docs/design/library-api.md).
 package vm
 
 import (

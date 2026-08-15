@@ -138,6 +138,20 @@ func (m *manager) launchWithPlan(ctx context.Context, plan *launch.Plan) (err er
 		joinDeferredError(&err, running.Close)
 		m.writeLaunchStats(running.stats)
 	}()
+	// The ssh-ready gate is a session concern: CLI launches block here so
+	// the SSH hint (or --ssh attach) lands on a reachable guest, while
+	// library starts (StartVM) return as soon as the VM is up.
+	if plan.ResumeState == nil {
+		if plan.Paths.SSHReadySocket != "" {
+			if m.logger != nil {
+				m.logger.Info("waiting for ssh readiness")
+			}
+			if err := m.waitForSSHReady(running.ctx, plan.Paths.SSHReadySocket, running.processes.Watchers()); err != nil {
+				return err
+			}
+		}
+		running.stats.Timer(launch.TimerSSHReady, time.Now())
+	}
 	err = m.waitForRunningLaunch(ctx, running, plan.Options.WaitMode())
 	if launch.IsSavedSuspendExit(err) {
 		return nil

@@ -3,12 +3,8 @@
 // source among many — Specs constructed in Go are equally valid.
 //
 // CLI-only manifest concerns — host [run] helper commands, [ssh] session
-// handling, [notifications] — configure session orchestration, not the VM,
-// and are not surfaced through the library API; the virtle CLI keeps
-// handling them.
-//
-// The package is experimental: the module is untagged v0 and this API may
-// change without notice until it settles (see docs/design/library-api.md).
+// handling, [notifications] — configure session orchestration, not the
+// VM, and stay with the virtle CLI.
 package manifest
 
 import (

@@ -3,9 +3,6 @@
 // into Instance.RemoteControl: BackendWithQGA (the QEMU Guest Agent,
 // equivalent to the virtle CLI today) now, a virtle-native guest daemon
 // variant later.
-//
-// The package is experimental: the module is untagged v0 and this API may
-// change without notice until it settles (see docs/design/library-api.md).
 package qemu
 
 import (
@@ -44,10 +41,19 @@ type Config struct {
 	KVM            *bool             // enable KVM acceleration; default derived per host
 	ExtraArgs      []string          // passthrough QEMU arguments
 	Console        Console
-	Seccomp        bool         // enable QEMU seccomp sandboxing
-	Balloon        bool         // attach a virtio-balloon device (required for ResizeMemory)
-	HostName       string       // guest-visible name; default: "virtle"
-	Logger         *slog.Logger // default: discard
+	Seccomp        bool   // enable QEMU seccomp sandboxing
+	Balloon        bool   // attach a virtio-balloon device (required for ResizeMemory)
+	HostName       string // guest-visible name; default: "virtle"
+
+	// HasRemoteControl declares whether the VM image runs a guest control
+	// agent (qemu-guest-agent for this backend). When false, guest-
+	// dependent features are disabled and RemoteControl reports
+	// errors.ErrUnsupported. The pointer is load-bearing: nil defaults to
+	// true, matching the expectation that most virtle functionality is
+	// built on guest control.
+	HasRemoteControl *bool
+
+	Logger *slog.Logger // default: discard
 }
 
 // BackendWithQGA returns a QEMU backend whose instances' RemoteControl
@@ -88,7 +94,10 @@ func (b *qemuBackend) start(ctx context.Context, spec *vm.Spec, resume manager.R
 	if err != nil {
 		return nil, fmt.Errorf("resolve vm spec: %w", err)
 	}
-	handle, err := manager.StartVM(ctx, mf, manager.StartOptions{Resume: resume}, manager.Config{
+	handle, err := manager.StartVM(ctx, mf, manager.StartOptions{
+		Resume:           resume,
+		HasRemoteControl: b.cfg.HasRemoteControl,
+	}, manager.Config{
 		Logger: logger,
 		// A never-firing signal channel keeps the launch lifecycle from
 		// installing process-global signal handlers: signal policy belongs
@@ -110,6 +119,9 @@ func (i *instance) Wait(ctx context.Context) error { return i.vm.Wait(ctx) }
 func (i *instance) Kill() error { return i.vm.Kill() }
 
 func (i *instance) RemoteControl() (vm.Guest, error) {
+	if !i.vm.RemoteControlEnabled() {
+		return nil, fmt.Errorf("vm has no guest control agent: %w", errors.ErrUnsupported)
+	}
 	return &qgaGuest{vm: i.vm}, nil
 }
 

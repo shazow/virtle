@@ -71,21 +71,8 @@ process environment is available as `.Env` on every surface.
 
 ## Library
 
-Virtle can be used as a Go library, without the CLI. The API is
-experimental (untagged v0) and follows the design in
-[docs/design/library-api.md](docs/design/library-api.md):
-
-- `github.com/shazow/virtle/vm` — consumer-facing types: the neutral
-  `vm.Spec` and the `vm.Guest` interface for operating inside a running VM.
-- `github.com/shazow/virtle/backend` — the implementer contract:
-  `backend.Backend`, `backend.Instance`, and optional capability
-  interfaces (`Suspender`, `MemoryResizer`, `DeviceAttacher`).
-- `github.com/shazow/virtle/backend/qemu` — the QEMU backend;
-  `qemu.BackendWithQGA` wires guest control over the QEMU Guest Agent.
-- `github.com/shazow/virtle/manifest` — loads a TOML/JSON manifest into a
-  `(vm.Spec, backend.Backend)` pair.
-- `github.com/shazow/virtle/units` — typed scalars (`units.Bytes`,
-  `units.Duration`).
+Virtle can be used as a Go library, without the CLI. See the
+[package docs](https://pkg.go.dev/github.com/shazow/virtle).
 
 Boot a VM, run a command, tear down:
 

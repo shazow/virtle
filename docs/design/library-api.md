@@ -198,6 +198,11 @@ here).
 type Suspender interface {
 	Suspend(ctx context.Context, inst Instance, stateDir string) error
 	Resume(ctx context.Context, spec *vm.Spec, stateDir string) (Instance, error)
+
+	// StateVersion reports the backend's suspend-state version token
+	// (e.g. "qemu-v1"); saved state is stamped with it and only an exact
+	// match is resumable.
+	StateVersion() string
 }
 
 // MemoryResizer is implemented by backends that can grow or shrink a

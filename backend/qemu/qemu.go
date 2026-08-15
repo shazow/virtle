@@ -105,7 +105,7 @@ func (b *qemuBackend) hasRemoteControl() bool { return b.cfg.RemoteControl != ni
 // two together.
 const stateVersion = "qemu-v1"
 
-// StateVersion reports the backend's suspend-state version.
+// StateVersion implements backend.Suspender.
 func (b *qemuBackend) StateVersion() string { return stateVersion }
 
 // NewBackendFromDocument is the bridge for the public manifest package:

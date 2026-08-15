@@ -17,6 +17,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/jessevdk/go-flags"
+	"github.com/shazow/virtle/backend"
 	"github.com/shazow/virtle/backend/qemu"
 	"github.com/shazow/virtle/internal/balloon"
 	"github.com/shazow/virtle/internal/manager"
@@ -102,9 +103,9 @@ func runLaunch(options *Options) error {
 	if err != nil {
 		return err
 	}
-	versioner, ok := qemuBackend.(interface{ StateVersion() string })
+	suspender, ok := qemuBackend.(backend.Suspender)
 	if !ok {
-		return fmt.Errorf("qemu backend does not report a suspend state version")
+		return fmt.Errorf("qemu backend does not support suspend state")
 	}
 
 	ctx := context.Background()
@@ -115,7 +116,7 @@ func runLaunch(options *Options) error {
 	vmHandle, err := manager.StartSessionVM(ctx, loaded, manager.StartOptions{
 		Resume: manager.ResumeMode(options.Launch.Resume),
 	}, session, manager.Config{
-		SuspendStateVersion: versioner.StateVersion(),
+		SuspendStateVersion: suspender.StateVersion(),
 	})
 	if err != nil {
 		if manager.IsSavedSuspendExit(err) {

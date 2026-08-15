@@ -18,9 +18,8 @@ func NormalizeResumeMode(mode ResumeMode) (ResumeMode, error) {
 	}
 }
 
-// ResolveResumeState reads and validates saved suspend state.
-// stateVersion is the backend's state version token (e.g. "qemu-v1"); the
-// launch machinery is version-agnostic and only compares for equality.
+// ResolveResumeState reads and validates saved suspend state. Only state
+// whose version token equals stateVersion is resumable.
 func ResolveResumeState(manifest *manifest.Manifest, mode ResumeMode, stateVersion string) (*SuspendState, error) {
 	if mode == ResumeModeNo {
 		return nil, nil

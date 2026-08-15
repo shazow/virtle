@@ -63,12 +63,9 @@ type Spec struct {
 }
 
 type SuspendState struct {
-	// Version marks the suspend-state format with the writing backend's
-	// state version (e.g. "qemu-v1"). The format is backend-owned — the
-	// saved VM state is a QEMU migration stream today — so only equality
-	// matters: a state written by any other backend or version is not
-	// resumable, and the marker turns that into a clear error instead of
-	// a corrupt-state crash. Pre-marker states decode as "".
+	// Version is the state version token stamped at suspend and compared
+	// on resume; only an exact match is resumable. Pre-marker states
+	// decode as "".
 	Version       string    `json:"version"`
 	HostName      string    `json:"hostName"`
 	QMPSocketPath string    `json:"qmpSocketPath"`

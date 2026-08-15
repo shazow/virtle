@@ -44,6 +44,11 @@ type Config struct {
 	Balloon        bool   // attach a virtio-balloon device (required for ResizeMemory)
 	HostName       string // guest-visible name; default: "virtle"
 
+	// HotplugPorts reserves PCIe hotplug ports at boot so devices can be
+	// attached later via backend.DeviceAttacher. Reserving ports forces
+	// the PCI transport (as any hotplug configuration does).
+	HotplugPorts int
+
 	// RemoteControl selects the guest-control transport wired into
 	// Instance.RemoteControl, declaring what the VM image runs. Nil
 	// declares an image with no control agent: guest-dependent features
@@ -222,9 +227,9 @@ func (b *qemuBackend) ResizeMemory(ctx context.Context, inst backend.Instance, s
 }
 
 // Attach implements backend.DeviceAttacher over QMP hotplug. The instance
-// must have PCIe hotplug ports reserved at Start, which today requires a
-// manifest [hotplug] section (manifest.Load backends); ad hoc specs cannot
-// reserve ports yet.
+// must have PCIe hotplug ports reserved at Start: set Config.HotplugPorts
+// (or a manifest [hotplug] section / hotplug.ports for manifest.Load
+// backends).
 func (b *qemuBackend) Attach(ctx context.Context, inst backend.Instance, dev vm.Device) error {
 	i, err := b.ownInstance(inst)
 	if err != nil {

@@ -222,6 +222,13 @@ read_only = false
 # nested 9p table.
 9p.security_model = "mapped"  # Options: mapped, none, passthrough (default: mapped)
 
+[hotplug]
+# Hotplugged PCI devices need root ports created when QEMU starts; virtle
+# reserves one for each device listed below. Set ports to reserve more, leaving
+# room to attach devices the manifest does not describe (for example through
+# the Go library's DeviceAttacher).
+ports = 3  # Default: the number of listed hotplug devices
+
 [[hotplug.mounts]]
 # A hotplugged virtiofs mount uses the same fields as a launch mount, but lives
 # under hotplug.mounts so it is not attached during launch. The mount tag is the

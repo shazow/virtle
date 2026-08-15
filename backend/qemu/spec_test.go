@@ -76,6 +76,23 @@ func TestSpecDocumentQGASocketOverride(t *testing.T) {
 	}
 }
 
+func TestSpecDocumentHotplugPorts(t *testing.T) {
+	doc, err := specDocument(testSpec(), Config{HotplugPorts: 3}, nil)
+	if err != nil {
+		t.Fatalf("specDocument: %v", err)
+	}
+	if got, want := doc.Hotplug.Ports, 3; got != want {
+		t.Errorf("Hotplug.Ports = %d, want %d", got, want)
+	}
+	mf, err := doc.Manifest()
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if got, want := mf.QEMU.Hotplug.PCIEPorts, 3; got != want {
+		t.Errorf("PCIEPorts = %d, want %d", got, want)
+	}
+}
+
 func TestSpecDocumentResolves(t *testing.T) {
 	doc, err := specDocument(testSpec(), Config{}, nil)
 	if err != nil {

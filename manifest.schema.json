@@ -905,6 +905,10 @@
             "additionalProperties": false
           },
           "description": "Network devices available for later hotplug attach or detach."
+        },
+        "ports": {
+          "type": "integer",
+          "description": "Reserve at least this many PCIe hotplug ports; defaults to the number of listed hotplug devices. Extra ports allow devices to be attached that the manifest does not describe."
         }
       },
       "description": "Devices that may be attached or detached after launch.",

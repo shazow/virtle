@@ -229,5 +229,8 @@ func mergeHotplugInput(base HotplugInput, override HotplugInput) HotplugInput {
 	if override.Networks != nil {
 		base.Networks = override.Networks
 	}
+	if override.Ports != 0 {
+		base.Ports = override.Ports
+	}
 	return base
 }

@@ -293,6 +293,7 @@ type RunInput struct {
 type HotplugInput struct {
 	Mounts   MountsInput    `json:"mounts,omitempty" toml:"mounts" jsonschema:"Mount devices available for later hotplug attach or detach."`
 	Networks []NetworkInput `json:"networks,omitempty" toml:"networks" jsonschema:"Network devices available for later hotplug attach or detach."`
+	Ports    int            `json:"ports,omitempty" toml:"ports" jsonschema:"Reserve at least this many PCIe hotplug ports; defaults to the number of listed hotplug devices. Extra ports allow devices to be attached that the manifest does not describe."`
 }
 
 func (h HotplugInput) Len() int {

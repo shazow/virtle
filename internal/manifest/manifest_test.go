@@ -2725,3 +2725,54 @@ func setXDGTestRuntimeDir(t *testing.T, runtimeDir string) {
 		xdg.Reload()
 	})
 }
+
+func TestDocumentHotplugPortsReservesExtraPCIEPorts(t *testing.T) {
+	document := validDocument()
+	document.Hotplug = HotplugInput{Ports: 2}
+
+	manifest, err := document.Manifest()
+	if err != nil {
+		t.Fatalf("resolve manifest: %v", err)
+	}
+	if got, want := manifest.QEMU.Hotplug.PCIEPorts, 2; got != want {
+		t.Fatalf("unexpected pcie ports: got %d want %d", got, want)
+	}
+	// Reserved ports alone must force the PCI transport, exactly as listed
+	// hotplug devices do.
+	if got, want := manifest.QEMU.Devices.RNG.Transport, "pci"; got != want {
+		t.Fatalf("unexpected transport: got %q want %q", got, want)
+	}
+}
+
+func TestDocumentHotplugPortsBelowDeviceCountKeepsDeviceCount(t *testing.T) {
+	document := validDocument()
+	document.Mounts = nil
+	document.Hotplug = HotplugInput{
+		Ports: 1,
+		Mounts: MountsInput{
+			VirtioFSMountInput{
+				MountInput: MountInput{Tag: "a", SourcePath: "shares/a"},
+			},
+			VirtioFSMountInput{
+				MountInput: MountInput{Tag: "b", SourcePath: "shares/b"},
+			},
+		},
+	}
+
+	manifest, err := document.Manifest()
+	if err != nil {
+		t.Fatalf("resolve manifest: %v", err)
+	}
+	if got, want := manifest.QEMU.Hotplug.PCIEPorts, 2; got != want {
+		t.Fatalf("unexpected pcie ports: got %d want %d", got, want)
+	}
+}
+
+func TestDocumentHotplugPortsRejectsNegative(t *testing.T) {
+	document := validDocument()
+	document.Hotplug = HotplugInput{Ports: -1}
+
+	if _, err := document.Manifest(); err == nil || !strings.Contains(err.Error(), "hotplug.ports must not be negative") {
+		t.Fatalf("expected negative ports error, got %v", err)
+	}
+}

@@ -17,6 +17,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/jessevdk/go-flags"
+	"github.com/shazow/virtle/backend/qemu"
 	"github.com/shazow/virtle/internal/balloon"
 	"github.com/shazow/virtle/internal/manager"
 	"github.com/shazow/virtle/internal/manager/control"
@@ -92,11 +93,20 @@ func runLaunch(options *Options) error {
 		return err
 	}
 
-	// Start and session are separate seams: StartSessionVM boots the VM
-	// with CLI semantics (resume modes, --ssh preflight, signal handlers),
-	// RunSession runs the foreground session on the handle. The backend
-	// knows nothing about sessions; the CLI drives them directly until the
-	// manager machinery folds into backend/qemu.
+	// The CLI launches the qemu backend. Backend-owned facts — the suspend
+	// state version stamped on saves and compared on resume — come from
+	// the backend as the single source of truth, while start and session
+	// run on the manager machinery directly until it folds into the
+	// backend.
+	qemuBackend, err := qemu.New(qemu.Config{RemoteControl: qemu.QGA{}})
+	if err != nil {
+		return err
+	}
+	versioner, ok := qemuBackend.(interface{ StateVersion() string })
+	if !ok {
+		return fmt.Errorf("qemu backend does not report a suspend state version")
+	}
+
 	ctx := context.Background()
 	session := manager.SessionOptions{
 		SSH:           options.Launch.SSH,
@@ -104,7 +114,9 @@ func runLaunch(options *Options) error {
 	}
 	vmHandle, err := manager.StartSessionVM(ctx, loaded, manager.StartOptions{
 		Resume: manager.ResumeMode(options.Launch.Resume),
-	}, session)
+	}, session, manager.Config{
+		SuspendStateVersion: versioner.StateVersion(),
+	})
 	if err != nil {
 		if manager.IsSavedSuspendExit(err) {
 			return nil

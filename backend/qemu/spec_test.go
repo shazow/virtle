@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/shazow/virtle/internal/manager"
 	imanifest "github.com/shazow/virtle/internal/manifest"
 	"github.com/shazow/virtle/units"
 	"github.com/shazow/virtle/vm"
@@ -195,14 +194,5 @@ func TestHotplugDeviceMapping(t *testing.T) {
 	}
 	if len(fwd.Net.Forward) != 1 || fwd.Net.Forward[0].Proto != "tcp" {
 		t.Errorf("forward device = %+v", fwd)
-	}
-}
-
-func TestStateVersionMatchesManagerDefault(t *testing.T) {
-	// CLI launches run the manager machinery directly, so its default
-	// suspend-state version must match this backend's until the manager
-	// folds into this package.
-	if got, want := manager.DefaultConfig().SuspendStateVersion, stateVersion; got != want {
-		t.Fatalf("manager default suspend state version = %q, backend stateVersion = %q", got, want)
 	}
 }

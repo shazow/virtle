@@ -36,6 +36,5 @@ func DefaultConfig() Config {
 		QMPConnectTimeout:   defaultQMPConnectTimeout,
 		QMPQuitTimeout:      defaultQMPQuitTimeout,
 		QMPMigrationTimeout: defaultQMPMigrationTimeout,
-		SuspendStateVersion: defaultSuspendStateVersion,
 	}
 }

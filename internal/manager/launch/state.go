@@ -17,7 +17,6 @@ import (
 
 const defaultStateWaitTimeout = 500 * time.Millisecond
 
-
 func SuspendStatePath(manifest *manifest.Manifest) string {
 	return filepath.Join(manifest.ResolvedPersistenceStateDir(), manifest.Identity.HostName+".suspend.json")
 }

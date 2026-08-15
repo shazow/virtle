@@ -2728,7 +2728,7 @@ func setXDGTestRuntimeDir(t *testing.T, runtimeDir string) {
 
 func TestDocumentHotplugPortsReservesExtraPCIEPorts(t *testing.T) {
 	document := validDocument()
-	document.Hotplug = HotplugInput{Ports: 2}
+	document.QEMU.HotplugPorts = 2
 
 	manifest, err := document.Manifest()
 	if err != nil {
@@ -2747,8 +2747,8 @@ func TestDocumentHotplugPortsReservesExtraPCIEPorts(t *testing.T) {
 func TestDocumentHotplugPortsBelowDeviceCountKeepsDeviceCount(t *testing.T) {
 	document := validDocument()
 	document.Mounts = nil
+	document.QEMU.HotplugPorts = 1
 	document.Hotplug = HotplugInput{
-		Ports: 1,
 		Mounts: MountsInput{
 			VirtioFSMountInput{
 				MountInput: MountInput{Tag: "a", SourcePath: "shares/a"},
@@ -2770,9 +2770,9 @@ func TestDocumentHotplugPortsBelowDeviceCountKeepsDeviceCount(t *testing.T) {
 
 func TestDocumentHotplugPortsRejectsNegative(t *testing.T) {
 	document := validDocument()
-	document.Hotplug = HotplugInput{Ports: -1}
+	document.QEMU.HotplugPorts = -1
 
-	if _, err := document.Manifest(); err == nil || !strings.Contains(err.Error(), "hotplug.ports must not be negative") {
+	if _, err := document.Manifest(); err == nil || !strings.Contains(err.Error(), "hotplug_ports must not be negative") {
 		t.Fatalf("expected negative ports error, got %v", err)
 	}
 }

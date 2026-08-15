@@ -81,8 +81,8 @@ func TestSpecDocumentHotplugPorts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("specDocument: %v", err)
 	}
-	if got, want := doc.Hotplug.Ports, 3; got != want {
-		t.Errorf("Hotplug.Ports = %d, want %d", got, want)
+	if got, want := doc.QEMU.HotplugPorts, 3; got != want {
+		t.Errorf("QEMU.HotplugPorts = %d, want %d", got, want)
 	}
 	mf, err := doc.Manifest()
 	if err != nil {

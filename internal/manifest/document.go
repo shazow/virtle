@@ -53,6 +53,7 @@ type QEMUInput struct {
 	GuestDefaultTimeout units.Duration    `json:"guest_default_timeout,omitempty" toml:"guest_default_timeout" default:"30s" jsonschema:"Timeout for guest agent commands virtle issues itself such as file writes and workspace mounts. Guest-exec requests sent through the control socket carry their own timeout. Zero disables the timeout."`
 	ShutdownExec        []string          `json:"shutdown_exec,omitempty" toml:"shutdown_exec" jsonschema:"Optional guest command tuple invoked through QGA to shut down the VM gracefully."`
 	ShutdownTimeout     units.Duration    `json:"shutdown_timeout,omitempty" toml:"shutdown_timeout" default:"90s" jsonschema:"Duration to wait for graceful shutdown before forcing QEMU to quit"`
+	HotplugPorts        int               `json:"hotplug_ports,omitempty" toml:"hotplug_ports" jsonschema:"Reserve at least this many PCIe hotplug root ports; defaults to the number of listed hotplug devices. Extra ports allow devices to be attached that the manifest does not describe."`
 }
 
 type MachineInput struct {
@@ -293,7 +294,6 @@ type RunInput struct {
 type HotplugInput struct {
 	Mounts   MountsInput    `json:"mounts,omitempty" toml:"mounts" jsonschema:"Mount devices available for later hotplug attach or detach."`
 	Networks []NetworkInput `json:"networks,omitempty" toml:"networks" jsonschema:"Network devices available for later hotplug attach or detach."`
-	Ports    int            `json:"ports,omitempty" toml:"ports" jsonschema:"Reserve at least this many PCIe hotplug ports; defaults to the number of listed hotplug devices. Extra ports allow devices to be attached that the manifest does not describe."`
 }
 
 func (h HotplugInput) Len() int {

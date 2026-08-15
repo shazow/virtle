@@ -22,6 +22,11 @@ const defaultStateWaitTimeout = 500 * time.Millisecond
 // depends on) changes incompatibly.
 const SuspendStateVersion = 1
 
+// SuspendStateBackend is the backend this launch machinery writes and
+// resumes suspend state for. The saved VM state is a QEMU migration
+// stream; another backend's state is a different format entirely.
+const SuspendStateBackend = "qemu"
+
 func SuspendStatePath(manifest *manifest.Manifest) string {
 	return filepath.Join(manifest.ResolvedPersistenceStateDir(), manifest.Identity.HostName+".suspend.json")
 }
@@ -37,6 +42,9 @@ func LaunchPIDPath(manifest *manifest.Manifest) string {
 func WriteSuspendStateData(manifest *manifest.Manifest, state SuspendState) error {
 	if state.Version == 0 {
 		state.Version = SuspendStateVersion
+	}
+	if state.Backend == "" {
+		state.Backend = SuspendStateBackend
 	}
 	if state.HostName == "" {
 		state.HostName = manifest.Identity.HostName

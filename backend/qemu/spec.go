@@ -126,8 +126,8 @@ func specDocument(spec *vm.Spec, cfg Config, base *imanifest.Document) (imanifes
 	if qga, ok := cfg.RemoteControl.(QGA); ok && qga.SocketPath != "" {
 		doc.QEMU.GuestAgentSocket = qga.SocketPath
 	}
-	if cfg.HotplugPorts > doc.Hotplug.Ports {
-		doc.Hotplug.Ports = cfg.HotplugPorts
+	if cfg.HotplugPorts > doc.QEMU.HotplugPorts {
+		doc.QEMU.HotplugPorts = cfg.HotplugPorts
 	}
 
 	if err := applySpecDevices(&doc, spec); err != nil {

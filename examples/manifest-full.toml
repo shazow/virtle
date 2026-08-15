@@ -78,7 +78,11 @@ shutdown_exec = ["/bin/sh", "-c", "poweroff"]
 shutdown_timeout = "90s"  # Default: "90s"; "0" skips the wait
 
 # Hotplugged PCI devices need root ports created when QEMU starts. virtle
-# automatically allocates one port for each entry under [hotplug].
+# automatically allocates one port for each entry under [hotplug]. Set
+# hotplug_ports to reserve more, leaving room to attach devices the manifest
+# does not describe (for example through the Go library's DeviceAttacher).
+# Port-based reservation is QEMU-specific, so the knob lives here.
+hotplug_ports = 3  # Default: the number of listed hotplug devices
 
 [machine]
 # The machine profile is the backend-neutral VM shape virtle should run. For
@@ -221,13 +225,6 @@ read_only = false
 # 9p filesystem security policy is backend-specific, so it lives under the
 # nested 9p table.
 9p.security_model = "mapped"  # Options: mapped, none, passthrough (default: mapped)
-
-[hotplug]
-# Hotplugged PCI devices need root ports created when QEMU starts; virtle
-# reserves one for each device listed below. Set ports to reserve more, leaving
-# room to attach devices the manifest does not describe (for example through
-# the Go library's DeviceAttacher).
-ports = 3  # Default: the number of listed hotplug devices
 
 [[hotplug.mounts]]
 # A hotplugged virtiofs mount uses the same fields as a launch mount, but lives

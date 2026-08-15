@@ -68,8 +68,8 @@ func (d Document) ManifestWithOptions(options ResolveOptions) (*Manifest, error)
 	m.Persistence.Directories = persistenceDirectories(imageMounts, m.Persistence.StateDir)
 	m.Paths.LockPath = filepath.Join(m.Persistence.StateDir, m.Identity.HostName+".lock")
 	m.Paths.RuntimeDir = RuntimeDir{Mode: RuntimeDirPath, Path: m.Persistence.StateDir}
-	if d.Hotplug.Ports < 0 {
-		return nil, fmt.Errorf("manifest.hotplug.ports must not be negative, got %d", d.Hotplug.Ports)
+	if d.QEMU.HotplugPorts < 0 {
+		return nil, fmt.Errorf("manifest.qemu.hotplug_ports must not be negative, got %d", d.QEMU.HotplugPorts)
 	}
 	hotplugCount := d.hotplugCount()
 	qemu, err := d.resolveQEMU(host, m.Identity.HostName, m.Paths.WorkingDir, m.Persistence.StateDir, hotplugCount)
@@ -238,11 +238,12 @@ func resolveCPUCount(cpus int) CPUCount {
 	return ExplicitCPUs(cpus)
 }
 
-// hotplugCount returns the number of PCIe hotplug ports to reserve: the
-// listed hotplug devices, or hotplug.ports when it reserves more (extra
-// ports allow attaching devices the manifest does not describe).
+// hotplugCount returns the number of PCIe hotplug root ports to reserve:
+// the listed hotplug devices, or qemu.hotplug_ports when it reserves more
+// (extra ports allow attaching devices the manifest does not describe).
+// Port-based reservation is QEMU-specific, hence the [qemu] table.
 func (d Document) hotplugCount() int {
-	return max(d.Hotplug.Len(), d.Hotplug.Ports)
+	return max(d.Hotplug.Len(), d.QEMU.HotplugPorts)
 }
 
 func qemuTransport(machineType string, mounts MountsInput, graphics QEMUGraphics, requirePCI bool) string {

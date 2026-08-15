@@ -39,9 +39,15 @@ func ResolveResumeState(manifest *manifest.Manifest, mode ResumeMode) (*SuspendS
 		}
 		return nil, fmt.Errorf("suspend state %q has status %q, not saved; run virtle suspend first", SuspendStatePath(manifest), state.Status)
 	}
-	// A version mismatch errors even in auto mode: silently booting fresh
-	// would abandon the suspended session, which is exactly the surprise
-	// the marker exists to prevent.
+	// Backend and version mismatches error even in auto mode: silently
+	// booting fresh would abandon the suspended session, which is exactly
+	// the surprise the markers exist to prevent. The backend check runs
+	// first — a foreign backend's state is the more fundamental mismatch.
+	if state.Backend != "" && state.Backend != SuspendStateBackend {
+		return nil, fmt.Errorf(
+			"suspend state %q was written by the %q backend and cannot be resumed by the %q backend; resume with that backend or discard the state",
+			SuspendStatePath(manifest), state.Backend, SuspendStateBackend)
+	}
 	if state.Version != SuspendStateVersion {
 		return nil, fmt.Errorf(
 			"suspend state %q was written by a different virtle (state version %d, this virtle resumes version %d); resume with that version or discard the state with --resume=no and a fresh suspend",

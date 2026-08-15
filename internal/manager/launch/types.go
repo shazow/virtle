@@ -63,6 +63,11 @@ type Spec struct {
 }
 
 type SuspendState struct {
+	// Version marks the suspend-state format. States written by a virtle
+	// with a different version are not resumable; the marker turns that
+	// into a clear error instead of a corrupt-state crash. Pre-marker
+	// states decode as version 0.
+	Version       int       `json:"version"`
 	HostName      string    `json:"hostName"`
 	QMPSocketPath string    `json:"qmpSocketPath"`
 	VMStatePath   string    `json:"vmStatePath,omitempty"`

@@ -17,6 +17,11 @@ import (
 
 const defaultStateWaitTimeout = 500 * time.Millisecond
 
+// SuspendStateVersion is the suspend-state format this virtle writes and
+// resumes. Bump it when the state format (or the QEMU migration wiring it
+// depends on) changes incompatibly.
+const SuspendStateVersion = 1
+
 func SuspendStatePath(manifest *manifest.Manifest) string {
 	return filepath.Join(manifest.ResolvedPersistenceStateDir(), manifest.Identity.HostName+".suspend.json")
 }
@@ -30,6 +35,9 @@ func LaunchPIDPath(manifest *manifest.Manifest) string {
 }
 
 func WriteSuspendStateData(manifest *manifest.Manifest, state SuspendState) error {
+	if state.Version == 0 {
+		state.Version = SuspendStateVersion
+	}
 	if state.HostName == "" {
 		state.HostName = manifest.Identity.HostName
 	}

@@ -39,6 +39,14 @@ func ResolveResumeState(manifest *manifest.Manifest, mode ResumeMode) (*SuspendS
 		}
 		return nil, fmt.Errorf("suspend state %q has status %q, not saved; run virtle suspend first", SuspendStatePath(manifest), state.Status)
 	}
+	// A version mismatch errors even in auto mode: silently booting fresh
+	// would abandon the suspended session, which is exactly the surprise
+	// the marker exists to prevent.
+	if state.Version != SuspendStateVersion {
+		return nil, fmt.Errorf(
+			"suspend state %q was written by a different virtle (state version %d, this virtle resumes version %d); resume with that version or discard the state with --resume=no and a fresh suspend",
+			SuspendStatePath(manifest), state.Version, SuspendStateVersion)
+	}
 	if state.CID <= 0 {
 		if mode == ResumeModeAuto {
 			return nil, nil

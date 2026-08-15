@@ -94,15 +94,19 @@ type qemuBackend struct {
 
 func (b *qemuBackend) hasRemoteControl() bool { return b.cfg.RemoteControl != nil }
 
-// StateVersion is the qemu backend's suspend-state version. Suspend state
+// stateVersion is the qemu backend's suspend-state version. Suspend state
 // is stamped with it and resume compares it before loading: the saved VM
 // state is a backend-owned format (a QEMU migration stream), so state
 // written by any other backend or format revision is not resumable. Bump
 // the revision when the format changes incompatibly.
-const StateVersion = "qemu-v1"
+//
+// The manager's DefaultConfig carries the same token for CLI launches
+// until the manager machinery folds into this package; a test pins the
+// two together.
+const stateVersion = "qemu-v1"
 
-// Version reports the backend's state version; see StateVersion.
-func (b *qemuBackend) Version() string { return StateVersion }
+// StateVersion reports the backend's suspend-state version.
+func (b *qemuBackend) StateVersion() string { return stateVersion }
 
 // NewBackendFromDocument is the bridge for the public manifest package:
 // the returned backend starts from the loaded document, preserving
@@ -152,7 +156,7 @@ func (b *qemuBackend) start(ctx context.Context, spec *vm.Spec, resume manager.R
 		HasRemoteControl: b.hasRemoteControl(),
 	}, manager.Config{
 		Logger:              b.logger(),
-		SuspendStateVersion: StateVersion,
+		SuspendStateVersion: stateVersion,
 	})
 	if err != nil {
 		return nil, err

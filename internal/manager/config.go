@@ -30,11 +30,16 @@ type Config struct {
 	Signals             <-chan os.Signal
 	PIDSignaler         launch.PIDSignaler
 	Notifier            launch.NotificationSink
-	// SuspendStateVersion is the backend's state version token (e.g.
-	// qemu.StateVersion) stamped on saved suspend state and compared on
-	// resume.
+	// SuspendStateVersion is the backend's state version token stamped on
+	// saved suspend state and compared on resume.
 	SuspendStateVersion string
 }
+
+// defaultSuspendStateVersion matches backend/qemu's stateVersion for CLI
+// launches, which run this manager machinery directly; a backend/qemu
+// test pins the two together. The duplication dissolves when the manager
+// folds into backend/qemu.
+const defaultSuspendStateVersion = "qemu-v1"
 
 func mergeConfig(base Config, override Config) Config {
 	if override.Locker != nil {

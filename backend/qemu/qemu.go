@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 
 	"github.com/shazow/virtle/backend"
 	"github.com/shazow/virtle/internal/hotplug"
@@ -107,26 +106,29 @@ func (b *qemuBackend) Start(ctx context.Context, spec *vm.Spec) (backend.Instanc
 	return b.start(ctx, spec, manager.ResumeModeNo)
 }
 
+func (b *qemuBackend) logger() *slog.Logger {
+	if b.cfg.Logger != nil {
+		return b.cfg.Logger
+	}
+	return slog.New(slog.DiscardHandler)
+}
+
 // resolveSpec lowers the spec (plus any base document) through the manifest
 // resolution pipeline.
-func (b *qemuBackend) resolveSpec(spec *vm.Spec) (*imanifest.Manifest, *slog.Logger, error) {
+func (b *qemuBackend) resolveSpec(spec *vm.Spec) (*imanifest.Manifest, error) {
 	doc, err := specDocument(spec, b.cfg, b.doc)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	logger := b.cfg.Logger
-	if logger == nil {
-		logger = slog.New(slog.DiscardHandler)
-	}
-	mf, err := doc.ManifestWithOptions(imanifest.ResolveOptions{Logger: logger})
+	mf, err := doc.ManifestWithOptions(imanifest.ResolveOptions{Logger: b.logger()})
 	if err != nil {
-		return nil, nil, fmt.Errorf("resolve vm spec: %w", err)
+		return nil, fmt.Errorf("resolve vm spec: %w", err)
 	}
-	return mf, logger, nil
+	return mf, nil
 }
 
 func (b *qemuBackend) start(ctx context.Context, spec *vm.Spec, resume manager.ResumeMode) (backend.Instance, error) {
-	mf, logger, err := b.resolveSpec(spec)
+	mf, err := b.resolveSpec(spec)
 	if err != nil {
 		return nil, err
 	}
@@ -134,11 +136,7 @@ func (b *qemuBackend) start(ctx context.Context, spec *vm.Spec, resume manager.R
 		Resume:           resume,
 		HasRemoteControl: b.hasRemoteControl(),
 	}, manager.Config{
-		Logger: logger,
-		// A never-firing signal channel keeps the launch lifecycle from
-		// installing process-global signal handlers: signal policy belongs
-		// to the embedding program, not the library.
-		Signals: make(chan os.Signal),
+		Logger: b.logger(),
 	})
 	if err != nil {
 		return nil, err

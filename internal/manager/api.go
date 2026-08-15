@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -33,6 +34,13 @@ func StartVM(ctx context.Context, mf *manifest.Manifest, options StartOptions, c
 	config := DefaultConfig()
 	if len(configs) > 0 {
 		config = mergeConfig(config, configs[0])
+	}
+	// Library starts install no process-global signal handlers — signal
+	// policy belongs to the embedding program. A never-firing channel
+	// keeps the launch lifecycle from claiming SIGINT/SIGTSTP/...;
+	// Config.Signals may supply a real channel to opt in.
+	if config.Signals == nil {
+		config.Signals = make(chan os.Signal)
 	}
 	m := newManagerFromConfig(config)
 	v, err := m.startVM(ctx, launch.Spec{Manifest: mf, Options: launch.Options{
@@ -197,14 +205,8 @@ func (v *VM) close() error {
 	return v.closeErr
 }
 
-// CID returns the vsock CID allocated to the VM.
-func (v *VM) CID() int { return v.running.plan.CID }
-
 // StateDir returns the resolved persistence state directory.
 func (v *VM) StateDir() string { return v.running.plan.Paths.StateDir }
-
-// GuestAgentSocketPath returns the host path of the guest agent socket.
-func (v *VM) GuestAgentSocketPath() string { return v.running.plan.Paths.GuestAgentSocket }
 
 // DialGuestAgent waits for guest agent readiness and returns a connected
 // client. The caller owns the client and must Disconnect it.

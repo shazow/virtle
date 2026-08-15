@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/shazow/virtle/internal/balloon"
 	"github.com/shazow/virtle/internal/hotplug"
@@ -29,18 +30,37 @@ type StartOptions struct {
 // supervision, QMP readiness, guest file writes, the control socket, and
 // the balloon controller run as they do for CLI launches.
 func StartVM(ctx context.Context, mf *manifest.Manifest, options StartOptions, configs ...Config) (*VM, error) {
-	if options.Resume == "" {
-		options.Resume = ResumeModeNo
-	}
 	config := DefaultConfig()
 	if len(configs) > 0 {
 		config = mergeConfig(config, configs[0])
 	}
 	m := newManagerFromConfig(config)
-	plan, err := m.planLaunch(launch.Spec{Manifest: mf, Options: launch.Options{
+	v, err := m.startVM(ctx, launch.Spec{Manifest: mf, Options: launch.Options{
 		Resume:           options.Resume,
 		HasRemoteControl: options.HasRemoteControl,
 	}})
+	if err != nil {
+		return nil, err
+	}
+	// Library starts have no session phase, so a successful Start is the
+	// point the restored suspend state stops being resumable. CLI sessions
+	// remove it later, once the session is established.
+	if v.running.plan.ResumeState != nil {
+		if err := removeRestoredSuspendState(v.running.plan); err != nil {
+			return nil, errors.Join(err, v.Close())
+		}
+	}
+	return v, nil
+}
+
+// startVM plans and starts a launch, returning the VM handle. Both the
+// library path (StartVM) and the CLI path (LaunchWithOptions) go through
+// here; queued-suspend saves surface as launch.ErrSavedSuspendExit.
+func (m *manager) startVM(ctx context.Context, spec launch.Spec) (*VM, error) {
+	if spec.Options.Resume == "" {
+		spec.Options.Resume = ResumeModeNo
+	}
+	plan, err := m.planLaunch(spec)
 	if err != nil {
 		return nil, err
 	}
@@ -48,15 +68,77 @@ func StartVM(ctx context.Context, mf *manifest.Manifest, options StartOptions, c
 	if err != nil {
 		return nil, err
 	}
-	if task := balloon.ControllerTask(running.qmp, plan.Manifest.QEMU.Devices.Balloon, plan.Notifier); task != nil {
-		running.processes.StartTasks(running.ctx, task)
-	}
-	if plan.ResumeState != nil {
-		if err := removeRestoredSuspendState(plan); err != nil {
-			return nil, errors.Join(err, running.Close())
-		}
-	}
 	return &VM{m: m, running: running}, nil
+}
+
+// StartSessionVM starts a VM with CLI session semantics: the session
+// options participate in preflight validation (an --ssh launch against a
+// manifest with no ssh.exec fails before anything boots), and process
+// signal handlers are installed unless Config.Signals overrides them. It
+// is the bridge the CLI reaches through backend/qemu; pair it with
+// RunSession.
+func StartSessionVM(ctx context.Context, mf *manifest.Manifest, options StartOptions, session SessionOptions, configs ...Config) (*VM, error) {
+	config := DefaultConfig()
+	if len(configs) > 0 {
+		config = mergeConfig(config, configs[0])
+	}
+	m := newManagerFromConfig(config)
+	return m.startVM(ctx, launch.Spec{Manifest: mf, RemoteCommand: session.RemoteCommand, Options: launch.Options{
+		Resume:           options.Resume,
+		SSH:              session.SSH,
+		HasRemoteControl: true, // CLI guests are expected to run qemu-guest-agent
+	}})
+}
+
+// IsSavedSuspendExit reports whether err is the sentinel for a launch that
+// ended by saving a suspend — a success for session purposes.
+func IsSavedSuspendExit(err error) bool { return launch.IsSavedSuspendExit(err) }
+
+// SessionOptions configures the CLI foreground session on a started VM.
+type SessionOptions struct {
+	SSH           bool     // attach the interactive SSH session loop
+	RemoteCommand []string // remote command for the SSH session
+}
+
+// RunSession runs the CLI foreground session on a started VM: the
+// ssh-ready gate on fresh boots, then either the interactive SSH attach
+// loop (with autoprovision and retries) or the connect hint plus the VM
+// wait, with suspend-on-signal handling throughout. RunSession owns the
+// VM: it is closed when the session ends, and a session that ends in a
+// saved suspend reports success.
+func RunSession(ctx context.Context, v *VM, opts SessionOptions) (err error) {
+	m, running := v.m, v.running
+	plan := running.plan
+	if opts.SSH && len(plan.Manifest.SSH.Argv) == 0 {
+		return errors.Join(fmt.Errorf("--ssh requires a non-empty manifest.ssh.exec"), v.Close())
+	}
+	plan.RemoteCommand = append([]string(nil), opts.RemoteCommand...)
+	defer func() {
+		joinDeferredError(&err, v.close)
+	}()
+	// The ssh-ready gate is a session concern: the session blocks here so
+	// the SSH hint (or the attach loop) lands on a reachable guest, while
+	// bare StartVM callers return as soon as the VM is up.
+	if plan.ResumeState == nil {
+		if plan.Paths.SSHReadySocket != "" {
+			if m.logger != nil {
+				m.logger.Info("waiting for ssh readiness")
+			}
+			if err := m.waitForSSHReady(running.ctx, plan.Paths.SSHReadySocket, running.processes.Watchers()); err != nil {
+				return err
+			}
+		}
+		running.stats.Timer(launch.TimerSSHReady, time.Now())
+	}
+	mode := launch.WaitVM
+	if opts.SSH {
+		mode = launch.WaitSSH
+	}
+	err = m.waitForRunningLaunch(ctx, running, mode)
+	if launch.IsSavedSuspendExit(err) {
+		return nil
+	}
+	return err
 }
 
 // VM is a running virtual machine started by StartVM. It stays alive until

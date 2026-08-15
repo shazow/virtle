@@ -38,7 +38,7 @@ func (m *manager) waitForRunningLaunch(ctx context.Context, running *runningLaun
 		waitCtx = running.ctx
 	}
 	waitPlan := launch.PlanForWaitMode(running.plan, mode)
-	err := m.waitForLaunchForeground(waitCtx, waitPlan, running.stats, running.qmp, running.lifecycle, running.suspendHandler, running.processes)
+	err := m.waitForLaunchForeground(waitCtx, waitPlan, running.stats, running.lifecycle, running.suspendHandler, running.processes)
 	if err != nil && launch.IsSavedSuspendExit(err) && running.runtime != nil {
 		running.runtime.MarkSavedSuspend()
 	}

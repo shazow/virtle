@@ -107,10 +107,26 @@ func (b *qemuBackend) Start(ctx context.Context, spec *vm.Spec) (backend.Instanc
 	return b.start(ctx, spec, manager.ResumeModeNo)
 }
 
-func (b *qemuBackend) start(ctx context.Context, spec *vm.Spec, resume manager.ResumeMode) (backend.Instance, error) {
-	doc, err := specDocument(spec, b.cfg, b.doc)
+// StartSession is the module-internal bridge for the virtle CLI: it lowers
+// the document/spec exactly like Start, but starts the VM with CLI session
+// semantics (resume modes including auto, --ssh preflight validation,
+// process signal handlers installed) and hands back the manager handle for
+// manager.RunSession. Reached by interface assertion on the unexported
+// backend type; not part of the supported API.
+func (b *qemuBackend) StartSession(ctx context.Context, spec *vm.Spec, start manager.StartOptions, session manager.SessionOptions) (*manager.VM, error) {
+	mf, logger, err := b.resolveSpec(spec)
 	if err != nil {
 		return nil, err
+	}
+	return manager.StartSessionVM(ctx, mf, start, session, manager.Config{Logger: logger})
+}
+
+// resolveSpec lowers the spec (plus any base document) through the manifest
+// resolution pipeline.
+func (b *qemuBackend) resolveSpec(spec *vm.Spec) (*imanifest.Manifest, *slog.Logger, error) {
+	doc, err := specDocument(spec, b.cfg, b.doc)
+	if err != nil {
+		return nil, nil, err
 	}
 	logger := b.cfg.Logger
 	if logger == nil {
@@ -118,7 +134,15 @@ func (b *qemuBackend) start(ctx context.Context, spec *vm.Spec, resume manager.R
 	}
 	mf, err := doc.ManifestWithOptions(imanifest.ResolveOptions{Logger: logger})
 	if err != nil {
-		return nil, fmt.Errorf("resolve vm spec: %w", err)
+		return nil, nil, fmt.Errorf("resolve vm spec: %w", err)
+	}
+	return mf, logger, nil
+}
+
+func (b *qemuBackend) start(ctx context.Context, spec *vm.Spec, resume manager.ResumeMode) (backend.Instance, error) {
+	mf, logger, err := b.resolveSpec(spec)
+	if err != nil {
+		return nil, err
 	}
 	handle, err := manager.StartVM(ctx, mf, manager.StartOptions{
 		Resume:           resume,

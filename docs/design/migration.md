@@ -32,13 +32,21 @@ Target: identical commands, flags, output, and exit codes. The CLI's
 implementation moves from `internal/manager` onto the public API — it
 becomes the first consumer:
 
-- `launch` → `manifest.Load` → `Backend.Start` → `Instance` +
-  `RemoteControl()` for guest setup, plus CLI-layer session handling (SSH,
-  host `[run]` processes, notifications, control socket).
-- `suspend` → assert `backend.Suspender`, call `Suspend`.
-- `hotplug` → assert `backend.DeviceAttacher`.
+- `launch` → manifest document → qemu backend → started instance, with the
+  session layer (SSH attach loop, ssh-ready gate, suspend-on-signal,
+  stats) running on the handle. **Done**: `runLaunch` composes the
+  document-backed backend with `manager.RunSession`, and the legacy
+  blocking entrypoint is reimplemented on the same start + session pieces
+  so the existing launch test suite exercises the rewired path.
+- `suspend` / `hotplug` / `rpc` → stay **control-socket clients**, by
+  design rather than migration debt: these commands run out-of-process
+  and talk to an already-running session, so there is no backend instance
+  to assert `backend.Suspender` / `backend.DeviceAttacher` on. The
+  capability interfaces are the *in-process* dispatch: the running
+  session's control server routes onto them.
 - `manifest *` subcommands → `manifest` package (decode/defaults/validate/
-  schema exactly as today).
+  schema exactly as today); lands with the `internal/manifest`
+  consolidation (see §7 note).
 
 **New:** `virtle guest` subcommand — runs the guest daemon
 (`guest.Serve`) inside a VM. Additive; no existing command changes.

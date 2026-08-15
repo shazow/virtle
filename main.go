@@ -17,11 +17,13 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/jessevdk/go-flags"
+	"github.com/shazow/virtle/backend/qemu"
 	"github.com/shazow/virtle/internal/balloon"
 	"github.com/shazow/virtle/internal/manager"
 	"github.com/shazow/virtle/internal/manager/control"
 	"github.com/shazow/virtle/internal/manifest"
 	manifestschema "github.com/shazow/virtle/internal/manifest/schema"
+	"github.com/shazow/virtle/vm"
 )
 
 type Options struct {
@@ -69,6 +71,12 @@ const extraHelp = `Run 'virtle <command> --help' for more information on a comma
 Project repository: https://github.com/shazow/virtle
 `
 
+// sessionStarter is the module-internal bridge backend/qemu exposes for
+// CLI launches; see qemuBackend.StartSession.
+type sessionStarter interface {
+	StartSession(ctx context.Context, spec *vm.Spec, start manager.StartOptions, session manager.SessionOptions) (*manager.VM, error)
+}
+
 func runLaunch(options *Options) error {
 	if len(options.Launch.Args.RemoteCommand) > 0 && !options.Launch.SSH {
 		return fmt.Errorf("remote command arguments require --ssh")
@@ -76,27 +84,46 @@ func runLaunch(options *Options) error {
 
 	baseLogger := slog.Default()
 	discardLogger := slog.New(slog.DiscardHandler)
-	manifestLogger := discardLogger
+	managerLogger := discardLogger
 	manager.SetLogger(discardLogger)
 	balloon.SetLogger(discardLogger)
 	if len(options.Verbose) > 0 {
-		manifestLogger = baseLogger.With("package", "manifest")
-		manager.SetLogger(baseLogger.With("package", "manager"))
+		managerLogger = baseLogger.With("package", "manager")
+		manager.SetLogger(managerLogger)
 	}
 	if len(options.Verbose) > 1 {
 		balloon.SetLogger(baseLogger.With("package", "balloon"))
 	}
 
-	manifest, err := loadLaunchManifest(options.Manifest, manifestLogger)
+	doc, _, err := loadManifestDocument(options.Manifest)
 	if err != nil {
 		return err
 	}
 
-	return manager.LaunchWithOptions(context.Background(), manifest, options.Launch.Args.RemoteCommand, manager.LaunchOptions{
-		Resume:    manager.ResumeMode(options.Launch.Resume),
-		SSH:       options.Launch.SSH,
-		Verbosity: len(options.Verbose),
-	})
+	// The CLI is a consumer of the library API: the manifest document
+	// configures a qemu backend, the backend starts the instance, and the
+	// session layer runs on the handle.
+	b := qemu.NewBackendFromDocument(doc, qemu.Config{Logger: managerLogger})
+	starter, ok := b.(sessionStarter)
+	if !ok {
+		return fmt.Errorf("qemu backend does not support CLI sessions")
+	}
+
+	ctx := context.Background()
+	session := manager.SessionOptions{
+		SSH:           options.Launch.SSH,
+		RemoteCommand: options.Launch.Args.RemoteCommand,
+	}
+	vmHandle, err := starter.StartSession(ctx, &vm.Spec{}, manager.StartOptions{
+		Resume: manager.ResumeMode(options.Launch.Resume),
+	}, session)
+	if err != nil {
+		if manager.IsSavedSuspendExit(err) {
+			return nil
+		}
+		return err
+	}
+	return manager.RunSession(ctx, vmHandle, session)
 }
 
 func runSuspend(options *Options) error {

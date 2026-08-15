@@ -10,6 +10,7 @@ import (
 	"time"
 
 	shellquote "github.com/kballard/go-shellquote"
+	"github.com/shazow/virtle/internal/balloon"
 	"github.com/shazow/virtle/internal/executor"
 	controlpkg "github.com/shazow/virtle/internal/manager/control"
 	"github.com/shazow/virtle/internal/manager/launch"
@@ -225,6 +226,9 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 		}
 		stats.Timer(launch.TimerFilesReady, time.Now())
 		writeBackOnExit = plan.Options.HasRemoteControl
+	}
+	if task := balloon.ControllerTask(qmp, plan.Manifest.QEMU.Devices.Balloon, plan.Notifier); task != nil {
+		processes.StartTasks(launchCtx, task)
 	}
 	return started, nil
 }

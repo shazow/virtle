@@ -57,7 +57,7 @@ func specDocument(spec *vm.Spec, cfg Config, base *imanifest.Document) (imanifes
 	}
 
 	cpus := spec.CPUs
-	if cpus == 0 && doc.Machine.VCPU == 0 {
+	if cpus == 0 && base == nil && doc.Machine.VCPU == 0 {
 		cpus = runtime.NumCPU()
 	}
 	if cpus != 0 {

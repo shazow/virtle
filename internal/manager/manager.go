@@ -22,7 +22,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/shazow/virtle/internal/balloon"
 	"github.com/shazow/virtle/internal/executor"
 	"github.com/shazow/virtle/internal/manager/launch"
 	"github.com/shazow/virtle/internal/manifest"
@@ -101,11 +100,14 @@ func (m *manager) launchWithOptions(ctx context.Context, manifest *manifest.Mani
 	// agentless images are a library concern, selected per backend
 	// constructor.
 	options.HasRemoteControl = true
-	plan, err := m.planLaunch(launch.Spec{Manifest: manifest, RemoteCommand: remoteCommand, Options: options})
+	v, err := m.startVM(ctx, launch.Spec{Manifest: manifest, RemoteCommand: remoteCommand, Options: options})
 	if err != nil {
+		if launch.IsSavedSuspendExit(err) {
+			return nil
+		}
 		return err
 	}
-	return m.launchWithPlan(ctx, plan)
+	return RunSession(ctx, v, SessionOptions{SSH: options.SSH, RemoteCommand: remoteCommand})
 }
 
 func (m *manager) planLaunch(spec launch.Spec) (*launch.Plan, error) {
@@ -128,39 +130,6 @@ func (m *manager) planLaunch(spec launch.Spec) (*launch.Plan, error) {
 		return nil, &launch.StageError{Stage: "preflight", Err: err}
 	}
 	return plan, nil
-}
-
-func (m *manager) launchWithPlan(ctx context.Context, plan *launch.Plan) (err error) {
-	running, err := m.startWithPlan(ctx, plan)
-	if err != nil {
-		if launch.IsSavedSuspendExit(err) {
-			return nil
-		}
-		return err
-	}
-	defer func() {
-		joinDeferredError(&err, running.Close)
-		m.writeLaunchStats(running.stats)
-	}()
-	// The ssh-ready gate is a session concern: CLI launches block here so
-	// the SSH hint (or --ssh attach) lands on a reachable guest, while
-	// library starts (StartVM) return as soon as the VM is up.
-	if plan.ResumeState == nil {
-		if plan.Paths.SSHReadySocket != "" {
-			if m.logger != nil {
-				m.logger.Info("waiting for ssh readiness")
-			}
-			if err := m.waitForSSHReady(running.ctx, plan.Paths.SSHReadySocket, running.processes.Watchers()); err != nil {
-				return err
-			}
-		}
-		running.stats.Timer(launch.TimerSSHReady, time.Now())
-	}
-	err = m.waitForRunningLaunch(ctx, running, plan.Options.WaitMode())
-	if launch.IsSavedSuspendExit(err) {
-		return nil
-	}
-	return err
 }
 
 func (m *manager) restoreLaunchRuntime(ctx context.Context, plan *launch.Plan, client qmpclient.Client) error {
@@ -190,15 +159,13 @@ func (m *manager) waitForLaunchForeground(
 	ctx context.Context,
 	plan *launch.Plan,
 	stats *launch.Stats,
-	qmpClient qmpclient.Client,
 	lifecycle *launch.Lifecycle,
 	suspendHandler suspendHandler,
 	processes *launch.ProcessSet,
 ) error {
-	if task := balloon.ControllerTask(qmpClient, plan.Manifest.QEMU.Devices.Balloon, plan.Notifier); task != nil {
-		processes.StartTasks(ctx, task)
-	}
-
+	// Restored suspend state is removed only once the session is
+	// established (SSH attached, or the VM wait entered), so a failed
+	// session start leaves the state resumable.
 	if plan.Options.SSH && len(plan.Manifest.SSH.Argv) > 0 {
 		if err := m.runSSHSession(ctx, plan, stats, lifecycle, suspendHandler, processes); err != nil {
 			return err

@@ -18,8 +18,8 @@ type StartOptions struct {
 	Resume ResumeMode // defaults to ResumeModeNo
 
 	// HasRemoteControl declares whether the VM image runs a guest control
-	// agent; see launch.Options. nil defaults to true.
-	HasRemoteControl *bool
+	// agent; see launch.Options.
+	HasRemoteControl bool
 }
 
 // StartVM starts a VM from a resolved manifest and returns a handle without
@@ -114,12 +114,6 @@ func (v *VM) close() error {
 	return v.closeErr
 }
 
-// RemoteControlEnabled reports whether the VM was started expecting a
-// guest control agent.
-func (v *VM) RemoteControlEnabled() bool {
-	return v.running.plan.Options.RemoteControlEnabled()
-}
-
 // CID returns the vsock CID allocated to the VM.
 func (v *VM) CID() int { return v.running.plan.CID }
 
@@ -132,7 +126,7 @@ func (v *VM) GuestAgentSocketPath() string { return v.running.plan.Paths.GuestAg
 // DialGuestAgent waits for guest agent readiness and returns a connected
 // client. The caller owns the client and must Disconnect it.
 func (v *VM) DialGuestAgent(ctx context.Context) (qga.Client, error) {
-	if !v.RemoteControlEnabled() {
+	if !v.running.plan.Options.HasRemoteControl {
 		return nil, fmt.Errorf("guest agent: vm has no remote control: %w", errors.ErrUnsupported)
 	}
 	return v.m.waitForGuestAgent(ctx, v.running.plan.Paths.GuestAgentSocket, v.running.processes.Watchers())
@@ -142,7 +136,7 @@ func (v *VM) DialGuestAgent(ctx context.Context) (qga.Client, error) {
 // the manifest's shutdown_exec command). It does not wait for the VM to
 // exit; pair it with Wait.
 func (v *VM) ShutdownGuest(ctx context.Context) error {
-	if !v.RemoteControlEnabled() {
+	if !v.running.plan.Options.HasRemoteControl {
 		return fmt.Errorf("guest shutdown: vm has no remote control: %w", errors.ErrUnsupported)
 	}
 	shutdown := v.running.plan.Manifest.QEMU.GuestAgent

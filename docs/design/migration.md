@@ -184,6 +184,16 @@ to the supported API:
 | `internal/manager/control` `Dial` | unchanged host socket (§4); Go client promotion deferred |
 | `internal/units` | promoted to public `units`, rebased on `units.Bytes` + size constants (`2048 * units.Mebibyte`) plus `units.Duration`; manifest TOML numbers stay MiB-denominated, converted at load |
 
+Package layout note (PR #71 review): `internal/manifest` stays the shared
+home of the document/resolution machinery only while the CLI still consumes
+it through `internal/manager` — consolidating it into the public `manifest`
+package today would close an import cycle (`internal/manager` → `manifest`
+→ `backend/qemu` → `internal/manager`). Once the CLI rewires onto the
+public API and the manager machinery folds into `backend/qemu`, the
+manifest input contract (document, decode, defaults, validation, schema)
+consolidates into the public `manifest` package with resolution unexported,
+and the `qemu.NewBackendFromDocument` bridge disappears.
+
 API stability posture: the module is untagged v0; promoted packages carry an
 experimental notice until the API settles, then a `v0.x` tag makes versions
 readable. No compatibility promise before v1.

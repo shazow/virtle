@@ -24,14 +24,10 @@ type Options struct {
 	// HasRemoteControl declares whether the VM image runs a guest control
 	// agent (QGA today, the virtle guest daemon later). When false, launch
 	// skips guest-dependent steps (guest file writes, workspace mounts)
-	// and guest control is reported unsupported. nil defaults to true.
-	HasRemoteControl *bool
-}
-
-// RemoteControlEnabled reports whether the guest is expected to run a
-// control agent; unset means yes.
-func (o Options) RemoteControlEnabled() bool {
-	return o.HasRemoteControl == nil || *o.HasRemoteControl
+	// and guest control is reported unsupported. Callers set it
+	// explicitly: the CLI always expects an agent, backend constructors
+	// declare it per guest-control implementation.
+	HasRemoteControl bool
 }
 
 func (o Options) WaitMode() WaitMode {

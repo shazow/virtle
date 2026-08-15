@@ -97,6 +97,10 @@ func newManagerFromConfig(config Config) *manager {
 }
 
 func (m *manager) launchWithOptions(ctx context.Context, manifest *manifest.Manifest, remoteCommand []string, options launch.Options) error {
+	// CLI launches always expect an agent-equipped guest (QGA today);
+	// agentless images are a library concern, selected per backend
+	// constructor.
+	options.HasRemoteControl = true
 	plan, err := m.planLaunch(launch.Spec{Manifest: manifest, RemoteCommand: remoteCommand, Options: options})
 	if err != nil {
 		return err

@@ -209,7 +209,7 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 		return nil, err
 	}
 	if plan.ResumeState == nil {
-		if plan.Options.RemoteControlEnabled() {
+		if plan.Options.HasRemoteControl {
 			if err := m.writeGuestFiles(launchCtx, stats, processes.Watchers()); err != nil {
 				return nil, err
 			}
@@ -217,7 +217,7 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 			return nil, &launch.StageError{Stage: "guest agent", Err: errors.New("guest file writes require remote control (write_files, workspace.mount_cwd)")}
 		}
 		stats.Timer(launch.TimerFilesReady, time.Now())
-		writeBackOnExit = plan.Options.RemoteControlEnabled()
+		writeBackOnExit = plan.Options.HasRemoteControl
 	}
 	return started, nil
 }

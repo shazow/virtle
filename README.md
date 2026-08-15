@@ -71,8 +71,7 @@ process environment is available as `.Env` on every surface.
 
 ## Library
 
-Virtle can be used as a Go library, without the CLI. See the
-[package docs](https://pkg.go.dev/github.com/shazow/virtle).
+Virtle library docs: https://pkg.go.dev/github.com/shazow/virtle
 
 Boot a VM, run a command, tear down:
 

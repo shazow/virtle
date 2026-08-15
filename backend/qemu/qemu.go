@@ -41,31 +41,31 @@ type Config struct {
 	KVM            *bool             // enable KVM acceleration; default derived per host
 	ExtraArgs      []string          // passthrough QEMU arguments
 	Console        Console
-	Seccomp        bool   // enable QEMU seccomp sandboxing
-	Balloon        bool   // attach a virtio-balloon device (required for ResizeMemory)
-	HostName       string // guest-visible name; default: "virtle"
-
-	// HasRemoteControl declares whether the VM image runs a guest control
-	// agent (qemu-guest-agent for this backend). When false, guest-
-	// dependent features are disabled and RemoteControl reports
-	// errors.ErrUnsupported. The pointer is load-bearing: nil defaults to
-	// true, matching the expectation that most virtle functionality is
-	// built on guest control.
-	HasRemoteControl *bool
-
-	Logger *slog.Logger // default: discard
+	Seccomp        bool         // enable QEMU seccomp sandboxing
+	Balloon        bool         // attach a virtio-balloon device (required for ResizeMemory)
+	HostName       string       // guest-visible name; default: "virtle"
+	Logger         *slog.Logger // default: discard
 }
 
 // BackendWithQGA returns a QEMU backend whose instances' RemoteControl
 // speaks the QEMU Guest Agent — the guest must run qemu-guest-agent on the
 // default virtio-serial channel, as with the virtle CLI today.
 func BackendWithQGA(cfg Config) (backend.Backend, error) {
+	return &qemuBackend{cfg: cfg, hasRemoteControl: true}, nil
+}
+
+// BackendWithoutRemoteControl returns a QEMU backend for images that run
+// no guest control agent: guest-dependent features (guest file writes,
+// workspace mounts, graceful guest shutdown) are disabled and
+// RemoteControl reports errors.ErrUnsupported.
+func BackendWithoutRemoteControl(cfg Config) (backend.Backend, error) {
 	return &qemuBackend{cfg: cfg}, nil
 }
 
 type qemuBackend struct {
-	cfg Config
-	doc *imanifest.Document // non-nil for manifest.Load-configured backends
+	cfg              Config
+	hasRemoteControl bool
+	doc              *imanifest.Document // non-nil for manifest.Load-configured backends
 }
 
 // NewBackendFromDocument is the bridge for the public manifest package:
@@ -74,7 +74,8 @@ type qemuBackend struct {
 // passed to Start on top. The document type is internal, so this is not
 // callable (and not supported) outside the module.
 func NewBackendFromDocument(doc imanifest.Document, cfg Config) backend.Backend {
-	return &qemuBackend{cfg: cfg, doc: &doc}
+	// Manifests describe agent-equipped guests today, matching the CLI.
+	return &qemuBackend{cfg: cfg, hasRemoteControl: true, doc: &doc}
 }
 
 func (b *qemuBackend) Start(ctx context.Context, spec *vm.Spec) (backend.Instance, error) {
@@ -96,7 +97,7 @@ func (b *qemuBackend) start(ctx context.Context, spec *vm.Spec, resume manager.R
 	}
 	handle, err := manager.StartVM(ctx, mf, manager.StartOptions{
 		Resume:           resume,
-		HasRemoteControl: b.cfg.HasRemoteControl,
+		HasRemoteControl: b.hasRemoteControl,
 	}, manager.Config{
 		Logger: logger,
 		// A never-firing signal channel keeps the launch lifecycle from
@@ -107,11 +108,12 @@ func (b *qemuBackend) start(ctx context.Context, spec *vm.Spec, resume manager.R
 	if err != nil {
 		return nil, err
 	}
-	return &instance{vm: handle}, nil
+	return &instance{vm: handle, hasRemoteControl: b.hasRemoteControl}, nil
 }
 
 type instance struct {
-	vm *manager.VM
+	vm               *manager.VM
+	hasRemoteControl bool
 }
 
 func (i *instance) Wait(ctx context.Context) error { return i.vm.Wait(ctx) }
@@ -119,7 +121,7 @@ func (i *instance) Wait(ctx context.Context) error { return i.vm.Wait(ctx) }
 func (i *instance) Kill() error { return i.vm.Kill() }
 
 func (i *instance) RemoteControl() (vm.Guest, error) {
-	if !i.vm.RemoteControlEnabled() {
+	if !i.hasRemoteControl {
 		return nil, fmt.Errorf("vm has no guest control agent: %w", errors.ErrUnsupported)
 	}
 	return &qgaGuest{vm: i.vm}, nil

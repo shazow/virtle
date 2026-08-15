@@ -52,7 +52,7 @@ func TestResolveResumeState(t *testing.T) {
 		t.Fatalf("unexpected resume state: %#v", state)
 	}
 	if state.Version != SuspendStateVersion {
-		t.Fatalf("unexpected suspend state version: got %d want %d", state.Version, SuspendStateVersion)
+		t.Fatalf("unexpected suspend state version: got %q want %q", state.Version, SuspendStateVersion)
 	}
 }
 
@@ -66,7 +66,7 @@ func TestResolveResumeStateRejectsVersionMismatch(t *testing.T) {
 		t.Fatalf("write vm state: %v", err)
 	}
 	if err := WriteSuspendStateData(cfg, SuspendState{
-		Version:       SuspendStateVersion + 1,
+		Version:       "futurebackend-v9",
 		QMPSocketPath: "/run/qmp.sock",
 		VMStatePath:   vmStatePath,
 		CID:           7,
@@ -78,7 +78,7 @@ func TestResolveResumeStateRejectsVersionMismatch(t *testing.T) {
 	// The mismatch errors even in auto mode: silently booting fresh would
 	// abandon the suspended session.
 	for _, mode := range []ResumeMode{ResumeModeAuto, ResumeModeForce} {
-		if _, err := ResolveResumeState(cfg, mode); err == nil || !strings.Contains(err.Error(), "different virtle") {
+		if _, err := ResolveResumeState(cfg, mode); err == nil || !strings.Contains(err.Error(), `state version "futurebackend-v9"`) {
 			t.Fatalf("mode %q: expected version mismatch error, got %v", mode, err)
 		}
 	}
@@ -93,7 +93,7 @@ func TestResolveResumeStateRejectsPreVersionState(t *testing.T) {
 	if err := os.WriteFile(vmStatePath, []byte("state"), 0o644); err != nil {
 		t.Fatalf("write vm state: %v", err)
 	}
-	// A pre-marker state file has no version field and decodes as 0.
+	// A pre-marker state file has no version field and decodes as "".
 	statePath := SuspendStatePath(cfg)
 	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
 		t.Fatalf("create state dir: %v", err)
@@ -103,7 +103,7 @@ func TestResolveResumeStateRejectsPreVersionState(t *testing.T) {
 		t.Fatalf("write suspend state: %v", err)
 	}
 
-	if _, err := ResolveResumeState(cfg, ResumeModeForce); err == nil || !strings.Contains(err.Error(), "state version 0") {
+	if _, err := ResolveResumeState(cfg, ResumeModeForce); err == nil || !strings.Contains(err.Error(), "no state version marker") {
 		t.Fatalf("expected pre-version state error, got %v", err)
 	}
 }

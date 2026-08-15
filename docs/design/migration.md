@@ -32,12 +32,13 @@ Target: identical commands, flags, output, and exit codes. The CLI's
 implementation moves from `internal/manager` onto the public API — it
 becomes the first consumer:
 
-- `launch` → manifest document → qemu backend → started instance, with the
-  session layer (SSH attach loop, ssh-ready gate, suspend-on-signal,
-  stats) running on the handle. **Done**: `runLaunch` composes the
-  document-backed backend with `manager.RunSession`, and the legacy
-  blocking entrypoint is reimplemented on the same start + session pieces
-  so the existing launch test suite exercises the rewired path.
+- `launch` → started VM handle + foreground session as separate seams.
+  **Done**: `runLaunch` composes `StartSessionVM` (boot with CLI
+  semantics) with `manager.RunSession` (the extracted session layer), and
+  the legacy blocking entrypoint is reimplemented on the same pieces so
+  the existing launch test suite exercises the rewired path. The backend
+  knows nothing about sessions; launch flows through the backend itself
+  once the manager machinery folds into `backend/qemu`.
 - `suspend` / `hotplug` / `rpc` → stay **control-socket clients**, by
   design rather than migration debt: these commands run out-of-process
   and talk to an already-running session, so there is no backend instance

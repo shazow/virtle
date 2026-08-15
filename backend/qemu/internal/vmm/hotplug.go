@@ -10,10 +10,10 @@ import (
 	"syscall"
 
 	"github.com/shazow/virtle/backend/qemu/internal/launch"
+	"github.com/shazow/virtle/backend/qemu/internal/qga"
 	controlpkg "github.com/shazow/virtle/internal/control"
 	"github.com/shazow/virtle/internal/executor"
 	"github.com/shazow/virtle/internal/manifest"
-	"github.com/shazow/virtle/internal/qga"
 )
 
 func Hotplug(ctx context.Context, manifest *manifest.Manifest, id string, detach bool) error {

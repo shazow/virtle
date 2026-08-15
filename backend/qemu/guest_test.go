@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/shazow/virtle/internal/qga"
+	"github.com/shazow/virtle/backend/qemu/internal/qga"
 	"github.com/shazow/virtle/vm"
 )
 

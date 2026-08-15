@@ -3,10 +3,10 @@ package vmm
 import (
 	"context"
 
+	"github.com/shazow/virtle/backend/qemu/internal/hotplug"
 	"github.com/shazow/virtle/backend/qemu/internal/launch"
+	"github.com/shazow/virtle/backend/qemu/internal/qmpclient"
 	controlpkg "github.com/shazow/virtle/internal/control"
-	"github.com/shazow/virtle/internal/hotplug"
-	"github.com/shazow/virtle/internal/qmpclient"
 )
 
 type managerHotplugFeature struct {

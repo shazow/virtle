@@ -18,6 +18,7 @@ import (
 	"context"
 	"log/slog"
 
+	"github.com/shazow/virtle/backend/qemu/internal/balloon"
 	"github.com/shazow/virtle/backend/qemu/internal/vmm"
 	"github.com/shazow/virtle/internal/manifest"
 )
@@ -66,3 +67,8 @@ func ExitCode(err error) int { return vmm.ExitCode(err) }
 
 // SetLogger sets the machinery's package logger.
 func SetLogger(l *slog.Logger) { vmm.SetLogger(l) }
+
+// SetBalloonLogger sets the balloon controller's logger. It is separate
+// from SetLogger because the CLI enables balloon logging at a higher
+// verbosity tier than the rest of the machinery.
+func SetBalloonLogger(l *slog.Logger) { balloon.SetLogger(l) }

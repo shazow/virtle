@@ -10,7 +10,7 @@ import (
 
 	doQMP "github.com/digitalocean/go-qemu/qmp"
 	rawQMP "github.com/digitalocean/go-qemu/qmp/raw"
-	"github.com/shazow/virtle/internal/qmpwire"
+	"github.com/shazow/virtle/backend/qemu/internal/qmpwire"
 )
 
 // DefaultRPCTimeout bounds a single QMP operation when the dialer does not

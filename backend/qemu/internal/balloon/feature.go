@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/shazow/virtle/internal/manifest"
 	"strings"
 
 	govmmQemu "github.com/kata-containers/govmm/qemu"
@@ -20,7 +21,7 @@ func AppendQEMUArgs(
 	args []string,
 	config *govmmQemu.Config,
 	resolveTransport func(string) (govmmQemu.VirtioTransport, error),
-	device *Device,
+	device *manifest.BalloonDevice,
 ) ([]string, error) {
 	if device == nil {
 		return args, nil
@@ -41,7 +42,7 @@ func AppendQEMUArgs(
 	return append(args, "-device", strings.Join(deviceParams, ",")), nil
 }
 
-func ControllerTask(session MonitorSession, device *Device, notificationSink notifier) func(context.Context) error {
+func ControllerTask(session MonitorSession, device *manifest.BalloonDevice, notificationSink notifier) func(context.Context) error {
 	if device == nil || device.Controller == nil || session == nil {
 		return nil
 	}

@@ -18,7 +18,6 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/jessevdk/go-flags"
 	"github.com/shazow/virtle/backend/qemu/session"
-	"github.com/shazow/virtle/internal/balloon"
 	"github.com/shazow/virtle/internal/control"
 	"github.com/shazow/virtle/internal/manifest"
 	manifestschema "github.com/shazow/virtle/internal/manifest/schema"
@@ -78,13 +77,13 @@ func runLaunch(options *Options) error {
 	discardLogger := slog.New(slog.DiscardHandler)
 	manifestLogger := discardLogger
 	session.SetLogger(discardLogger)
-	balloon.SetLogger(discardLogger)
+	session.SetBalloonLogger(discardLogger)
 	if len(options.Verbose) > 0 {
 		manifestLogger = baseLogger.With("package", "manifest")
-		session.SetLogger(baseLogger.With("package", "qemuvm"))
+		session.SetLogger(baseLogger.With("package", "vmm"))
 	}
 	if len(options.Verbose) > 1 {
-		balloon.SetLogger(baseLogger.With("package", "balloon"))
+		session.SetBalloonLogger(baseLogger.With("package", "balloon"))
 	}
 
 	loaded, err := loadLaunchManifest(options.Manifest, manifestLogger)
@@ -158,7 +157,7 @@ func runHotplug(options *Options) error {
 	session.SetLogger(discardLogger)
 	if len(options.Verbose) > 0 {
 		manifestLogger = baseLogger.With("package", "manifest")
-		session.SetLogger(baseLogger.With("package", "qemuvm"))
+		session.SetLogger(baseLogger.With("package", "vmm"))
 	}
 
 	manifest, err := loadLaunchManifest(options.Manifest, manifestLogger)

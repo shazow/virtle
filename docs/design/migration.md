@@ -124,7 +124,7 @@ Current state on disk, all produced by the machinery under
 - Suspend state JSON (`launch/state.go`: `hostName`, `qmpSocketPath`,
   `vmStatePath`, `cid`, `timestamp`, `status`) + QEMU migration state file.
 - Runtime lock / PID files (`launch/runtime_lock.go`).
-- Hotplug state JSON (`internal/hotplug`).
+- Hotplug state JSON (`backend/qemu/internal/hotplug`).
 - Volume images created on demand (`launch/filesystem.go`).
 
 Target: all of this becomes **`backend/qemu`-private implementation detail**
@@ -153,7 +153,7 @@ Transition rules:
 Today a functional guest requires **qemu-guest-agent** listening on the
 virtio-serial channel; guest exec, file read/write, `ps`, SSH key
 autoprovision, and graceful shutdown all route through it
-(`internal/qga`, `backend/qemu/internal/vmm/guest_*.go`).
+(`backend/qemu/internal/qga`, `backend/qemu/internal/vmm/guest_*.go`).
 
 Target: guests run the **virtle guest daemon** (`virtle guest`, package
 `./guest`) over vsock or serial socket; QGA becomes optional and eventually
@@ -187,20 +187,26 @@ to the supported API:
 | `backend/qemu/internal/launch` `BuildPlan` / `AcquireCID` / `WaitForSockets` / `ProcessSet` | `backend/qemu` internals — no longer consumer-facing; the plan/CID/socket dance happens inside `Backend.Start` |
 | `backend/qemu/internal/vmm/qemu.go` argv building | `qemu.Config` fields; argv construction is private |
 | `internal/executor` `Runner` / `Command` / `Group` | private to backends; consumers hold a `backend.Instance`, not a process |
-| `internal/qga` client | `inst.RemoteControl()` → `vm.Guest` |
-| `internal/qmpclient` (suspend/migration) | `backend.Suspender` |
-| `internal/balloon` | `backend.MemoryResizer` |
-| `internal/hotplug` | `backend.DeviceAttacher` |
+| `backend/qemu/internal/qga` client | `inst.RemoteControl()` → `vm.Guest` |
+| `backend/qemu/internal/qmpclient` (suspend/migration) | `backend.Suspender` |
+| `backend/qemu/internal/balloon` | `backend.MemoryResizer` |
+| `backend/qemu/internal/hotplug` | `backend.DeviceAttacher` |
 | `internal/control` `Dial` | unchanged host socket (§4); Go client promotion deferred |
 | `internal/units` | promoted to public `units`, rebased on `units.Bytes` + size constants (`2048 * units.Mebibyte`) plus `units.Duration`; manifest TOML numbers stay MiB-denominated, converted at load |
 
-Package layout note (PR #71/#76 review): the VM machinery is
-`backend/qemu/internal/{vmm,launch,runtime}` — compiler-enforced private
-to the backend subtree — and the CLI consumes it only through
+Package layout note (PR #71/#76 review): everything qemu-specific lives
+under the backend subtree, compiler-enforced private: the VM machinery is
+`backend/qemu/internal/{vmm,launch,runtime}` and the QEMU protocol and
+device packages are `backend/qemu/internal/{qmpwire,qmpclient,qga,
+balloon,hotplug}`. The CLI consumes it only through
 `backend/qemu/session`, a deliberately minimal public facade for the CLI
-session layer (see the session-architecture note below). The
-control-socket contract lives at `internal/control`, qemu-free and shared
-by its two consumers: the CLI client and the runtime server.
+session layer (see the session-architecture note below). What stays in
+shared `internal/` is genuinely backend-agnostic: `internal/control` (the
+control-socket wire contract, shared by the CLI client and the runtime
+server), `internal/executor`, `internal/sshtools`, `internal/readiness`,
+`internal/units`. The resolved device vocabulary (`BalloonDevice`,
+`HotplugDevice`, …) belongs to the manifest — `internal/manifest` owns
+those types and backends consume them, not the other way around.
 `internal/manifest` stays the shared home of the document/resolution
 machinery for now — consolidating it into the public `manifest` package
 would close an import cycle (machinery → `manifest` → `backend/qemu` →

@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/shazow/virtle/backend/qemu/internal/launch"
+	"github.com/shazow/virtle/backend/qemu/internal/qmpclient"
 	"github.com/shazow/virtle/internal/manifest"
-	"github.com/shazow/virtle/internal/qmpclient"
 )
 
 type RuntimeConfig struct {

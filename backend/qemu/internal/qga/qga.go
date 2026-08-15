@@ -9,7 +9,7 @@ import (
 	"net"
 	"time"
 
-	"github.com/shazow/virtle/internal/qmpwire"
+	"github.com/shazow/virtle/backend/qemu/internal/qmpwire"
 )
 
 // DefaultRPCTimeout bounds a single guest-agent round trip when the dialer

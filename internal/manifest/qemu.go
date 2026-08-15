@@ -3,7 +3,6 @@ package manifest
 import (
 	"time"
 
-	"github.com/shazow/virtle/internal/balloon"
 	"github.com/shazow/virtle/internal/units"
 )
 
@@ -123,7 +122,7 @@ type QEMUHotplug struct {
 type QEMUDevices struct {
 	RNG      QEMURNGDevice       `json:"rng"`
 	I8042    bool                `json:"i8042,omitempty"`
-	Balloon  *balloon.Device     `json:"balloon,omitempty"`
+	Balloon  *BalloonDevice      `json:"balloon,omitempty"`
 	VirtioFS []QEMUVirtioFSShare `json:"virtiofs,omitempty"`
 	NineP    []QEMUNinePShare    `json:"9p,omitempty"`
 	Block    []QEMUBlockDevice   `json:"block,omitempty"`

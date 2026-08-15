@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/shazow/virtle/backend/qemu/internal/qga"
 	"github.com/shazow/virtle/internal/executor"
-	"github.com/shazow/virtle/internal/qga"
 )
 
 type Info struct {

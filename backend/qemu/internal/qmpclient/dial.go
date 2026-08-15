@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/shazow/virtle/internal/qmpwire"
+	"github.com/shazow/virtle/backend/qemu/internal/qmpwire"
 )
 
 // DialRetry configures QMP dial retry behavior.

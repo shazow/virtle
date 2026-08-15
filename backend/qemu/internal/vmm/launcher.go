@@ -4,9 +4,9 @@ import (
 	"os"
 
 	"github.com/shazow/virtle/backend/qemu/internal/launch"
+	"github.com/shazow/virtle/backend/qemu/internal/qga"
+	"github.com/shazow/virtle/backend/qemu/internal/qmpclient"
 	"github.com/shazow/virtle/internal/executor"
-	"github.com/shazow/virtle/internal/qga"
-	"github.com/shazow/virtle/internal/qmpclient"
 )
 
 type ResumeMode = launch.ResumeMode

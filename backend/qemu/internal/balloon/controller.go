@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/shazow/virtle/internal/manifest"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -53,7 +54,7 @@ type controller struct {
 	Session  session
 	Logger   *slog.Logger
 	DeviceID string
-	Config   ControllerConfig
+	Config   manifest.BalloonControllerConfig
 	Now      func() time.Time
 	Notifier notifier
 }
@@ -255,7 +256,7 @@ func (c *controller) nowFunc() func() time.Time {
 }
 
 func evaluate(
-	config ControllerConfig,
+	config manifest.BalloonControllerConfig,
 	state *controllerState,
 	now time.Time,
 	actualBytes int64,

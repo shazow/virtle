@@ -26,15 +26,14 @@ import (
 	diskfs "github.com/diskfs/go-diskfs"
 	"github.com/diskfs/go-diskfs/filesystem"
 	"github.com/shazow/virtle/backend/qemu/internal/launch"
+	"github.com/shazow/virtle/backend/qemu/internal/qga"
+	"github.com/shazow/virtle/backend/qemu/internal/qmpclient"
 	runtimepkg "github.com/shazow/virtle/backend/qemu/internal/runtime"
-	"github.com/shazow/virtle/internal/balloon"
 	control "github.com/shazow/virtle/internal/control"
 	"github.com/shazow/virtle/internal/executor"
 	"github.com/shazow/virtle/internal/executor/executortest"
-	"github.com/shazow/virtle/internal/hotplug"
 	"github.com/shazow/virtle/internal/manifest"
-	"github.com/shazow/virtle/internal/qga"
-	"github.com/shazow/virtle/internal/qmpclient"
+	imanifest "github.com/shazow/virtle/internal/manifest"
 	"github.com/shazow/virtle/internal/units"
 )
 
@@ -3684,11 +3683,11 @@ func TestLaunchRuntimeRegistersHotplugAtControlPeriphery(t *testing.T) {
 	cfg.Persistence.StateDir = ".virtle"
 	cfg.Paths.RuntimeDir = manifest.RuntimeDir{Mode: manifest.RuntimeDirPath, Path: ".virtle"}
 	cfg.QEMU.Hotplug.PCIEPorts = 1
-	cfg.Hotplug = []hotplug.Device{
+	cfg.Hotplug = []imanifest.HotplugDevice{
 		{
-			Kind: hotplug.KindNet,
+			Kind: imanifest.HotplugKindNet,
 			ID:   "vpn",
-			Net:  hotplug.Net{Backend: "user", MAC: "02:02:00:00:00:10"},
+			Net:  imanifest.HotplugNet{Backend: "user", MAC: "02:02:00:00:00:10"},
 		},
 	}
 
@@ -4359,7 +4358,7 @@ func validManifest(workingDir string) *manifest.Manifest {
 
 func validManifestWithBalloon(workingDir string) *manifest.Manifest {
 	manifest := validManifest(workingDir)
-	manifest.QEMU.Devices.Balloon = &balloon.Device{
+	manifest.QEMU.Devices.Balloon = &imanifest.BalloonDevice{
 		ID:        "balloon0",
 		Transport: "pci",
 	}

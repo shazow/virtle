@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/shazow/virtle/backend/qemu/internal/launch"
-	"github.com/shazow/virtle/internal/qga"
-	"github.com/shazow/virtle/internal/qmpclient"
+	"github.com/shazow/virtle/backend/qemu/internal/qga"
+	"github.com/shazow/virtle/backend/qemu/internal/qmpclient"
 )
 
 type Config struct {

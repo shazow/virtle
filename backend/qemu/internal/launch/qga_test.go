@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shazow/virtle/backend/qemu/internal/qga"
 	"github.com/shazow/virtle/internal/executor"
 	"github.com/shazow/virtle/internal/executor/executortest"
-	"github.com/shazow/virtle/internal/qga"
 )
 
 func TestWaitForGuestAgentWaitsForSocketThenDials(t *testing.T) {

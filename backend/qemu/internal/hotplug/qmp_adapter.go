@@ -2,6 +2,8 @@ package hotplug
 
 import (
 	"context"
+
+	"github.com/shazow/virtle/internal/manifest"
 )
 
 // QMPDeviceAdapter adapts a generic QMP client to hotplug device operations.
@@ -12,7 +14,7 @@ type QMPDeviceAdapter struct {
 	}
 }
 
-func (a QMPDeviceAdapter) AttachDevice(ctx context.Context, device Device, bus string) (func(context.Context), error) {
+func (a QMPDeviceAdapter) AttachDevice(ctx context.Context, device manifest.HotplugDevice, bus string) (func(context.Context), error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -53,7 +55,7 @@ func (a QMPDeviceAdapter) AttachDevice(ctx context.Context, device Device, bus s
 	}, nil
 }
 
-func (a QMPDeviceAdapter) DetachDevice(ctx context.Context, device Device) error {
+func (a QMPDeviceAdapter) DetachDevice(ctx context.Context, device manifest.HotplugDevice) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}

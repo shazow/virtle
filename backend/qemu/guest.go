@@ -9,7 +9,7 @@ import (
 	"io/fs"
 
 	shellquote "github.com/kballard/go-shellquote"
-	"github.com/shazow/virtle/internal/qga"
+	"github.com/shazow/virtle/backend/qemu/internal/qga"
 	"github.com/shazow/virtle/vm"
 )
 

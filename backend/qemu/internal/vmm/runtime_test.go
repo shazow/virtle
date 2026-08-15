@@ -10,15 +10,15 @@ import (
 
 	"github.com/shazow/virtle/backend/qemu/internal/launch"
 	runtimepkg "github.com/shazow/virtle/backend/qemu/internal/runtime"
-	"github.com/shazow/virtle/internal/balloon"
 	control "github.com/shazow/virtle/internal/control"
 	"github.com/shazow/virtle/internal/executor/executortest"
+	imanifest "github.com/shazow/virtle/internal/manifest"
 )
 
 func TestRuntimeStatusAndBalloonUseOwnedQMP(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
-	cfg.QEMU.Devices.Balloon = &balloon.Device{ID: "balloon0", Transport: "pci"}
+	cfg.QEMU.Devices.Balloon = &imanifest.BalloonDevice{ID: "balloon0", Transport: "pci"}
 	stats := launch.NewStats(time.Now())
 	stats.Timer(launch.TimerBootStarted, time.Now())
 	stats.Timer(launch.TimerQMPReady, time.Now())

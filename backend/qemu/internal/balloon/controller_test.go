@@ -3,6 +3,7 @@ package balloon
 import (
 	"context"
 	"errors"
+	"github.com/shazow/virtle/internal/manifest"
 	"log/slog"
 	"strings"
 	"testing"
@@ -11,7 +12,7 @@ import (
 
 func TestEvaluateGrowsGuestMemory(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
-	config := ControllerConfig{
+	config := manifest.BalloonControllerConfig{
 		MinActual:             256,
 		MaxActual:             1024,
 		GrowBelowAvailable:    128,
@@ -40,7 +41,7 @@ func TestEvaluateGrowsGuestMemory(t *testing.T) {
 
 func TestEvaluateReclaimsAfterHoldoff(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
-	config := ControllerConfig{
+	config := manifest.BalloonControllerConfig{
 		MinActual:             256,
 		MaxActual:             1024,
 		GrowBelowAvailable:    128,
@@ -77,7 +78,7 @@ func TestEvaluateReclaimsAfterHoldoff(t *testing.T) {
 
 func TestEvaluateNoopsWithinHysteresis(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
-	config := ControllerConfig{
+	config := manifest.BalloonControllerConfig{
 		MinActual:             256,
 		MaxActual:             1024,
 		GrowBelowAvailable:    128,
@@ -109,7 +110,7 @@ func TestEvaluateNoopsWithinHysteresis(t *testing.T) {
 
 func TestEvaluateRejectsStaleStats(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
-	config := ControllerConfig{
+	config := manifest.BalloonControllerConfig{
 		MinActual:             256,
 		MaxActual:             1024,
 		GrowBelowAvailable:    128,
@@ -132,7 +133,7 @@ func TestEvaluateRejectsStaleStats(t *testing.T) {
 
 func TestEvaluateRejectsUnavailableStats(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
-	config := ControllerConfig{
+	config := manifest.BalloonControllerConfig{
 		MinActual:             256,
 		MaxActual:             1024,
 		GrowBelowAvailable:    128,
@@ -151,7 +152,7 @@ func TestEvaluateRejectsUnavailableStats(t *testing.T) {
 
 func TestEvaluateClampsToBounds(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
-	config := ControllerConfig{
+	config := manifest.BalloonControllerConfig{
 		MinActual:             256,
 		MaxActual:             1024,
 		GrowBelowAvailable:    128,
@@ -264,7 +265,7 @@ func TestControllerNotifiesAfterSuccessfulResize(t *testing.T) {
 		Session:  session,
 		Logger:   slog.New(slog.DiscardHandler),
 		DeviceID: "balloon0",
-		Config: ControllerConfig{
+		Config: manifest.BalloonControllerConfig{
 			MinActual:             1024,
 			MaxActual:             8192,
 			GrowBelowAvailable:    128,
@@ -330,7 +331,7 @@ func TestControllerSurvivesTransientFailures(t *testing.T) {
 		Session:  session,
 		Logger:   slog.New(slog.DiscardHandler),
 		DeviceID: "balloon0",
-		Config: ControllerConfig{
+		Config: manifest.BalloonControllerConfig{
 			MinActual:             1024,
 			MaxActual:             8192,
 			GrowBelowAvailable:    128,
@@ -374,7 +375,7 @@ func TestControllerStopsAfterConsecutiveFailures(t *testing.T) {
 		Session:  session,
 		Logger:   slog.New(slog.DiscardHandler),
 		DeviceID: "balloon0",
-		Config: ControllerConfig{
+		Config: manifest.BalloonControllerConfig{
 			MinActual:             1024,
 			MaxActual:             8192,
 			GrowBelowAvailable:    128,
@@ -424,7 +425,7 @@ func TestControllerDoesNotNotifyWhenResizeIsNotApplied(t *testing.T) {
 		Session:  session,
 		Logger:   slog.New(slog.DiscardHandler),
 		DeviceID: "balloon0",
-		Config: ControllerConfig{
+		Config: manifest.BalloonControllerConfig{
 			MinActual:             1024,
 			MaxActual:             8192,
 			GrowBelowAvailable:    128,

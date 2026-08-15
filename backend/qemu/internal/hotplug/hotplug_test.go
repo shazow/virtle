@@ -14,6 +14,7 @@ import (
 
 	"github.com/shazow/virtle/internal/executor"
 	"github.com/shazow/virtle/internal/executor/executortest"
+	"github.com/shazow/virtle/internal/manifest"
 )
 
 func TestQMPDeviceAdapterAttachesVirtioFSWithoutCallerRawJSON(t *testing.T) {
@@ -78,10 +79,10 @@ func TestQMPDeviceAdapterDetachFinishesCleanupAfterDeviceDelCancellation(t *test
 
 func TestVirtioFSAttachSuccessWritesState(t *testing.T) {
 	tmpDir := t.TempDir()
-	runner, starter, qmp, guest := testRunner(tmpDir, Device{
-		Kind: KindVirtioFS,
+	runner, starter, qmp, guest := testRunner(tmpDir, manifest.HotplugDevice{
+		Kind: manifest.HotplugKindVirtioFS,
 		ID:   "cache",
-		VirtioFS: VirtioFS{
+		VirtioFS: manifest.HotplugVirtioFS{
 			Source:     filepath.Join(tmpDir, "cache"),
 			Target:     "/mnt/cache",
 			SocketPath: filepath.Join(tmpDir, "cache.sock"),
@@ -106,7 +107,7 @@ func TestVirtioFSAttachSuccessWritesState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read state: %v", err)
 	}
-	if state.ID != "cache" || state.Kind != KindVirtioFS || state.Bus != "pcie.hotplug.0" || state.PID != 100 {
+	if state.ID != "cache" || state.Kind != manifest.HotplugKindVirtioFS || state.Bus != "pcie.hotplug.0" || state.PID != 100 {
 		t.Fatalf("unexpected state: %#v", state)
 	}
 }
@@ -150,7 +151,7 @@ func TestVirtioFSDetachWaitsForDeviceDeletedBeforeChardevRemove(t *testing.T) {
 	tmpDir := t.TempDir()
 	runner, _, qmp, guest := testRunner(tmpDir, testVirtioFSDevice(tmpDir))
 	statePath := filepath.Join(tmpDir, "state", "hotplug", "cache.json")
-	if err := WriteState(statePath, State{ID: "cache", Kind: KindVirtioFS, Bus: "pcie.hotplug.0", PID: 42}); err != nil {
+	if err := WriteState(statePath, State{ID: "cache", Kind: manifest.HotplugKindVirtioFS, Bus: "pcie.hotplug.0", PID: 42}); err != nil {
 		t.Fatalf("write state: %v", err)
 	}
 
@@ -171,7 +172,7 @@ func TestVirtioFSDetachCompletesCleanupAfterDeviceDelCancellation(t *testing.T) 
 	runner, _, qmp, _ := testRunner(tmpDir, testVirtioFSDevice(tmpDir))
 	qmp.afterDeviceDel = cancel
 	statePath := filepath.Join(tmpDir, "state", "hotplug", "cache.json")
-	if err := WriteState(statePath, State{ID: "cache", Kind: KindVirtioFS, Bus: "pcie.hotplug.0", PID: 42}); err != nil {
+	if err := WriteState(statePath, State{ID: "cache", Kind: manifest.HotplugKindVirtioFS, Bus: "pcie.hotplug.0", PID: 42}); err != nil {
 		t.Fatalf("write state: %v", err)
 	}
 
@@ -192,7 +193,7 @@ func TestVirtioFSDetachCompletesQMPAfterGuestUnmountCancellation(t *testing.T) {
 	runner, _, qmp, guest := testRunner(tmpDir, testVirtioFSDevice(tmpDir))
 	guest.afterRun = cancel
 	statePath := filepath.Join(tmpDir, "state", "hotplug", "cache.json")
-	if err := WriteState(statePath, State{ID: "cache", Kind: KindVirtioFS, Bus: "pcie.hotplug.0", PID: 42}); err != nil {
+	if err := WriteState(statePath, State{ID: "cache", Kind: manifest.HotplugKindVirtioFS, Bus: "pcie.hotplug.0", PID: 42}); err != nil {
 		t.Fatalf("write state: %v", err)
 	}
 
@@ -209,13 +210,13 @@ func TestVirtioFSDetachCompletesQMPAfterGuestUnmountCancellation(t *testing.T) {
 
 func TestNetAttachDetachCommands(t *testing.T) {
 	tmpDir := t.TempDir()
-	runner, _, qmp, _ := testRunner(tmpDir, Device{
-		Kind: KindNet,
+	runner, _, qmp, _ := testRunner(tmpDir, manifest.HotplugDevice{
+		Kind: manifest.HotplugKindNet,
 		ID:   "vpn",
-		Net: Net{
+		Net: manifest.HotplugNet{
 			Backend: "user",
 			MAC:     "02:02:00:00:00:10",
-			Forward: []Forward{{Proto: "tcp", Host: "127.0.0.1:2223", Guest: "10.0.2.15:22"}},
+			Forward: []manifest.HotplugForward{{Proto: "tcp", Host: "127.0.0.1:2223", Guest: "10.0.2.15:22"}},
 		},
 	})
 
@@ -238,13 +239,13 @@ func TestNetAttachDetachCommands(t *testing.T) {
 
 func TestDetachRejectsStateKindMismatchBeforeCleanup(t *testing.T) {
 	tmpDir := t.TempDir()
-	runner, _, qmp, _ := testRunner(tmpDir, Device{
-		Kind: KindNet,
+	runner, _, qmp, _ := testRunner(tmpDir, manifest.HotplugDevice{
+		Kind: manifest.HotplugKindNet,
 		ID:   "cache",
-		Net:  Net{Backend: "user", MAC: "02:02:00:00:00:10"},
+		Net:  manifest.HotplugNet{Backend: "user", MAC: "02:02:00:00:00:10"},
 	})
 	statePath := filepath.Join(tmpDir, "state", "hotplug", "cache.json")
-	if err := WriteState(statePath, State{ID: "cache", Kind: KindVirtioFS, Bus: "pcie.hotplug.0", PID: 42}); err != nil {
+	if err := WriteState(statePath, State{ID: "cache", Kind: manifest.HotplugKindVirtioFS, Bus: "pcie.hotplug.0", PID: 42}); err != nil {
 		t.Fatalf("write state: %v", err)
 	}
 
@@ -262,10 +263,10 @@ func TestDetachRejectsStateKindMismatchBeforeCleanup(t *testing.T) {
 
 func TestBlockAttachDetachCommands(t *testing.T) {
 	tmpDir := t.TempDir()
-	runner, _, qmp, _ := testRunner(tmpDir, Device{
-		Kind: KindBlock,
+	runner, _, qmp, _ := testRunner(tmpDir, manifest.HotplugDevice{
+		Kind: manifest.HotplugKindBlock,
 		ID:   "data",
-		Block: Block{
+		Block: manifest.HotplugBlock{
 			ImagePath: filepath.Join(tmpDir, "data.qcow2"),
 			Format:    "qcow2",
 			Serial:    "data",
@@ -301,12 +302,12 @@ func TestHotplugRegistryMissingID(t *testing.T) {
 
 func TestHotplugRegistryRejectsDuplicateIDs(t *testing.T) {
 	tmpDir := t.TempDir()
-	runner, _, _, _ := testRunnerDevices(tmpDir, []Device{
+	runner, _, _, _ := testRunnerDevices(tmpDir, []manifest.HotplugDevice{
 		testVirtioFSDevice(tmpDir),
 		{
-			Kind: KindNet,
+			Kind: manifest.HotplugKindNet,
 			ID:   "cache",
-			Net:  Net{Backend: "user", MAC: "02:02:00:00:00:10"},
+			Net:  manifest.HotplugNet{Backend: "user", MAC: "02:02:00:00:00:10"},
 		},
 	})
 
@@ -318,9 +319,9 @@ func TestHotplugRegistryRejectsDuplicateIDs(t *testing.T) {
 
 func TestHotplugRegistryRejectsUnsupportedKind(t *testing.T) {
 	tmpDir := t.TempDir()
-	runner, _, _, _ := testRunnerDevices(tmpDir, []Device{
+	runner, _, _, _ := testRunnerDevices(tmpDir, []manifest.HotplugDevice{
 		testVirtioFSDevice(tmpDir),
-		{Kind: Kind("unsupported"), ID: "bad"},
+		{Kind: manifest.HotplugKind("unsupported"), ID: "bad"},
 	})
 
 	err := runner.Attach(context.Background(), "bad")
@@ -329,11 +330,11 @@ func TestHotplugRegistryRejectsUnsupportedKind(t *testing.T) {
 	}
 }
 
-func testRunner(tmpDir string, device Device) (Runner, *fakeStarter, *fakeQMPClient, *fakeGuest) {
-	return testRunnerDevices(tmpDir, []Device{device})
+func testRunner(tmpDir string, device manifest.HotplugDevice) (Runner, *fakeStarter, *fakeQMPClient, *fakeGuest) {
+	return testRunnerDevices(tmpDir, []manifest.HotplugDevice{device})
 }
 
-func testRunnerDevices(tmpDir string, devices []Device) (Runner, *fakeStarter, *fakeQMPClient, *fakeGuest) {
+func testRunnerDevices(tmpDir string, devices []manifest.HotplugDevice) (Runner, *fakeStarter, *fakeQMPClient, *fakeGuest) {
 	starter := &fakeStarter{}
 	client := &fakeQMPClient{}
 	guest := &fakeGuest{}
@@ -352,10 +353,10 @@ func testRunnerDevices(tmpDir string, devices []Device) (Runner, *fakeStarter, *
 // from the attach commands. The cost of that is a new kind silently omitting
 // one and skipping its cleanup; this pins it.
 func TestDevicePlansDeclareEverySequenceExplicitly(t *testing.T) {
-	devices := []Device{
+	devices := []manifest.HotplugDevice{
 		testVirtioFSDevice(t.TempDir()),
-		{Kind: KindNet, ID: "net0", Net: Net{Backend: "user", MAC: "02:02:00:00:00:10"}},
-		{Kind: KindBlock, ID: "data", Block: Block{ImagePath: "/tmp/data.img", Format: "raw"}},
+		{Kind: manifest.HotplugKindNet, ID: "net0", Net: manifest.HotplugNet{Backend: "user", MAC: "02:02:00:00:00:10"}},
+		{Kind: manifest.HotplugKindBlock, ID: "data", Block: manifest.HotplugBlock{ImagePath: "/tmp/data.img", Format: "raw"}},
 	}
 
 	for _, device := range devices {
@@ -379,11 +380,11 @@ func TestDevicePlansDeclareEverySequenceExplicitly(t *testing.T) {
 	}
 }
 
-func testVirtioFSDevice(tmpDir string) Device {
-	return Device{
-		Kind: KindVirtioFS,
+func testVirtioFSDevice(tmpDir string) manifest.HotplugDevice {
+	return manifest.HotplugDevice{
+		Kind: manifest.HotplugKindVirtioFS,
 		ID:   "cache",
-		VirtioFS: VirtioFS{
+		VirtioFS: manifest.HotplugVirtioFS{
 			Source:     filepath.Join(tmpDir, "cache"),
 			Target:     "/mnt/cache",
 			SocketPath: filepath.Join(tmpDir, "cache.sock"),

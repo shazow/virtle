@@ -13,7 +13,6 @@ import (
 
 	"github.com/shazow/virtle/backend"
 	"github.com/shazow/virtle/backend/qemu/internal/vmm"
-	"github.com/shazow/virtle/internal/hotplug"
 	imanifest "github.com/shazow/virtle/internal/manifest"
 	"github.com/shazow/virtle/units"
 	"github.com/shazow/virtle/vm"
@@ -263,28 +262,28 @@ func (b *qemuBackend) Detach(ctx context.Context, inst backend.Instance, dev vm.
 
 // hotplugDevice maps the sealed vm.Device union onto the internal hotplug
 // device description.
-func hotplugDevice(dev vm.Device) (hotplug.Device, error) {
+func hotplugDevice(dev vm.Device) (imanifest.HotplugDevice, error) {
 	switch d := dev.(type) {
 	case vm.Share:
 		if d.Tag == "" {
-			return hotplug.Device{}, fmt.Errorf("share device: Tag is required")
+			return imanifest.HotplugDevice{}, fmt.Errorf("share device: Tag is required")
 		}
-		return hotplug.Device{
-			Kind: hotplug.KindVirtioFS,
+		return imanifest.HotplugDevice{
+			Kind: imanifest.HotplugKindVirtioFS,
 			ID:   d.Tag,
-			VirtioFS: hotplug.VirtioFS{
+			VirtioFS: imanifest.HotplugVirtioFS{
 				Source: d.HostPath,
 				Target: d.GuestPath,
 			},
 		}, nil
 	case vm.Disk:
 		if d.Path == "" {
-			return hotplug.Device{}, fmt.Errorf("disk device: Path is required")
+			return imanifest.HotplugDevice{}, fmt.Errorf("disk device: Path is required")
 		}
-		return hotplug.Device{
-			Kind: hotplug.KindBlock,
+		return imanifest.HotplugDevice{
+			Kind: imanifest.HotplugKindBlock,
 			ID:   deviceID("disk", d.Path),
-			Block: hotplug.Block{
+			Block: imanifest.HotplugBlock{
 				ImagePath: d.Path,
 				Format:    d.Format,
 			},
@@ -294,16 +293,16 @@ func hotplugDevice(dev vm.Device) (hotplug.Device, error) {
 		if proto == "" {
 			proto = "tcp"
 		}
-		return hotplug.Device{
-			Kind: hotplug.KindNet,
+		return imanifest.HotplugDevice{
+			Kind: imanifest.HotplugKindNet,
 			ID:   deviceID("fwd", proto+"-"+d.HostAddr),
-			Net: hotplug.Net{
+			Net: imanifest.HotplugNet{
 				Backend: "user",
-				Forward: []hotplug.Forward{{Proto: proto, Host: d.HostAddr, Guest: d.GuestAddr}},
+				Forward: []imanifest.HotplugForward{{Proto: proto, Host: d.HostAddr, Guest: d.GuestAddr}},
 			},
 		}, nil
 	default:
-		return hotplug.Device{}, fmt.Errorf("unsupported device type %T", dev)
+		return imanifest.HotplugDevice{}, fmt.Errorf("unsupported device type %T", dev)
 	}
 }
 

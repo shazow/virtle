@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/shazow/virtle/backend/qemu/internal/qmpclient"
 	"github.com/shazow/virtle/internal/executor"
-	"github.com/shazow/virtle/internal/qmpclient"
 )
 
 type QMPWait struct {

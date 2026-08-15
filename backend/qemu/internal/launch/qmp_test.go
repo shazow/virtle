@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shazow/virtle/backend/qemu/internal/qmpclient"
 	"github.com/shazow/virtle/internal/executor"
 	"github.com/shazow/virtle/internal/executor/executortest"
-	"github.com/shazow/virtle/internal/qmpclient"
 )
 
 func TestWaitForQMPWaitsForSocketThenDials(t *testing.T) {

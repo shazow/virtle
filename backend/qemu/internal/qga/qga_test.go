@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/shazow/virtle/internal/qmpwire"
+	"github.com/shazow/virtle/backend/qemu/internal/qmpwire"
 )
 
 func TestClientFileAndExecCommands(t *testing.T) {

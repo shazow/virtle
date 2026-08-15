@@ -8,7 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/shazow/virtle/internal/balloon"
+	"github.com/shazow/virtle/backend/qemu/internal/balloon"
+	imanifest "github.com/shazow/virtle/internal/manifest"
 )
 
 func TestBuildQEMUCommandAppendsBalloonArgs(t *testing.T) {
@@ -29,7 +30,7 @@ func TestManagerLaunchStartsBalloonControllerAndStopsItBeforeQuit(t *testing.T) 
 	tmpDir := t.TempDir()
 	manifest := validManifestWithBalloon(tmpDir)
 	manifest.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
-	manifest.QEMU.Devices.Balloon.Controller = &balloon.ControllerConfig{
+	manifest.QEMU.Devices.Balloon.Controller = &imanifest.BalloonControllerConfig{
 		PollInterval:   1 * time.Second,
 		ReclaimHoldoff: 1 * time.Second,
 	}
@@ -153,10 +154,10 @@ func TestBalloonControllerTaskWithNilLoggerDoesNotPanicOnFailure(t *testing.T) {
 	qmpClient := (&fakeQMPClient{
 		enableBalloonStatsErr: errors.New("guest stats unavailable"),
 	}).withDefaultBalloonPath("/machine/peripheral/balloon0")
-	task := balloon.ControllerTask(qmpClient, &balloon.Device{
+	task := balloon.ControllerTask(qmpClient, &imanifest.BalloonDevice{
 		ID:        "balloon0",
 		Transport: "pci",
-		Controller: &balloon.ControllerConfig{
+		Controller: &imanifest.BalloonControllerConfig{
 			MinActual:             512,
 			MaxActual:             1024,
 			GrowBelowAvailable:    256,
@@ -186,10 +187,10 @@ func TestBalloonControllerTaskWithNilLoggerDoesNotPanicOnAdjustment(t *testing.T
 		readBalloonStatsUpdated: time.Now(),
 		queryBalloonActualBytes: 512 * testMiB,
 	}).withDefaultBalloonPath("/machine/peripheral/balloon0")
-	task := balloon.ControllerTask(qmpClient, &balloon.Device{
+	task := balloon.ControllerTask(qmpClient, &imanifest.BalloonDevice{
 		ID:        "balloon0",
 		Transport: "pci",
-		Controller: &balloon.ControllerConfig{
+		Controller: &imanifest.BalloonControllerConfig{
 			MinActual:             512,
 			MaxActual:             1024,
 			GrowBelowAvailable:    600,

@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/shazow/virtle/internal/manifest"
 
 	rawQMP "github.com/digitalocean/go-qemu/qmp/raw"
-	balloonpkg "github.com/shazow/virtle/internal/balloon"
 	"github.com/shazow/virtle/internal/control"
 )
 
@@ -16,7 +16,7 @@ type balloonQMP interface {
 	WithRaw(ctx context.Context, fn func(*rawQMP.Monitor) error) error
 }
 
-func balloon(ctx context.Context, device *balloonpkg.Device, qmp balloonQMP, req control.BalloonRequest) (control.BalloonResponse, error) {
+func balloon(ctx context.Context, device *manifest.BalloonDevice, qmp balloonQMP, req control.BalloonRequest) (control.BalloonResponse, error) {
 	if device == nil {
 		return control.BalloonResponse{}, errBalloonNotConfigured
 	}

@@ -10,7 +10,7 @@ import (
 	"time"
 
 	rawQMP "github.com/digitalocean/go-qemu/qmp/raw"
-	"github.com/shazow/virtle/internal/qmpwire"
+	"github.com/shazow/virtle/backend/qemu/internal/qmpwire"
 )
 
 func TestQMPClientQuit(t *testing.T) {

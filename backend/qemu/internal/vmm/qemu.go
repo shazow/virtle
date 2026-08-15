@@ -9,9 +9,9 @@ import (
 	"syscall"
 
 	govmmQemu "github.com/kata-containers/govmm/qemu"
-	"github.com/shazow/virtle/internal/balloon"
+	"github.com/shazow/virtle/backend/qemu/internal/balloon"
+	"github.com/shazow/virtle/backend/qemu/internal/hotplug"
 	"github.com/shazow/virtle/internal/executor"
-	"github.com/shazow/virtle/internal/hotplug"
 	"github.com/shazow/virtle/internal/manifest"
 )
 

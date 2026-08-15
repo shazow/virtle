@@ -7,10 +7,10 @@ import (
 	"time"
 
 	"github.com/shazow/virtle/backend/qemu/internal/launch"
+	"github.com/shazow/virtle/backend/qemu/internal/qga"
 	controlpkg "github.com/shazow/virtle/internal/control"
 	"github.com/shazow/virtle/internal/executor"
 	"github.com/shazow/virtle/internal/manifest"
-	"github.com/shazow/virtle/internal/qga"
 )
 
 type managerGuestFeature struct {

@@ -3,10 +3,10 @@ package runtime
 import (
 	"context"
 	"errors"
+	"github.com/shazow/virtle/internal/manifest"
 	"testing"
 
 	rawQMP "github.com/digitalocean/go-qemu/qmp/raw"
-	balloonpkg "github.com/shazow/virtle/internal/balloon"
 	"github.com/shazow/virtle/internal/control"
 )
 
@@ -27,7 +27,7 @@ func TestBalloonRequiresConfiguredDevice(t *testing.T) {
 
 func TestBalloonPropagatesQMPError(t *testing.T) {
 	qmpErr := errors.New("qmp failed")
-	_, err := balloon(context.Background(), &balloonpkg.Device{}, fakeBalloonQMP{err: qmpErr}, control.BalloonRequest{})
+	_, err := balloon(context.Background(), &manifest.BalloonDevice{}, fakeBalloonQMP{err: qmpErr}, control.BalloonRequest{})
 	if !errors.Is(err, qmpErr) {
 		t.Fatalf("error: got %v want %v", err, qmpErr)
 	}

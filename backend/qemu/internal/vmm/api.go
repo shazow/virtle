@@ -8,11 +8,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/shazow/virtle/backend/qemu/internal/balloon"
 	"github.com/shazow/virtle/backend/qemu/internal/launch"
-	"github.com/shazow/virtle/internal/balloon"
-	"github.com/shazow/virtle/internal/hotplug"
+	"github.com/shazow/virtle/backend/qemu/internal/qga"
 	"github.com/shazow/virtle/internal/manifest"
-	"github.com/shazow/virtle/internal/qga"
 )
 
 // StartOptions configures a non-blocking StartVM.
@@ -248,16 +247,16 @@ func (v *VM) ResizeMemory(ctx context.Context, sizeBytes int64) error {
 // AttachHotplugDevice attaches an ad hoc hotplug device to the running VM.
 // The VM must have been started with PCIe hotplug ports reserved (manifest
 // [hotplug] devices reserve them).
-func (v *VM) AttachHotplugDevice(ctx context.Context, dev hotplug.Device) error {
+func (v *VM) AttachHotplugDevice(ctx context.Context, dev manifest.HotplugDevice) error {
 	runner := v.m.hotplugRunner(v.running.runtime.QMP())
-	runner.Devices = append(append([]hotplug.Device(nil), runner.Devices...), dev)
+	runner.Devices = append(append([]manifest.HotplugDevice(nil), runner.Devices...), dev)
 	return runner.Attach(ctx, dev.ID)
 }
 
 // DetachHotplugDevice detaches a device previously attached with
 // AttachHotplugDevice (or declared under manifest [hotplug]).
-func (v *VM) DetachHotplugDevice(ctx context.Context, dev hotplug.Device) error {
+func (v *VM) DetachHotplugDevice(ctx context.Context, dev manifest.HotplugDevice) error {
 	runner := v.m.hotplugRunner(v.running.runtime.QMP())
-	runner.Devices = append(append([]hotplug.Device(nil), runner.Devices...), dev)
+	runner.Devices = append(append([]manifest.HotplugDevice(nil), runner.Devices...), dev)
 	return runner.Detach(ctx, dev.ID)
 }

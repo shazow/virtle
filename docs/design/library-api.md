@@ -540,11 +540,11 @@ implementation to be adapted:
 |---|---|
 | `backend/qemu` `Start` | `backend/qemu/internal/vmm/qemu.go` lowering + `backend/qemu/internal/launch` (`BuildPlan`, `AcquireCID`, socket waits) + `internal/executor` supervision |
 | `backend.Instance` | `internal/executor.Process` (later, libkrun: a cgo handle) |
-| `backend/qemu`'s QGA `vm.Guest` | `internal/qga` client behind the new shapes (`guest-exec` → `Run`, base64 file chunks → `Open`/`Create`) |
+| `backend/qemu`'s QGA `vm.Guest` | `backend/qemu/internal/qga` client behind the new shapes (`guest-exec` → `Run`, base64 file chunks → `Open`/`Create`) |
 | `guest` daemon + client | new code; binary-safe, concurrent, streaming protocol (see protocol requirements) — supersedes both QGA's base64 chunking and `control`'s request/response-only framing |
-| `backend.Suspender` | `internal/qmpclient` migration save/restore + `launch.SuspendState` |
-| `backend.MemoryResizer` | `internal/balloon` controller / QMP path |
-| `backend.DeviceAttacher` | `internal/hotplug` + its QMP adapter |
+| `backend.Suspender` | `backend/qemu/internal/qmpclient` migration save/restore + `launch.SuspendState` |
+| `backend.MemoryResizer` | `backend/qemu/internal/balloon` controller / QMP path |
+| `backend.DeviceAttacher` | `backend/qemu/internal/hotplug` + its QMP adapter |
 | `manifest.Load` | `internal/manifest` decode + resolve, retargeted at (Spec, Backend) |
 
 ## Non-goals

@@ -5,8 +5,8 @@ import (
 	"errors"
 
 	"github.com/shazow/virtle/backend/qemu/internal/launch"
+	"github.com/shazow/virtle/backend/qemu/internal/qmpclient"
 	runtimepkg "github.com/shazow/virtle/backend/qemu/internal/runtime"
-	"github.com/shazow/virtle/internal/qmpclient"
 )
 
 var errRuntimeNotStarted = errors.New("runtime is not started")

@@ -14,7 +14,6 @@ import (
 	"github.com/shazow/virtle/backend"
 	"github.com/shazow/virtle/internal/hotplug"
 	"github.com/shazow/virtle/internal/manager"
-	"github.com/shazow/virtle/internal/manager/launch"
 	imanifest "github.com/shazow/virtle/internal/manifest"
 	"github.com/shazow/virtle/units"
 	"github.com/shazow/virtle/vm"
@@ -95,11 +94,15 @@ type qemuBackend struct {
 
 func (b *qemuBackend) hasRemoteControl() bool { return b.cfg.RemoteControl != nil }
 
-// Version reports the backend's state version (e.g. "qemu-v1"). Suspend
-// state is stamped with it and resume compares it before loading: the
-// saved VM state is a backend-owned format, so state written by any other
-// backend or format revision is not resumable.
-func (b *qemuBackend) Version() string { return launch.SuspendStateVersion }
+// StateVersion is the qemu backend's suspend-state version. Suspend state
+// is stamped with it and resume compares it before loading: the saved VM
+// state is a backend-owned format (a QEMU migration stream), so state
+// written by any other backend or format revision is not resumable. Bump
+// the revision when the format changes incompatibly.
+const StateVersion = "qemu-v1"
+
+// Version reports the backend's state version; see StateVersion.
+func (b *qemuBackend) Version() string { return StateVersion }
 
 // NewBackendFromDocument is the bridge for the public manifest package:
 // the returned backend starts from the loaded document, preserving
@@ -148,7 +151,8 @@ func (b *qemuBackend) start(ctx context.Context, spec *vm.Spec, resume manager.R
 		Resume:           resume,
 		HasRemoteControl: b.hasRemoteControl(),
 	}, manager.Config{
-		Logger: b.logger(),
+		Logger:              b.logger(),
+		SuspendStateVersion: StateVersion,
 	})
 	if err != nil {
 		return nil, err

@@ -65,6 +65,10 @@ type manager struct {
 	signals             <-chan os.Signal
 	pidSignaler         launch.PIDSignaler
 	notifier            launch.NotificationSink
+	// suspendStateVersion is the backend's state version token stamped on
+	// saved suspend state and compared on resume; the launch machinery is
+	// version-agnostic. Supplied by the backend (qemu.StateVersion).
+	suspendStateVersion string
 }
 
 func newManager() *manager {
@@ -92,6 +96,7 @@ func newManagerFromConfig(config Config) *manager {
 		signals:             config.Signals,
 		pidSignaler:         config.PIDSignaler,
 		notifier:            config.Notifier,
+		suspendStateVersion: config.SuspendStateVersion,
 	}
 }
 
@@ -117,7 +122,7 @@ func (m *manager) planLaunch(spec launch.Spec) (*launch.Plan, error) {
 	if err != nil {
 		return nil, &launch.StageError{Stage: "preflight", Err: err}
 	}
-	resumeState, err := launch.ResolveResumeState(cfg, resumeMode)
+	resumeState, err := launch.ResolveResumeState(cfg, resumeMode, m.suspendStateVersion)
 	if err != nil {
 		return nil, &launch.StageError{Stage: "restore", Err: err}
 	}
@@ -459,6 +464,7 @@ func (m *manager) saveSuspendStateConnected(ctx context.Context, qmpSocketPath s
 	}
 
 	state := launch.SuspendState{
+		Version:       m.suspendStateVersion,
 		HostName:      manifest.Identity.HostName,
 		QMPSocketPath: qmpSocketPath,
 		VMStatePath:   statePath,

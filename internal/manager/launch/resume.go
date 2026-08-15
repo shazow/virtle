@@ -18,7 +18,10 @@ func NormalizeResumeMode(mode ResumeMode) (ResumeMode, error) {
 	}
 }
 
-func ResolveResumeState(manifest *manifest.Manifest, mode ResumeMode) (*SuspendState, error) {
+// ResolveResumeState reads and validates saved suspend state.
+// stateVersion is the backend's state version token (e.g. "qemu-v1"); the
+// launch machinery is version-agnostic and only compares for equality.
+func ResolveResumeState(manifest *manifest.Manifest, mode ResumeMode, stateVersion string) (*SuspendState, error) {
 	if mode == ResumeModeNo {
 		return nil, nil
 	}
@@ -42,14 +45,14 @@ func ResolveResumeState(manifest *manifest.Manifest, mode ResumeMode) (*SuspendS
 	// A version mismatch errors even in auto mode: silently booting fresh
 	// would abandon the suspended session, which is exactly the surprise
 	// the marker exists to prevent.
-	if state.Version != SuspendStateVersion {
+	if state.Version != stateVersion {
 		written := fmt.Sprintf("state version %q", state.Version)
 		if state.Version == "" {
 			written = "no state version marker (written by an older virtle)"
 		}
 		return nil, fmt.Errorf(
 			"suspend state %q has %s; this virtle resumes %q — resume with the virtle that wrote it or discard the state",
-			SuspendStatePath(manifest), written, SuspendStateVersion)
+			SuspendStatePath(manifest), written, stateVersion)
 	}
 	if state.CID <= 0 {
 		if mode == ResumeModeAuto {

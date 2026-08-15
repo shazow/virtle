@@ -17,6 +17,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/jessevdk/go-flags"
+	"github.com/shazow/virtle/backend/qemu"
 	"github.com/shazow/virtle/internal/balloon"
 	"github.com/shazow/virtle/internal/manager"
 	"github.com/shazow/virtle/internal/manager/control"
@@ -104,7 +105,11 @@ func runLaunch(options *Options) error {
 	}
 	vmHandle, err := manager.StartSessionVM(ctx, loaded, manager.StartOptions{
 		Resume: manager.ResumeMode(options.Launch.Resume),
-	}, session)
+	}, session, manager.Config{
+		// The CLI launches the qemu backend; its state version guards
+		// suspend/resume across virtle versions and backends.
+		SuspendStateVersion: qemu.StateVersion,
+	})
 	if err != nil {
 		if manager.IsSavedSuspendExit(err) {
 			return nil

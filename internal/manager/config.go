@@ -30,6 +30,10 @@ type Config struct {
 	Signals             <-chan os.Signal
 	PIDSignaler         launch.PIDSignaler
 	Notifier            launch.NotificationSink
+	// SuspendStateVersion is the backend's state version token (e.g.
+	// qemu.StateVersion) stamped on saved suspend state and compared on
+	// resume.
+	SuspendStateVersion string
 }
 
 func mergeConfig(base Config, override Config) Config {
@@ -86,6 +90,9 @@ func mergeConfig(base Config, override Config) Config {
 	}
 	if override.Notifier != nil {
 		base.Notifier = override.Notifier
+	}
+	if override.SuspendStateVersion != "" {
+		base.SuspendStateVersion = override.SuspendStateVersion
 	}
 	return base
 }

@@ -17,13 +17,6 @@ import (
 
 const defaultStateWaitTimeout = 500 * time.Millisecond
 
-// SuspendStateVersion is the backend state version this launch machinery
-// writes and resumes: the suspend-state format is backend-owned (the
-// saved VM state is a QEMU migration stream), so the token names the
-// backend and its format revision together. Bump the revision when the
-// format (or the QEMU migration wiring it depends on) changes
-// incompatibly.
-const SuspendStateVersion = "qemu-v1"
 
 func SuspendStatePath(manifest *manifest.Manifest) string {
 	return filepath.Join(manifest.ResolvedPersistenceStateDir(), manifest.Identity.HostName+".suspend.json")
@@ -38,9 +31,6 @@ func LaunchPIDPath(manifest *manifest.Manifest) string {
 }
 
 func WriteSuspendStateData(manifest *manifest.Manifest, state SuspendState) error {
-	if state.Version == "" {
-		state.Version = SuspendStateVersion
-	}
 	if state.HostName == "" {
 		state.HostName = manifest.Identity.HostName
 	}

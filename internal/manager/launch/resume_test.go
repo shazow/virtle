@@ -20,12 +20,16 @@ func TestNormalizeResumeMode(t *testing.T) {
 	}
 }
 
+// testStateVersion is an arbitrary backend state version token; the
+// launch machinery only compares it for equality.
+const testStateVersion = "test-v1"
+
 func TestResolveResumeState(t *testing.T) {
 	cfg := testManifest(t)
-	if state, err := ResolveResumeState(cfg, ResumeModeAuto); err != nil || state != nil {
+	if state, err := ResolveResumeState(cfg, ResumeModeAuto, testStateVersion); err != nil || state != nil {
 		t.Fatalf("auto without state: state=%#v err=%v", state, err)
 	}
-	if _, err := ResolveResumeState(cfg, ResumeModeForce); err == nil || !strings.Contains(err.Error(), "no saved suspend state") {
+	if _, err := ResolveResumeState(cfg, ResumeModeForce, testStateVersion); err == nil || !strings.Contains(err.Error(), "no saved suspend state") {
 		t.Fatalf("expected missing state error, got %v", err)
 	}
 
@@ -37,6 +41,7 @@ func TestResolveResumeState(t *testing.T) {
 		t.Fatalf("write vm state: %v", err)
 	}
 	if err := WriteSuspendStateData(cfg, SuspendState{
+		Version:       testStateVersion,
 		QMPSocketPath: "/run/qmp.sock",
 		VMStatePath:   vmStatePath,
 		CID:           7,
@@ -44,15 +49,15 @@ func TestResolveResumeState(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("write suspend state: %v", err)
 	}
-	state, err := ResolveResumeState(cfg, ResumeModeForce)
+	state, err := ResolveResumeState(cfg, ResumeModeForce, testStateVersion)
 	if err != nil {
 		t.Fatalf("resolve resume state: %v", err)
 	}
 	if state == nil || state.CID != 7 || state.VMStatePath != vmStatePath {
 		t.Fatalf("unexpected resume state: %#v", state)
 	}
-	if state.Version != SuspendStateVersion {
-		t.Fatalf("unexpected suspend state version: got %q want %q", state.Version, SuspendStateVersion)
+	if state.Version != testStateVersion {
+		t.Fatalf("unexpected suspend state version: got %q want %q", state.Version, testStateVersion)
 	}
 }
 
@@ -78,7 +83,7 @@ func TestResolveResumeStateRejectsVersionMismatch(t *testing.T) {
 	// The mismatch errors even in auto mode: silently booting fresh would
 	// abandon the suspended session.
 	for _, mode := range []ResumeMode{ResumeModeAuto, ResumeModeForce} {
-		if _, err := ResolveResumeState(cfg, mode); err == nil || !strings.Contains(err.Error(), `state version "futurebackend-v9"`) {
+		if _, err := ResolveResumeState(cfg, mode, testStateVersion); err == nil || !strings.Contains(err.Error(), `state version "futurebackend-v9"`) {
 			t.Fatalf("mode %q: expected version mismatch error, got %v", mode, err)
 		}
 	}
@@ -103,7 +108,7 @@ func TestResolveResumeStateRejectsPreVersionState(t *testing.T) {
 		t.Fatalf("write suspend state: %v", err)
 	}
 
-	if _, err := ResolveResumeState(cfg, ResumeModeForce); err == nil || !strings.Contains(err.Error(), "no state version marker") {
+	if _, err := ResolveResumeState(cfg, ResumeModeForce, testStateVersion); err == nil || !strings.Contains(err.Error(), "no state version marker") {
 		t.Fatalf("expected pre-version state error, got %v", err)
 	}
 }

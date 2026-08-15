@@ -7,7 +7,7 @@
 //
 // There is deliberately no default backend: this package cannot import its
 // implementations without a cycle, so consumers always name their backend
-// explicitly (qemu.BackendWithQGA(...)).
+// explicitly (qemu.New(...)).
 package backend
 
 import (
@@ -69,9 +69,10 @@ type ConsoleProvider interface {
 	Console(ctx context.Context) (vm.Term, error)
 }
 
-// Shutdown stops an instance gracefully: guest shutdown via RemoteControl
-// when available, falling back to Kill when the guest is unreachable or
-// the context expires.
+// Shutdown stops an instance gracefully. The graceful guest shutdown is
+// attempted only when remote control is available (RemoteControl
+// succeeds); instances without it — and instances whose guest is
+// unreachable or whose context expires — are stopped with Kill.
 func Shutdown(ctx context.Context, inst Instance) error {
 	g, err := inst.RemoteControl()
 	if err != nil {

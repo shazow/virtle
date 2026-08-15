@@ -99,9 +99,10 @@ func (v *VM) Kill() error {
 	return errors.Join(killErr, v.close())
 }
 
-// Close gracefully tears the VM down: guest shutdown when the guest agent
-// answers, then QMP quit, then signals, then runtime cleanup. Safe to call
-// more than once.
+// Close gracefully tears the VM down: guest shutdown, then QMP quit, then
+// signals, then runtime cleanup. The graceful guest shutdown is attempted
+// only when the VM has remote control; without it teardown goes straight
+// to QMP quit. Safe to call more than once.
 func (v *VM) Close() error {
 	return v.close()
 }

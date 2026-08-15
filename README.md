@@ -81,7 +81,7 @@ spec := &vm.Spec{
 	Shares: []vm.Share{{Tag: "src", HostPath: ".", GuestPath: "/workspace"}},
 	Memory: 2048 * units.Mebibyte,
 }
-b, err := qemu.BackendWithQGA(qemu.Config{})
+b, err := qemu.New(qemu.Config{RemoteControl: qemu.QGA{}})
 if err != nil {
 	log.Fatal(err)
 }

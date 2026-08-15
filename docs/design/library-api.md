@@ -66,7 +66,7 @@ in signatures); `vm` never imports `backend`. Two structural consequences:
 
 - There is no default backend anywhere in the core — `backend` cannot
   import `backend/qemu` without a cycle, so consumers always name their
-  backend explicitly (`qemu.BackendWithQGA(...)`). The layering question
+  backend explicitly (`qemu.New(...)`). The layering question
   answers itself.
 - `vm` cannot alias the contract types, so consumers of both import both
   packages — the same shape `database/sql` users live with.
@@ -224,7 +224,7 @@ Naming notes: `backend.Backend` stutters, but so does `driver.Driver`; the
 stutter is accepted for greppability over `backend.Interface`
 (`sort.Interface` precedent, a style the stdlib has moved away from). One
 ergonomic caveat: callers cannot name a variable `backend`, so examples and
-docs model `b, err := qemu.BackendWithQGA(...)`.
+docs model `b, err := qemu.New(...)`.
 
 ### The virtle guest daemon: `guest`
 
@@ -336,21 +336,29 @@ type Config struct {
 	ExtraArgs []string // passthrough
 	Console   Console
 	Seccomp   bool
-	Logger    *slog.Logger // default: discard; replaces today's package-global SetLogger
-	// ... QMP/QGA socket placement, virtiofsd path, etc.
+	// RemoteControl selects the guest-control transport (if any); nil
+	// declares an agentless image, disabling guest-dependent features
+	// (including the graceful guest shutdown attempt at teardown).
+	// Whether guest control is wired eagerly or lazily stays an
+	// implementation detail, so variants can be tried without API changes.
+	RemoteControl RemoteControl
+	Logger        *slog.Logger // default: discard; replaces today's package-global SetLogger
+	// ... QMP socket placement, virtiofsd path, etc.
 }
 
-// Constructors select the RemoteControl implementation (if any); whether
-// guest control is wired eagerly or lazily is an implementation detail
-// behind them, so variants can be tried without API changes.
+func New(cfg Config) (backend.Backend, error)
 
-// BackendWithQGA returns a QEMU backend whose instances' RemoteControl
-// speaks the QEMU Guest Agent — equivalent to today's codebase.
-func BackendWithQGA(cfg Config) (backend.Backend, error)
+// RemoteControl is a sealed union (vm.Device-style); each transport
+// carries its own knobs, so combinations and per-transport options grow
+// without new constructors.
+type RemoteControl interface{ remoteControl() }
 
-// BackendWithGuest (future) returns a QEMU backend whose instances'
-// RemoteControl speaks the virtle-native guest daemon.
-func BackendWithGuest(cfg Config) (backend.Backend, error)
+// QGA: the guest image runs qemu-guest-agent — equivalent to today's
+// codebase.
+type QGA struct{ SocketPath string }
+
+// Guest (future): the virtle-native guest daemon.
+type Guest struct{ Port uint32 }
 ```
 
 The returned backends also implement `backend.Suspender` (QMP migration
@@ -358,7 +366,7 @@ save/restore), `backend.MemoryResizer` (virtio-balloon), and
 `backend.DeviceAttacher` (QMP device_add/del). virtiofsd helper processes
 are an implementation detail inside the backend. `qmpclient`, `qga`, and
 `qmpwire` stay internal; nothing in `backend/qemu`'s exported surface names
-QMP beyond the `BackendWithQGA` constructor that opts into it.
+QMP beyond the `QGA` transport value that opts into it.
 
 ### Config files: `manifest`
 
@@ -385,7 +393,7 @@ spec := &vm.Spec{
 	Shares: []vm.Share{{Tag: "src", HostPath: ".", GuestPath: "/workspace"}},
 	Memory: 2048 * units.Mebibyte,
 }
-b, err := qemu.BackendWithQGA(qemu.Config{})
+b, err := qemu.New(qemu.Config{RemoteControl: qemu.QGA{}})
 if err != nil {
 	log.Fatal(err)
 }
@@ -406,7 +414,7 @@ fmt.Printf("exit=%d\n%s", out.ExitCode, out.Stdout)
 **2. Swapping the backend — the abstraction paying off:**
 
 ```go
-b, err := qemu.BackendWithQGA(qemu.Config{Machine: "microvm"})
+b, err := qemu.New(qemu.Config{Machine: "microvm", RemoteControl: qemu.QGA{}})
 if useFirecracker {
 	b, err = firecracker.New(firecracker.Config{}) // hypothetical sibling
 }
@@ -465,10 +473,14 @@ hold the rationale):
   `backend.Backend` (accepting the `driver.Driver` stutter).
 - No default backend in core, enforced structurally by the import
   direction.
-- Guest control comes from `Instance.RemoteControl()`; backend
-  constructors select its implementation (`qemu.BackendWithQGA` now,
-  `qemu.BackendWithGuest` later), with lazy-vs-eager wiring an
-  implementation detail behind the constructor.
+- Guest control comes from `Instance.RemoteControl()`; the backend's
+  `Config.RemoteControl` field selects its implementation via a sealed
+  transport union (`qemu.QGA{}` now, `qemu.Guest{}` later; nil = agentless
+  image, guest features disabled), with lazy-vs-eager wiring an
+  implementation detail. Revised from constructor-per-transport
+  (`BackendWithQGA`, ...) in PR #71 review: transport-specific knobs live
+  on the transport value, and transition combinations don't multiply
+  constructor names.
 - Sizes are typed: public `units` package, `units.Bytes` base with constant
   multipliers (`2048 * units.Mebibyte`); manifest TOML numbers stay
   MiB-denominated, converted by `manifest.Load`.

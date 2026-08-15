@@ -123,6 +123,9 @@ func specDocument(spec *vm.Spec, cfg Config, base *imanifest.Document) (imanifes
 	if cfg.Balloon {
 		doc.Balloon = &imanifest.BalloonInput{Enabled: true}
 	}
+	if qga, ok := cfg.RemoteControl.(QGA); ok && qga.SocketPath != "" {
+		doc.QEMU.GuestAgentSocket = qga.SocketPath
+	}
 
 	if err := applySpecDevices(&doc, spec); err != nil {
 		return imanifest.Document{}, err

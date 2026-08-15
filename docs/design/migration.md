@@ -153,9 +153,10 @@ unsupported.
 Transition (matches the constructor decision in library-api.md):
 
 1. `backend/qemu` ships both `vm.Guest` implementations, selected by
-   constructor: `BackendWithQGA` (the QGA adapter, equivalent to today)
-   first, `BackendWithGuest` (the guest-daemon client) once the daemon
-   lands. `RemoteControl()` returns whichever the chosen constructor wired.
+   `Config.RemoteControl` transport: `qemu.QGA{}` (the QGA adapter,
+   equivalent to today) first, `qemu.Guest{}` (the guest-daemon client)
+   once the daemon lands. `RemoteControl()` returns whichever transport
+   the config wired.
 2. Guest images add the `virtle` binary (or a stripped `virtle-guest`) to
    their init; getting-started docs gain a section on this.
 3. After a deprecation window, the QGA adapter is removed from `backend/qemu` and
@@ -204,7 +205,7 @@ readable. No compatibility promise before v1.
 |---|---|---|
 | 1 | `vm` + `backend` + `units` core packages, `backend/qemu` wrapping existing internals; CLI rewired onto them | None intended (CLI/manifest/control byte-compatible); suspend-state version marker introduced |
 | 2 | `manifest.Load` public; examples + README library section | New Go API available |
-| 3 | `guest` daemon + client; `virtle guest` subcommand; `BackendWithGuest` constructor added | Additive; image builders may opt in |
+| 3 | `guest` daemon + client; `virtle guest` subcommand; `qemu.Guest{}` transport added | Additive; image builders may opt in |
 | 4 | QGA fallback deprecated, then removed | Image builders must ship the guest daemon |
 | 5 | Control-socket guest-proxying revisited; state relocation if desired | Scripted socket consumers, if any changes are chosen |
 

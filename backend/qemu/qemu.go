@@ -1,8 +1,8 @@
 // Package qemu implements a virtle backend that launches virtual machines
-// with QEMU. Constructors select the guest-control implementation wired
-// into Instance.RemoteControl: BackendWithQGA (the QEMU Guest Agent,
-// equivalent to the virtle CLI today) now, a virtle-native guest daemon
-// variant later.
+// with QEMU. Config.RemoteControl selects the guest-control transport
+// wired into Instance.RemoteControl: QGA (the QEMU Guest Agent, equivalent
+// to the virtle CLI today) now, a virtle-native guest daemon transport
+// later.
 package qemu
 
 import (
@@ -41,32 +41,54 @@ type Config struct {
 	KVM            *bool             // enable KVM acceleration; default derived per host
 	ExtraArgs      []string          // passthrough QEMU arguments
 	Console        Console
-	Seccomp        bool         // enable QEMU seccomp sandboxing
-	Balloon        bool         // attach a virtio-balloon device (required for ResizeMemory)
-	HostName       string       // guest-visible name; default: "virtle"
-	Logger         *slog.Logger // default: discard
+	Seccomp        bool   // enable QEMU seccomp sandboxing
+	Balloon        bool   // attach a virtio-balloon device (required for ResizeMemory)
+	HostName       string // guest-visible name; default: "virtle"
+
+	// RemoteControl selects the guest-control transport wired into
+	// Instance.RemoteControl, declaring what the VM image runs. Nil
+	// declares an image with no control agent: guest-dependent features
+	// (guest file writes, workspace mounts) are disabled, RemoteControl
+	// reports errors.ErrUnsupported, and teardown skips the graceful
+	// guest shutdown attempt.
+	RemoteControl RemoteControl
+
+	Logger *slog.Logger // default: discard
 }
 
-// BackendWithQGA returns a QEMU backend whose instances' RemoteControl
-// speaks the QEMU Guest Agent — the guest must run qemu-guest-agent on the
-// default virtio-serial channel, as with the virtle CLI today.
-func BackendWithQGA(cfg Config) (backend.Backend, error) {
-	return &qemuBackend{cfg: cfg, hasRemoteControl: true}, nil
+// RemoteControl is a guest-control transport for Config.RemoteControl.
+// It is sealed (unexported method): QGA today, the virtle-native guest
+// daemon later. Each transport carries its own knobs.
+type RemoteControl interface{ remoteControl() }
+
+// QGA is the qemu-guest-agent transport: the guest image runs
+// qemu-guest-agent on the default virtio-serial channel
+// (org.qemu.guest_agent.0), as with the virtle CLI today. The zero value
+// works.
+type QGA struct {
+	// SocketPath overrides where the host-side guest-agent socket is
+	// placed, relative to the state dir unless absolute.
+	// Default: "qga.sock".
+	SocketPath string
 }
 
-// BackendWithoutRemoteControl returns a QEMU backend for images that run
-// no guest control agent: guest-dependent features (guest file writes,
-// workspace mounts, graceful guest shutdown) are disabled and
-// RemoteControl reports errors.ErrUnsupported.
-func BackendWithoutRemoteControl(cfg Config) (backend.Backend, error) {
+func (QGA) remoteControl() {}
+
+// New returns a QEMU backend. Config.RemoteControl selects guest control —
+// there is no default transport, mirroring how backends themselves are
+// named explicitly:
+//
+//	b, err := qemu.New(qemu.Config{RemoteControl: qemu.QGA{}})
+func New(cfg Config) (backend.Backend, error) {
 	return &qemuBackend{cfg: cfg}, nil
 }
 
 type qemuBackend struct {
-	cfg              Config
-	hasRemoteControl bool
-	doc              *imanifest.Document // non-nil for manifest.Load-configured backends
+	cfg Config
+	doc *imanifest.Document // non-nil for manifest.Load-configured backends
 }
+
+func (b *qemuBackend) hasRemoteControl() bool { return b.cfg.RemoteControl != nil }
 
 // NewBackendFromDocument is the bridge for the public manifest package:
 // the returned backend starts from the loaded document, preserving
@@ -75,7 +97,10 @@ type qemuBackend struct {
 // callable (and not supported) outside the module.
 func NewBackendFromDocument(doc imanifest.Document, cfg Config) backend.Backend {
 	// Manifests describe agent-equipped guests today, matching the CLI.
-	return &qemuBackend{cfg: cfg, hasRemoteControl: true, doc: &doc}
+	if cfg.RemoteControl == nil {
+		cfg.RemoteControl = QGA{}
+	}
+	return &qemuBackend{cfg: cfg, doc: &doc}
 }
 
 func (b *qemuBackend) Start(ctx context.Context, spec *vm.Spec) (backend.Instance, error) {
@@ -97,7 +122,7 @@ func (b *qemuBackend) start(ctx context.Context, spec *vm.Spec, resume manager.R
 	}
 	handle, err := manager.StartVM(ctx, mf, manager.StartOptions{
 		Resume:           resume,
-		HasRemoteControl: b.hasRemoteControl,
+		HasRemoteControl: b.hasRemoteControl(),
 	}, manager.Config{
 		Logger: logger,
 		// A never-firing signal channel keeps the launch lifecycle from
@@ -108,7 +133,7 @@ func (b *qemuBackend) start(ctx context.Context, spec *vm.Spec, resume manager.R
 	if err != nil {
 		return nil, err
 	}
-	return &instance{vm: handle, hasRemoteControl: b.hasRemoteControl}, nil
+	return &instance{vm: handle, hasRemoteControl: b.hasRemoteControl()}, nil
 }
 
 type instance struct {
@@ -127,9 +152,12 @@ func (i *instance) RemoteControl() (vm.Guest, error) {
 	return &qgaGuest{vm: i.vm}, nil
 }
 
-// Close gracefully tears the instance down (guest shutdown, then QMP quit,
-// then signals, then runtime cleanup). Wait and Kill already release
-// runtime state; Close covers callers abandoning a VM without waiting.
+// Close gracefully tears the instance down: guest shutdown, then QMP
+// quit, then signals, then runtime cleanup. The graceful guest shutdown
+// is attempted only when the backend was configured with remote control;
+// without it teardown goes straight to QMP quit. Wait and Kill already
+// release runtime state; Close covers callers abandoning a VM without
+// waiting.
 func (i *instance) Close() error { return i.vm.Close() }
 
 func (b *qemuBackend) ownInstance(inst backend.Instance) (*instance, error) {

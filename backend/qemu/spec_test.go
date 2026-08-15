@@ -66,6 +66,16 @@ func TestSpecDocument(t *testing.T) {
 	}
 }
 
+func TestSpecDocumentQGASocketOverride(t *testing.T) {
+	doc, err := specDocument(testSpec(), Config{RemoteControl: QGA{SocketPath: "custom-qga.sock"}}, nil)
+	if err != nil {
+		t.Fatalf("specDocument: %v", err)
+	}
+	if got, want := doc.QEMU.GuestAgentSocket, "custom-qga.sock"; got != want {
+		t.Errorf("GuestAgentSocket = %q, want %q", got, want)
+	}
+}
+
 func TestSpecDocumentResolves(t *testing.T) {
 	doc, err := specDocument(testSpec(), Config{}, nil)
 	if err != nil {

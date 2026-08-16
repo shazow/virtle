@@ -1,4 +1,4 @@
-// Package qemuvm is the qemu backend's VM machinery: the host-side
+// Package vmm is the qemu backend's VM machinery: the host-side
 // launcher lifecycle behind backend/qemu and the virtle CLI. It is named
 // for its owner — backend-specific details such as the suspend-state
 // version live here as plain constants rather than plumbed configuration.

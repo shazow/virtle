@@ -6,7 +6,7 @@ package launch
 // the "integration" build tag because it exercises the real filesystem and
 // requires dash:
 //
-//	go test -tags=integration ./internal/manager/launch/
+//	go test -tags=integration ./backend/qemu/internal/launch/
 //
 // The `integration` flake check runs this suite in an environment that
 // guarantees the required tools: nix flake check

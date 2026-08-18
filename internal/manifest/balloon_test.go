@@ -3,8 +3,6 @@ package manifest
 import (
 	"testing"
 	"time"
-
-	"github.com/shazow/virtle/internal/balloon"
 )
 
 func TestValidateAppliesBalloonDefaults(t *testing.T) {
@@ -41,7 +39,7 @@ func TestValidateAppliesBalloonDefaults(t *testing.T) {
 
 func TestValidateRejectsInvalidBalloonControllerConfig(t *testing.T) {
 	invalidBounds := validManifestWithBalloon()
-	invalidBounds.QEMU.Devices.Balloon.Controller = &balloon.ControllerConfig{
+	invalidBounds.QEMU.Devices.Balloon.Controller = &BalloonControllerConfig{
 		MinActual: invalidBounds.QEMU.Memory.Size + 1,
 	}
 	if err := invalidBounds.Validate(); err == nil {
@@ -49,7 +47,7 @@ func TestValidateRejectsInvalidBalloonControllerConfig(t *testing.T) {
 	}
 
 	invalidThresholds := validManifestWithBalloon()
-	invalidThresholds.QEMU.Devices.Balloon.Controller = &balloon.ControllerConfig{
+	invalidThresholds.QEMU.Devices.Balloon.Controller = &BalloonControllerConfig{
 		GrowBelowAvailable:    512,
 		ReclaimAboveAvailable: 512,
 	}
@@ -60,7 +58,7 @@ func TestValidateRejectsInvalidBalloonControllerConfig(t *testing.T) {
 
 func validManifestWithBalloon() *Manifest {
 	manifest := validManifest()
-	manifest.QEMU.Devices.Balloon = &balloon.Device{
+	manifest.QEMU.Devices.Balloon = &BalloonDevice{
 		ID:        "balloon0",
 		Transport: "pci",
 	}

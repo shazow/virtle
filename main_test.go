@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/shazow/virtle/internal/manager/control"
+	"github.com/shazow/virtle/internal/control"
 )
 
 func TestOptionsDeclaresCommands(t *testing.T) {

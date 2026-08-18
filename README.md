@@ -69,6 +69,54 @@ process environment is available as `.Env` on every surface.
 | `run[].exec` | `CID`, `StateDir`, `Workspace.GuestPath`, `Workspace.HostPath`, user vars, `.Env` | scalar top-level values only |
 | `notifications.exec` | `State`, `Message`, notification context values, `.Env` | `STATE`, `MESSAGE`, normalized context values |
 
+## Library
+
+Virtle library docs: https://pkg.go.dev/github.com/shazow/virtle
+
+Boot a VM, run a command, tear down:
+
+```go
+spec := &vm.Spec{
+	Kernel: vm.Kernel{Path: "vmlinuz", Initrd: "initrd.img"},
+	Shares: []vm.Share{{Tag: "src", HostPath: ".", GuestPath: "/workspace"}},
+	Memory: 2048 * units.Mebibyte,
+}
+b, err := qemu.New(qemu.Config{RemoteControl: qemu.QGA{}})
+if err != nil {
+	log.Fatal(err)
+}
+inst, err := b.Start(ctx, spec)
+if err != nil {
+	log.Fatal(err)
+}
+defer backend.Shutdown(ctx, inst)
+
+g, err := inst.RemoteControl()
+if err != nil {
+	log.Fatal(err) // this VM has no guest agent
+}
+out, err := g.Run(ctx, &vm.GuestCmd{Path: "make", Dir: "/workspace"})
+fmt.Printf("exit=%d\n%s", out.ExitCode, out.Stdout)
+```
+
+Optional functionality is discovered by type assertion, as in
+`database/sql/driver`:
+
+```go
+if s, ok := b.(backend.Suspender); ok {
+	err = s.Suspend(ctx, inst, "")
+} else {
+	err = backend.Shutdown(ctx, inst)
+}
+```
+
+Or drive it from a manifest, as the CLI does:
+
+```go
+spec, b, err := manifest.Load(f)
+inst, err := b.Start(ctx, spec)
+```
+
 ## License
 
 MIT

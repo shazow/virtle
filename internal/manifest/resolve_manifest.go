@@ -14,9 +14,7 @@ import (
 	"time"
 
 	shellquote "github.com/kballard/go-shellquote"
-	"github.com/shazow/virtle/internal/balloon"
 	"github.com/shazow/virtle/internal/executor"
-	"github.com/shazow/virtle/internal/hotplug"
 )
 
 const virtioFSSocketProbeTimeout = 100 * time.Millisecond
@@ -68,6 +66,9 @@ func (d Document) ManifestWithOptions(options ResolveOptions) (*Manifest, error)
 	m.Persistence.Directories = persistenceDirectories(imageMounts, m.Persistence.StateDir)
 	m.Paths.LockPath = filepath.Join(m.Persistence.StateDir, m.Identity.HostName+".lock")
 	m.Paths.RuntimeDir = RuntimeDir{Mode: RuntimeDirPath, Path: m.Persistence.StateDir}
+	if d.QEMU.HotplugPorts < 0 {
+		return nil, fmt.Errorf("manifest.qemu.hotplug_ports must not be negative, got %d", d.QEMU.HotplugPorts)
+	}
 	hotplugCount := d.hotplugCount()
 	qemu, err := d.resolveQEMU(host, m.Identity.HostName, m.Paths.WorkingDir, m.Persistence.StateDir, hotplugCount)
 	if err != nil {
@@ -235,8 +236,12 @@ func resolveCPUCount(cpus int) CPUCount {
 	return ExplicitCPUs(cpus)
 }
 
+// hotplugCount returns the number of PCIe hotplug root ports to reserve:
+// the listed hotplug devices, or qemu.hotplug_ports when it reserves more
+// (extra ports allow attaching devices the manifest does not describe).
+// Port-based reservation is QEMU-specific, hence the [qemu] table.
 func (d Document) hotplugCount() int {
-	return d.Hotplug.Len()
+	return max(d.Hotplug.Len(), d.QEMU.HotplugPorts)
 }
 
 func qemuTransport(machineType string, mounts MountsInput, graphics QEMUGraphics, requirePCI bool) string {
@@ -564,8 +569,8 @@ func (m *Manifest) resolveVirtioFSRuns(mounts []VirtioFSMountInput, options Reso
 	return runs, nil
 }
 
-func (m *Manifest) resolveHotplug(d Document) ([]hotplug.Device, error) {
-	hotplugs := make([]hotplug.Device, 0, d.hotplugCount())
+func (m *Manifest) resolveHotplug(d Document) ([]HotplugDevice, error) {
+	hotplugs := make([]HotplugDevice, 0, d.hotplugCount())
 	for i, mount := range d.Hotplug.Mounts {
 		device, err := m.resolveHotplugMount(mount)
 		if err != nil {
@@ -583,18 +588,18 @@ func (m *Manifest) resolveHotplug(d Document) ([]hotplug.Device, error) {
 	return hotplugs, nil
 }
 
-func (m *Manifest) resolveHotplugMount(entry MountEntry) (hotplug.Device, error) {
+func (m *Manifest) resolveHotplugMount(entry MountEntry) (HotplugDevice, error) {
 	switch typed := entry.(type) {
 	case VirtioFSMountInput:
 		return m.resolveVirtioFSHotplug(typed)
 	case ImageMountInput:
 		return m.resolveImageHotplug(typed)
 	default:
-		return hotplug.Device{}, fmt.Errorf("type %q does not support hotplug", entry.mountType())
+		return HotplugDevice{}, fmt.Errorf("type %q does not support hotplug", entry.mountType())
 	}
 }
 
-func (m *Manifest) resolveImageHotplug(entry ImageMountInput) (hotplug.Device, error) {
+func (m *Manifest) resolveImageHotplug(entry ImageMountInput) (HotplugDevice, error) {
 	serial := stringValue(entry.Image.Serial)
 	format := resolveImageFormat(entry.Image.Format)
 	id, err := renderHotplugID(serial, "{{.Serial}}", StaticTemplateContext(executor.Context{
@@ -603,12 +608,12 @@ func (m *Manifest) resolveImageHotplug(entry ImageMountInput) (hotplug.Device, e
 		"Format": format,
 	}))
 	if err != nil {
-		return hotplug.Device{}, err
+		return HotplugDevice{}, err
 	}
-	return hotplug.Device{
-		Kind: hotplug.KindBlock,
+	return HotplugDevice{
+		Kind: HotplugKindBlock,
 		ID:   id,
-		Block: hotplug.Block{
+		Block: HotplugBlock{
 			ImagePath: m.resolvePath(entry.SourcePath),
 			Format:    format,
 			ReadOnly:  entry.ReadOnly,
@@ -617,7 +622,7 @@ func (m *Manifest) resolveImageHotplug(entry ImageMountInput) (hotplug.Device, e
 	}, nil
 }
 
-func (m *Manifest) resolveVirtioFSHotplug(mount VirtioFSMountInput) (hotplug.Device, error) {
+func (m *Manifest) resolveVirtioFSHotplug(mount VirtioFSMountInput) (HotplugDevice, error) {
 	id := mount.Tag
 	socket := mount.VirtioFS.Socket
 	if socket == "" {
@@ -625,7 +630,7 @@ func (m *Manifest) resolveVirtioFSHotplug(mount VirtioFSMountInput) (hotplug.Dev
 	}
 	socketPath, err := m.resolveSocketPath(socket)
 	if err != nil {
-		return hotplug.Device{}, err
+		return HotplugDevice{}, err
 	}
 	bin := mount.VirtioFS.Bin
 	if bin == "" {
@@ -634,18 +639,18 @@ func (m *Manifest) resolveVirtioFSHotplug(mount VirtioFSMountInput) (hotplug.Dev
 	source := m.resolvePath(mount.SourcePath)
 	args := append([]string(nil), mount.VirtioFS.Args...)
 	if len(args) == 0 {
-		args = hotplug.DefaultVirtioFSArgs(socketPath, source, id)
+		args = DefaultVirtioFSArgs(socketPath, source, id)
 	} else {
 		renderedArgs, err := renderVirtioFSArgv(args, socketPath, source, id)
 		if err != nil {
-			return hotplug.Device{}, err
+			return HotplugDevice{}, err
 		}
 		args = renderedArgs
 	}
-	return hotplug.Device{
-		Kind: hotplug.KindVirtioFS,
+	return HotplugDevice{
+		Kind: HotplugKindVirtioFS,
 		ID:   id,
-		VirtioFS: hotplug.VirtioFS{
+		VirtioFS: HotplugVirtioFS{
 			Source:     source,
 			Target:     mount.Target,
 			SocketPath: socketPath,
@@ -662,7 +667,7 @@ func (m *Manifest) resolveOptionalBin(bin string, defaultBin string) string {
 	return m.resolvePath(bin)
 }
 
-func resolveNetworkHotplug(entry NetworkInput, index int) (hotplug.Device, error) {
+func resolveNetworkHotplug(entry NetworkInput, index int) (HotplugDevice, error) {
 	id := entry.ID
 	if id == "" {
 		id = fmt.Sprintf("net%d", index)
@@ -675,25 +680,25 @@ func resolveNetworkHotplug(entry NetworkInput, index int) (hotplug.Device, error
 	if mac == "" {
 		mac = defaultNetworkMAC
 	}
-	forward := make([]hotplug.Forward, 0, len(entry.Forward))
+	forward := make([]HotplugForward, 0, len(entry.Forward))
 	for i, fwd := range entry.Forward {
 		normalized, err := normalizeForwardPort(fwd, fmt.Sprintf("forward[%d]", i))
 		if err != nil {
-			return hotplug.Device{}, err
+			return HotplugDevice{}, err
 		}
 		if normalized.From == "guest" {
-			return hotplug.Device{}, fmt.Errorf("forward[%d].from guest is not supported for hotplug networks", i)
+			return HotplugDevice{}, fmt.Errorf("forward[%d].from guest is not supported for hotplug networks", i)
 		}
-		forward = append(forward, hotplug.Forward{
+		forward = append(forward, HotplugForward{
 			Proto: normalized.Proto,
 			Host:  formatPortEndpoint(normalized.Host),
 			Guest: formatPortEndpoint(normalized.Guest),
 		})
 	}
-	return hotplug.Device{
-		Kind: hotplug.KindNet,
+	return HotplugDevice{
+		Kind: HotplugKindNet,
 		ID:   id,
-		Net: hotplug.Net{
+		Net: HotplugNet{
 			Backend: backend,
 			MAC:     mac,
 			Forward: forward,
@@ -901,18 +906,18 @@ func renderFwdTunnelExec(exec []string, hostEndpoint PortEndpoint) ([]string, er
 	return command, nil
 }
 
-func resolveBalloon(facts *BalloonInput, transport string) *balloon.Device {
+func resolveBalloon(facts *BalloonInput, transport string) *BalloonDevice {
 	if facts == nil || !facts.Enabled {
 		return nil
 	}
-	device := &balloon.Device{
+	device := &BalloonDevice{
 		ID:                "balloon0",
 		Transport:         transport,
 		DeflateOnOOM:      facts.DeflateOnOOM,
 		FreePageReporting: boolValueDefault(facts.FreePageReporting, true),
 	}
 	if facts.Controller != nil {
-		device.Controller = &balloon.ControllerConfig{
+		device.Controller = &BalloonControllerConfig{
 			MinActual:             facts.Controller.MinActual,
 			MaxActual:             facts.Controller.MaxActual,
 			GrowBelowAvailable:    facts.Controller.GrowBelowAvailable,

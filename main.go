@@ -17,9 +17,8 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/jessevdk/go-flags"
-	"github.com/shazow/virtle/internal/balloon"
-	"github.com/shazow/virtle/internal/manager"
-	"github.com/shazow/virtle/internal/manager/control"
+	"github.com/shazow/virtle/backend/qemu/session"
+	"github.com/shazow/virtle/internal/control"
 	"github.com/shazow/virtle/internal/manifest"
 	manifestschema "github.com/shazow/virtle/internal/manifest/schema"
 )
@@ -77,25 +76,28 @@ func runLaunch(options *Options) error {
 	baseLogger := slog.Default()
 	discardLogger := slog.New(slog.DiscardHandler)
 	manifestLogger := discardLogger
-	manager.SetLogger(discardLogger)
-	balloon.SetLogger(discardLogger)
+	session.SetLogger(discardLogger)
+	session.SetBalloonLogger(discardLogger)
 	if len(options.Verbose) > 0 {
 		manifestLogger = baseLogger.With("package", "manifest")
-		manager.SetLogger(baseLogger.With("package", "manager"))
+		session.SetLogger(baseLogger.With("package", "vmm"))
 	}
 	if len(options.Verbose) > 1 {
-		balloon.SetLogger(baseLogger.With("package", "balloon"))
+		session.SetBalloonLogger(baseLogger.With("package", "balloon"))
 	}
 
-	manifest, err := loadLaunchManifest(options.Manifest, manifestLogger)
+	loaded, err := loadLaunchManifest(options.Manifest, manifestLogger)
 	if err != nil {
 		return err
 	}
 
-	return manager.LaunchWithOptions(context.Background(), manifest, options.Launch.Args.RemoteCommand, manager.LaunchOptions{
-		Resume:    manager.ResumeMode(options.Launch.Resume),
-		SSH:       options.Launch.SSH,
-		Verbosity: len(options.Verbose),
+	// The session layer owns the whole foreground lifecycle; backend
+	// details (suspend-state versioning, readiness, guest control) live
+	// inside the machinery it wraps.
+	return session.Run(context.Background(), loaded, session.Options{
+		Resume:        options.Launch.Resume,
+		SSH:           options.Launch.SSH,
+		RemoteCommand: options.Launch.Args.RemoteCommand,
 	})
 }
 
@@ -108,7 +110,7 @@ func runSuspend(options *Options) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	return manager.Suspend(ctx, manifest)
+	return session.Suspend(ctx, manifest)
 }
 
 func runManifestDefaults(options *Options) error {
@@ -152,10 +154,10 @@ func runHotplug(options *Options) error {
 	baseLogger := slog.Default()
 	discardLogger := slog.New(slog.DiscardHandler)
 	manifestLogger := discardLogger
-	manager.SetLogger(discardLogger)
+	session.SetLogger(discardLogger)
 	if len(options.Verbose) > 0 {
 		manifestLogger = baseLogger.With("package", "manifest")
-		manager.SetLogger(baseLogger.With("package", "manager"))
+		session.SetLogger(baseLogger.With("package", "vmm"))
 	}
 
 	manifest, err := loadLaunchManifest(options.Manifest, manifestLogger)
@@ -166,7 +168,7 @@ func runHotplug(options *Options) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	return manager.Hotplug(ctx, manifest, options.Hotplug.Args.ID, options.Hotplug.Detach)
+	return session.Hotplug(ctx, manifest, options.Hotplug.Args.ID, options.Hotplug.Detach)
 }
 
 func runRPC(options *Options) error {
@@ -303,7 +305,7 @@ func main() {
 		}
 
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(manager.ExitCode(err))
+		os.Exit(session.ExitCode(err))
 	}
 }
 

@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/adrg/xdg"
-	"github.com/shazow/virtle/internal/hotplug"
 	"github.com/shazow/virtle/internal/units"
 )
 
@@ -2070,7 +2069,7 @@ func TestDocumentHotplugVirtioFSMountGeneratesHotplugEntry(t *testing.T) {
 	if got, want := device.ID, "workspace"; got != want {
 		t.Fatalf("unexpected hotplug id: got %q want %q", got, want)
 	}
-	if got, want := device.Kind, hotplug.KindVirtioFS; got != want {
+	if got, want := device.Kind, HotplugKindVirtioFS; got != want {
 		t.Fatalf("unexpected hotplug kind: got %q want %q", got, want)
 	}
 	if got, want := device.VirtioFS.Target, "/mnt/cache"; got != want {
@@ -2189,7 +2188,7 @@ func TestDocumentTypedHotplugEntries(t *testing.T) {
 	if got, want := manifest.QEMU.Hotplug.PCIEPorts, 3; got != want {
 		t.Fatalf("unexpected pcie ports: got %d want %d", got, want)
 	}
-	if got, want := []hotplug.Kind{manifest.Hotplug[0].Kind, manifest.Hotplug[1].Kind, manifest.Hotplug[2].Kind}, []hotplug.Kind{hotplug.KindVirtioFS, hotplug.KindBlock, hotplug.KindNet}; !reflect.DeepEqual(got, want) {
+	if got, want := []HotplugKind{manifest.Hotplug[0].Kind, manifest.Hotplug[1].Kind, manifest.Hotplug[2].Kind}, []HotplugKind{HotplugKindVirtioFS, HotplugKindBlock, HotplugKindNet}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected hotplug order: got %#v want %#v", got, want)
 	}
 	if got, want := manifest.Hotplug[0].VirtioFS.SocketPath, "/tmp/work/.virtle/cache.sock"; got != want {
@@ -2234,7 +2233,7 @@ func TestDocumentHotplugNetworkForwardDefaultsProto(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve manifest: %v", err)
 	}
-	if got, want := manifest.Hotplug[0].Net.Forward, []hotplug.Forward{{Proto: "tcp", Host: "127.0.0.1:2223", Guest: "10.0.2.15:22"}}; !reflect.DeepEqual(got, want) {
+	if got, want := manifest.Hotplug[0].Net.Forward, []HotplugForward{{Proto: "tcp", Host: "127.0.0.1:2223", Guest: "10.0.2.15:22"}}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected hotplug forward: got %#v want %#v", got, want)
 	}
 }
@@ -2507,7 +2506,7 @@ func TestManifestHotplugRequiresPCITransport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve manifest: %v", err)
 	}
-	manifest.Hotplug = []hotplug.Device{{Kind: hotplug.KindNet, ID: "vpn", Net: hotplug.Net{Backend: "user", MAC: "02:02:00:00:00:10"}}}
+	manifest.Hotplug = []HotplugDevice{{Kind: HotplugKindNet, ID: "vpn", Net: HotplugNet{Backend: "user", MAC: "02:02:00:00:00:10"}}}
 	manifest.QEMU.Hotplug.PCIEPorts = 1
 	manifest.QEMU.Devices.RNG.Transport = "mmio"
 	if err := manifest.Validate(); err == nil || !strings.Contains(err.Error(), "requires pci transport") {
@@ -2724,4 +2723,55 @@ func setXDGTestRuntimeDir(t *testing.T, runtimeDir string) {
 		}
 		xdg.Reload()
 	})
+}
+
+func TestDocumentHotplugPortsReservesExtraPCIEPorts(t *testing.T) {
+	document := validDocument()
+	document.QEMU.HotplugPorts = 2
+
+	manifest, err := document.Manifest()
+	if err != nil {
+		t.Fatalf("resolve manifest: %v", err)
+	}
+	if got, want := manifest.QEMU.Hotplug.PCIEPorts, 2; got != want {
+		t.Fatalf("unexpected pcie ports: got %d want %d", got, want)
+	}
+	// Reserved ports alone must force the PCI transport, exactly as listed
+	// hotplug devices do.
+	if got, want := manifest.QEMU.Devices.RNG.Transport, "pci"; got != want {
+		t.Fatalf("unexpected transport: got %q want %q", got, want)
+	}
+}
+
+func TestDocumentHotplugPortsBelowDeviceCountKeepsDeviceCount(t *testing.T) {
+	document := validDocument()
+	document.Mounts = nil
+	document.QEMU.HotplugPorts = 1
+	document.Hotplug = HotplugInput{
+		Mounts: MountsInput{
+			VirtioFSMountInput{
+				MountInput: MountInput{Tag: "a", SourcePath: "shares/a"},
+			},
+			VirtioFSMountInput{
+				MountInput: MountInput{Tag: "b", SourcePath: "shares/b"},
+			},
+		},
+	}
+
+	manifest, err := document.Manifest()
+	if err != nil {
+		t.Fatalf("resolve manifest: %v", err)
+	}
+	if got, want := manifest.QEMU.Hotplug.PCIEPorts, 2; got != want {
+		t.Fatalf("unexpected pcie ports: got %d want %d", got, want)
+	}
+}
+
+func TestDocumentHotplugPortsRejectsNegative(t *testing.T) {
+	document := validDocument()
+	document.QEMU.HotplugPorts = -1
+
+	if _, err := document.Manifest(); err == nil || !strings.Contains(err.Error(), "hotplug_ports must not be negative") {
+		t.Fatalf("expected negative ports error, got %v", err)
+	}
 }

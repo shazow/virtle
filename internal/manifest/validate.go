@@ -10,7 +10,6 @@ import (
 	"text/template/parse"
 	"time"
 
-	hotplugpkg "github.com/shazow/virtle/internal/hotplug"
 	"github.com/shazow/virtle/internal/units"
 )
 
@@ -187,7 +186,7 @@ func (m *Manifest) Validate() error {
 	return nil
 }
 
-func validateHotplug(index int, device hotplugpkg.Device) error {
+func validateHotplug(index int, device HotplugDevice) error {
 	if device.ID == "" {
 		return fmt.Errorf("manifest.hotplug[%d].id is required", index)
 	}
@@ -195,7 +194,7 @@ func validateHotplug(index int, device hotplugpkg.Device) error {
 		return fmt.Errorf("manifest.hotplug[%d].id must not contain path separators", index)
 	}
 	switch device.Kind {
-	case hotplugpkg.KindVirtioFS:
+	case HotplugKindVirtioFS:
 		if device.VirtioFS.Source == "" {
 			return fmt.Errorf("manifest.hotplug[%d].virtiofs.source is required", index)
 		}
@@ -205,14 +204,14 @@ func validateHotplug(index int, device hotplugpkg.Device) error {
 		if device.VirtioFS.Bin == "" {
 			return fmt.Errorf("manifest.hotplug[%d].virtiofs.bin is required", index)
 		}
-	case hotplugpkg.KindNet:
+	case HotplugKindNet:
 		if device.Net.Backend != "user" {
 			return fmt.Errorf("manifest.hotplug[%d].net.backend must be user", index)
 		}
 		if device.Net.MAC == "" {
 			return fmt.Errorf("manifest.hotplug[%d].net.mac is required", index)
 		}
-	case hotplugpkg.KindBlock:
+	case HotplugKindBlock:
 		if device.Block.ImagePath == "" {
 			return fmt.Errorf("manifest.hotplug[%d].block.image is required", index)
 		}

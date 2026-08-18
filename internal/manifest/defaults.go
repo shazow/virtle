@@ -128,6 +128,9 @@ func mergeQEMUInput(base QEMUInput, override QEMUInput) QEMUInput {
 	// Always taken from the override: zero disables the graceful-shutdown
 	// wait, and decode seeds the default for omitted keys.
 	base.ShutdownTimeout = override.ShutdownTimeout
+	if override.HotplugPorts != 0 {
+		base.HotplugPorts = override.HotplugPorts
+	}
 	return base
 }
 

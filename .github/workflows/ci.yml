@@ -69,16 +69,21 @@ jobs:
       - name: Set up Nix
         uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
 
-      # Evaluation-only, so every system the flake declares is type-checked
-      # without needing a builder for architectures this runner can't build.
-      # The steps below build for whichever system the runner happens to be.
-      - name: Check flake outputs
-        run: nix flake check --all-systems --no-build
-
       - name: Validate Nix package
         run: nix build .#virtle --no-link
 
-      - name: Run integration tests
+      # `nix flake check` builds only the checks matching the runner and skips
+      # the rest with "the check omitted these incompatible systems", so
+      # enumerate the checks for whichever system CI handed us and run all of
+      # them instead. Building a check derivation runs its checkPhase.
+      - name: Run flake checks
+        shell: bash
         run: |
+          set -euo pipefail
           system="$(nix eval --raw --impure --expr builtins.currentSystem)"
-          nix build ".#checks.$system.integration" --no-link --print-build-logs
+          mapfile -t checks < <(
+            nix eval --json --apply builtins.attrNames ".#checks.$system" |
+              jq -r --arg prefix ".#checks.$system." '.[] | $prefix + .'
+          )
+          echo "Running ${#checks[@]} check(s) for $system: ${checks[*]}"
+          nix build --no-link --print-build-logs "${checks[@]}"

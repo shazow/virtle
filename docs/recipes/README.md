@@ -1,4 +1,4 @@
-# Getting started
+# Recipes: Tasty Virtle Snacks
 
 If you're a nix user, check out these declarative flake examples, see:
 - [NixOS with SSH provisioning](nixos/README.md) (similar to what [agentspace](https://github.com/shazow/agentspace) does)

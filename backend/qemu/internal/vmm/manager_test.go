@@ -5054,8 +5054,22 @@ func (c *fakeGuestAgentClient) Disconnect() error {
 	return nil
 }
 
-// launch is a test-only convenience wrapping launchWithOptions with the
-// default foreground options.
+func (m *manager) launchWithOptions(ctx context.Context, manifest *manifest.Manifest, remoteCommand []string, options launch.Options) error {
+	options.HasRemoteControl = true
+	v, err := m.startVM(ctx, launch.Spec{Manifest: manifest, RemoteCommand: remoteCommand, Options: options})
+	if err != nil {
+		if launch.IsSavedSuspendExit(err) {
+			return nil
+		}
+		return err
+	}
+	return RunSession(ctx, v, SessionOptions{
+		SSH:           options.SSH,
+		RemoteCommand: remoteCommand,
+	})
+}
+
+// launch is a test-only convenience using the default foreground options.
 func (m *manager) launch(ctx context.Context, manifest *manifest.Manifest, remoteCommand []string) error {
 	return m.launchWithOptions(ctx, manifest, remoteCommand, launch.Options{Resume: launch.ResumeModeNo, SSH: true})
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os/exec"
 	"testing"
 	"time"
@@ -19,6 +20,10 @@ func TestRunSSHSessionRetriesTransientFailure(t *testing.T) {
 	stats := &recordingSSHStats{}
 	runner := &fakeSSHSessionRunner{
 		errs: []error{errors.New("Connection refused"), nil},
+		outputs: []fakeSSHSessionOutput{
+			{stdout: "first stdout\n", stderr: "first stderr\n"},
+			{stdout: "second stdout\n", stderr: "second stderr\n"},
+		},
 	}
 	var stdout, stderr bytes.Buffer
 
@@ -41,10 +46,11 @@ func TestRunSSHSessionRetriesTransientFailure(t *testing.T) {
 	if got, want := len(runner.commands), 2; got != want {
 		t.Fatalf("ssh starts: got %d want %d", got, want)
 	}
-	for _, cmd := range runner.commands {
-		if cmd.Stdout != &stdout || cmd.Stderr == nil {
-			t.Fatal("expected configured ssh output writers")
-		}
+	if got, want := stdout.String(), "first stdout\nsecond stdout\n"; got != want {
+		t.Fatalf("ssh stdout: got %q want %q", got, want)
+	}
+	if got, want := stderr.String(), "second stderr\n"; got != want {
+		t.Fatalf("ssh stderr: got %q want %q", got, want)
 	}
 	if got, want := processes.removed, 1; got != want {
 		t.Fatalf("removed sessions: got %d want %d", got, want)
@@ -147,10 +153,21 @@ func testSSHSessionManifest() *manifest.Manifest {
 type fakeSSHSessionRunner struct {
 	commands []*exec.Cmd
 	errs     []error
+	outputs  []fakeSSHSessionOutput
 }
 
 func (r *fakeSSHSessionRunner) Start(cmd *exec.Cmd) (*executor.Process, error) {
 	r.commands = append(r.commands, cmd)
+	if len(r.outputs) > 0 {
+		output := r.outputs[0]
+		r.outputs = r.outputs[1:]
+		if cmd.Stdout != nil {
+			_, _ = io.WriteString(cmd.Stdout, output.stdout)
+		}
+		if cmd.Stderr != nil {
+			_, _ = io.WriteString(cmd.Stderr, output.stderr)
+		}
+	}
 	var err error
 	if len(r.errs) > 0 {
 		err = r.errs[0]
@@ -158,6 +175,11 @@ func (r *fakeSSHSessionRunner) Start(cmd *exec.Cmd) (*executor.Process, error) {
 	}
 	process := &executortest.Process{OverrideName: cmd.Path, Exited: true, WaitErr: err}
 	return process.Process(), nil
+}
+
+type fakeSSHSessionOutput struct {
+	stdout string
+	stderr string
 }
 
 type recordingSSHProcesses struct {

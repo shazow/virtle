@@ -179,8 +179,26 @@ func TestLineLoggerBoundsUnterminatedOutput(t *testing.T) {
 		t.Fatalf("write: n=%d err=%v", n, err)
 	}
 	output.close()
-	if got, want := strings.Count(logs.String(), "level=DEBUG"), 2; got != want {
+	records := strings.Split(strings.TrimSpace(logs.String()), "\n")
+	if got, want := len(records), 2; got != want {
 		t.Fatalf("debug records: got %d want %d", got, want)
+	}
+	messages := make([]string, 0, len(records))
+	for _, record := range records {
+		_, message, ok := strings.Cut(record, " msg=")
+		if !ok {
+			t.Fatalf("debug record has no message: %q", record)
+		}
+		messages = append(messages, message)
+	}
+	if got, want := len(messages[0]), maxLogLine; got != want {
+		t.Fatalf("first record length: got %d want %d", got, want)
+	}
+	if got, want := len(messages[1]), 1; got != want {
+		t.Fatalf("second record length: got %d want %d", got, want)
+	}
+	if got := strings.Join(messages, ""); got != line {
+		t.Fatal("debug records did not preserve command output")
 	}
 }
 

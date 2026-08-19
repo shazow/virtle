@@ -167,10 +167,10 @@ func TestManagerStartRunsUsesConfiguredBackgroundOutput(t *testing.T) {
 			Paths: manifest.Paths{WorkingDir: "/work"},
 			Run:   []manifest.Run{{Exec: []string{"/bin/background"}}},
 		},
-		runner:        runner,
-		logger:        slog.New(slog.DiscardHandler),
-		logWriter:     &output,
-		shutdownDelay: time.Second,
+		runner:           runner,
+		logger:           slog.New(slog.DiscardHandler),
+		backgroundOutput: &output,
+		shutdownDelay:    time.Second,
 	}
 
 	if _, err := manager.startRuns(3); err != nil {
@@ -394,7 +394,7 @@ func TestManagerLaunchSIGTERMSequenceAndTeardownOrder(t *testing.T) {
 		socketWaiter:      waiter,
 		qmpDialer:         &fakeQMPDialer{client: qmpClient},
 		logger:            debugTestLogger(&logOutput),
-		logWriter:         &logOutput,
+		backgroundOutput:  &logOutput,
 		shutdownDelay:     10 * time.Millisecond,
 		qmpRetryDelay:     0,
 		qmpConnectTimeout: time.Millisecond,
@@ -557,7 +557,7 @@ func TestManagerLaunchStartsRunCommands(t *testing.T) {
 		qmpDialer:         &fakeQMPDialer{client: qmpClient},
 		sshReadyDialer:    &fakeSSHReadyDialer{},
 		logger:            debugTestLogger(&logOutput),
-		logWriter:         &logOutput,
+		backgroundOutput:  &logOutput,
 		shutdownDelay:     10 * time.Millisecond,
 		qmpRetryDelay:     0,
 		qmpConnectTimeout: time.Millisecond,
@@ -644,12 +644,12 @@ func TestManagerLaunchFailsWhenRunStartFails(t *testing.T) {
 	}
 	var logOutput bytes.Buffer
 	manager := &manager{
-		locker:        &fileLocker{},
-		runner:        runner,
-		socketWaiter:  &fakeSocketWaiter{},
-		logger:        debugTestLogger(&logOutput),
-		logWriter:     &logOutput,
-		shutdownDelay: 10 * time.Millisecond,
+		locker:           &fileLocker{},
+		runner:           runner,
+		socketWaiter:     &fakeSocketWaiter{},
+		logger:           debugTestLogger(&logOutput),
+		backgroundOutput: &logOutput,
+		shutdownDelay:    10 * time.Millisecond,
 	}
 
 	err := manager.launchWithOptions(context.Background(), cfg, nil, LaunchOptions{Resume: ResumeModeNo, SSH: true})
@@ -696,12 +696,12 @@ func TestManagerLaunchStopsStartedRunsWhenLaterRunFails(t *testing.T) {
 	waiter := &fakeSocketWaiter{callback: func(paths []string) error { return nil }}
 	var logOutput bytes.Buffer
 	manager := &manager{
-		locker:        &fileLocker{},
-		runner:        runner,
-		socketWaiter:  waiter,
-		logger:        debugTestLogger(&logOutput),
-		logWriter:     &logOutput,
-		shutdownDelay: 10 * time.Millisecond,
+		locker:           &fileLocker{},
+		runner:           runner,
+		socketWaiter:     waiter,
+		logger:           debugTestLogger(&logOutput),
+		backgroundOutput: &logOutput,
+		shutdownDelay:    10 * time.Millisecond,
 	}
 
 	err := manager.launchWithOptions(context.Background(), cfg, nil, LaunchOptions{Resume: ResumeModeNo, SSH: true})
@@ -751,7 +751,7 @@ func TestManagerLaunchRemovesCleanupPathAfterQMPStartupFailure(t *testing.T) {
 		socketWaiter:      waiter,
 		qmpDialer:         &fakeQMPDialer{},
 		logger:            debugTestLogger(&logOutput),
-		logWriter:         &logOutput,
+		backgroundOutput:  &logOutput,
 		shutdownDelay:     10 * time.Millisecond,
 		qmpRetryDelay:     0,
 		qmpConnectTimeout: time.Millisecond,
@@ -888,7 +888,7 @@ func TestManagerLaunchWithoutSSHPrintsConnectHintAndWaitsForQEMU(t *testing.T) {
 		socketWaiter:      &fakeSocketWaiter{callback: func(paths []string) error { return nil }},
 		qmpDialer:         &fakeQMPDialer{client: qmpClient},
 		logger:            debugTestLogger(&logOutput),
-		logWriter:         &logOutput,
+		backgroundOutput:  &logOutput,
 		shutdownDelay:     10 * time.Millisecond,
 		qmpRetryDelay:     0,
 		qmpConnectTimeout: time.Millisecond,
@@ -917,7 +917,7 @@ func TestManagerLaunchWithoutSSHPrintsConnectHintAndWaitsForQEMU(t *testing.T) {
 	if strings.Contains(logOutput.String(), "msg=\"ssh command\"") {
 		t.Fatalf("unexpected interactive ssh command log, got %q", logOutput.String())
 	}
-	if !strings.Contains(logOutput.String(), `msg="connect with ssh" command="/bin/ssh agent@vsock/3"`) {
+	if logs := logOutput.String(); !strings.Contains(logs, `msg="connect with ssh"`) || !strings.Contains(logs, `command="/bin/ssh agent@vsock/3"`) {
 		t.Fatalf("expected out-of-band ssh hint, got %q", logOutput.String())
 	}
 	assertLaunchStatsLog(t, logOutput.String(), []string{
@@ -952,7 +952,7 @@ func TestManagerStartAndWaitForRunningLaunchWithoutSSH(t *testing.T) {
 		SocketWaiter:      &fakeSocketWaiter{callback: func(paths []string) error { return nil }},
 		QMPDialer:         &fakeQMPDialer{client: qmpClient},
 		Logger:            debugTestLogger(&logOutput),
-		LogWriter:         &logOutput,
+		BackgroundOutput:  &logOutput,
 		ShutdownDelay:     10 * time.Millisecond,
 		QMPRetryDelay:     0,
 		QMPConnectTimeout: time.Millisecond,
@@ -994,7 +994,7 @@ func TestManagerStartAndWaitForRunningLaunchWithoutSSH(t *testing.T) {
 	if got := len(runner.sshArgs()); got != 0 {
 		t.Fatalf("expected no ssh starts, got %d", got)
 	}
-	if !strings.Contains(logOutput.String(), `msg="connect with ssh" command="/bin/ssh agent@vsock/`) {
+	if logs := logOutput.String(); !strings.Contains(logs, `msg="connect with ssh"`) || !strings.Contains(logs, `command="/bin/ssh agent@vsock/`) {
 		t.Fatalf("expected out-of-band ssh hint, got %q", logOutput.String())
 	}
 }
@@ -1134,7 +1134,7 @@ func TestManagerLaunchRejectsRemoteCommandWithoutSSHExec(t *testing.T) {
 		socketWaiter:      &fakeSocketWaiter{callback: func(paths []string) error { return nil }},
 		qmpDialer:         &fakeQMPDialer{client: qmpClient},
 		logger:            debugTestLogger(&logOutput),
-		logWriter:         &logOutput,
+		backgroundOutput:  &logOutput,
 		shutdownDelay:     10 * time.Millisecond,
 		qmpRetryDelay:     0,
 		qmpConnectTimeout: time.Millisecond,
@@ -1177,7 +1177,7 @@ func TestManagerLaunchStartsSSHOnceAfterReadiness(t *testing.T) {
 		qmpDialer:         &fakeQMPDialer{client: qmpClient},
 		sshReadyDialer:    &fakeSSHReadyDialer{},
 		logger:            debugTestLogger(&logOutput),
-		logWriter:         &logOutput,
+		backgroundOutput:  &logOutput,
 		shutdownDelay:     10 * time.Millisecond,
 		qmpRetryDelay:     0,
 		qmpConnectTimeout: time.Millisecond,
@@ -1241,7 +1241,7 @@ func TestManagerLaunchPacesSSHRetriesAndWarnsAfterFiveFailures(t *testing.T) {
 		qmpDialer:         &fakeQMPDialer{client: qmpClient},
 		sshReadyDialer:    &fakeSSHReadyDialer{},
 		logger:            debugTestLogger(&logOutput),
-		logWriter:         &logOutput,
+		backgroundOutput:  &logOutput,
 		shutdownDelay:     10 * time.Millisecond,
 		qmpRetryDelay:     0,
 		qmpConnectTimeout: time.Millisecond,
@@ -1389,7 +1389,7 @@ func TestManagerLaunchPrintsGuestInfoOnSIGUSR1(t *testing.T) {
 		qmpDialer:           &fakeQMPDialer{client: qmpClient},
 		guestAgentDialer:    &fakeGuestAgentDialer{client: guestAgent},
 		logger:              debugTestLogger(&logOutput),
-		logWriter:           &logOutput,
+		backgroundOutput:    &logOutput,
 		shutdownDelay:       10 * time.Millisecond,
 		qmpRetryDelay:       0,
 		qmpConnectTimeout:   time.Millisecond,
@@ -1445,7 +1445,7 @@ func TestManagerLaunchLogsGuestInfoFailureOnSIGUSR1(t *testing.T) {
 		qmpDialer:           &fakeQMPDialer{client: qmpClient},
 		guestAgentDialer:    &fakeGuestAgentDialer{client: &fakeGuestAgentClient{execErr: errors.New("exec failed")}},
 		logger:              debugTestLogger(&logOutput),
-		logWriter:           &logOutput,
+		backgroundOutput:    &logOutput,
 		shutdownDelay:       10 * time.Millisecond,
 		qmpRetryDelay:       0,
 		qmpConnectTimeout:   time.Millisecond,
@@ -3614,7 +3614,7 @@ func TestBuildQEMUCommandUsesTypedConfigAndRuntimeCID(t *testing.T) {
 	cfg := validManifest("/tmp/work")
 	cfg.QEMU.Console = manifest.QEMUConsoleOff
 
-	spec, err := buildQEMUCommand(cfg, 42, false)
+	spec, err := buildTestQEMUCommand(cfg, 42, false)
 	if err != nil {
 		t.Fatalf("build qemu command: %v", err)
 	}
@@ -3646,29 +3646,25 @@ func TestBuildQEMUCommandUsesTypedConfigAndRuntimeCID(t *testing.T) {
 }
 
 func TestBuildQEMUCommandGatesBackgroundOutputButPreservesConsole(t *testing.T) {
-	originalOutput := backgroundOutput
-	t.Cleanup(func() { SetOutput(originalOutput) })
-
-	var output bytes.Buffer
-	SetOutput(&output)
+	var background, foreground bytes.Buffer
 	cfg := validManifest("/tmp/work")
 	cfg.QEMU.Console = manifest.QEMUConsoleOff
 
-	cmd, err := buildQEMUCommand(cfg, 42, false)
+	cmd, err := buildQEMUCommand(cfg, 42, false, &background, &foreground)
 	if err != nil {
 		t.Fatalf("build headless qemu command: %v", err)
 	}
-	if cmd.Stdout != &output || cmd.Stderr != &output {
+	if cmd.Stdout != &background || cmd.Stderr != &background {
 		t.Fatal("expected headless qemu output to use configured background output")
 	}
 
 	cfg.QEMU.Console = manifest.QEMUConsolePrint
-	cmd, err = buildQEMUCommand(cfg, 42, false)
+	cmd, err = buildQEMUCommand(cfg, 42, false, &background, &foreground)
 	if err != nil {
 		t.Fatalf("build console qemu command: %v", err)
 	}
-	if cmd.Stdout != os.Stderr || cmd.Stderr != os.Stderr {
-		t.Fatal("expected requested qemu console output on stderr")
+	if cmd.Stdout != &foreground || cmd.Stderr != &foreground {
+		t.Fatal("expected requested qemu console output on configured foreground writer")
 	}
 }
 
@@ -3676,7 +3672,7 @@ func TestBuildQEMUCommandAddsPCIEHotplugPorts(t *testing.T) {
 	manifest := validManifest("/tmp/work")
 	manifest.QEMU.Hotplug.PCIEPorts = 2
 
-	spec, err := buildQEMUCommand(manifest, 42, false)
+	spec, err := buildTestQEMUCommand(manifest, 42, false)
 	if err != nil {
 		t.Fatalf("build qemu command: %v", err)
 	}
@@ -3959,7 +3955,7 @@ func TestBuildQEMUCommandAddsGraphicsArgs(t *testing.T) {
 			manifest.QEMU.Knobs.NoGraphic = false
 			manifest.QEMU.Graphics = tt.qemu
 
-			spec, err := buildQEMUCommand(manifest, 42, false)
+			spec, err := buildTestQEMUCommand(manifest, 42, false)
 			if err != nil {
 				t.Fatalf("build qemu command: %v", err)
 			}
@@ -3981,7 +3977,7 @@ func TestBuildQEMUCommandPreservesPassthroughGraphicsArgs(t *testing.T) {
 	cfg.QEMU.Knobs.NoGraphic = false
 	cfg.QEMU.PassthroughArgs = []string{"-display", "sdl", "-device", "virtio-vga"}
 
-	spec, err := buildQEMUCommand(cfg, 42, false)
+	spec, err := buildTestQEMUCommand(cfg, 42, false)
 	if err != nil {
 		t.Fatalf("build qemu command: %v", err)
 	}
@@ -4000,7 +3996,7 @@ func TestBuildQEMUCommandUsesRuntimeCPUCountWhenOmitted(t *testing.T) {
 	cfg := validManifest("/tmp/work")
 	cfg.QEMU.SMP.CPUs = manifest.CPUCount{}
 
-	spec, err := buildQEMUCommand(cfg, 42, false)
+	spec, err := buildTestQEMUCommand(cfg, 42, false)
 	if err != nil {
 		t.Fatalf("build qemu command: %v", err)
 	}
@@ -4042,7 +4038,7 @@ func TestBuildQEMUCommandAddsSerialConsoleArgsOnlyWhenEnabled(t *testing.T) {
 			cfg := validManifest("/tmp/work")
 			cfg.QEMU.Console = tt.console
 
-			spec, err := buildQEMUCommand(cfg, 42, false)
+			spec, err := buildTestQEMUCommand(cfg, 42, false)
 			if err != nil {
 				t.Fatalf("build qemu command: %v", err)
 			}
@@ -4073,7 +4069,7 @@ func TestBuildQEMUCommandAddsGuestAgentDevice(t *testing.T) {
 	manifest.QEMU.GuestAgent.SocketPath = "qga.sock"
 	manifest.QEMU.SSHReady.SocketPath = "ready.sock"
 
-	spec, err := buildQEMUCommand(manifest, 42, false)
+	spec, err := buildTestQEMUCommand(manifest, 42, false)
 	if err != nil {
 		t.Fatalf("build qemu command: %v", err)
 	}
@@ -4102,7 +4098,7 @@ func TestBuildQEMUCommandOmitsSSHReadyDeviceWhenSocketEmpty(t *testing.T) {
 	cfg := validManifest("/tmp/work")
 	cfg.QEMU.SSHReady.SocketPath = ""
 
-	spec, err := buildQEMUCommand(cfg, 42, false)
+	spec, err := buildTestQEMUCommand(cfg, 42, false)
 	if err != nil {
 		t.Fatalf("build qemu command: %v", err)
 	}
@@ -4131,7 +4127,7 @@ func TestBuildQEMUCommandAddsNinePDevice(t *testing.T) {
 		},
 	}
 
-	spec, err := buildQEMUCommand(cfg, 42, false)
+	spec, err := buildTestQEMUCommand(cfg, 42, false)
 	if err != nil {
 		t.Fatalf("build qemu command: %v", err)
 	}
@@ -4178,7 +4174,7 @@ func TestBuildQEMUCommandPreservesOrderedMountDevices(t *testing.T) {
 		},
 	}
 
-	spec, err := buildQEMUCommand(cfg, 42, false)
+	spec, err := buildTestQEMUCommand(cfg, 42, false)
 	if err != nil {
 		t.Fatalf("build qemu command: %v", err)
 	}
@@ -4204,7 +4200,7 @@ func TestBuildQEMUCommandAllowsInitrdApplianceWithoutStorageDevices(t *testing.T
 	manifest.Volumes = nil
 	manifest.Run = nil
 
-	spec, err := buildQEMUCommand(manifest, 42, false)
+	spec, err := buildTestQEMUCommand(manifest, 42, false)
 	if err != nil {
 		t.Fatalf("build qemu command: %v", err)
 	}
@@ -4237,7 +4233,7 @@ func TestBuildQEMUCommandUsesRuntimeDirForRelativeQMP(t *testing.T) {
 	cfg.Paths.RuntimeDir = manifest.RuntimeDir{Mode: manifest.RuntimeDirXDG}
 	cfg.QEMU.GuestAgent.SocketPath = "qga.sock"
 
-	spec, err := buildQEMUCommand(cfg, 42, false)
+	spec, err := buildTestQEMUCommand(cfg, 42, false)
 	if err != nil {
 		t.Fatalf("build qemu command: %v", err)
 	}
@@ -4304,6 +4300,10 @@ func assertLaunchStatsLog(t *testing.T, logs string, want []string, unwanted []s
 
 func debugTestLogger(w io.Writer) *slog.Logger {
 	return slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: slog.LevelDebug}))
+}
+
+func buildTestQEMUCommand(manifest *manifest.Manifest, cid int, incoming bool) (*exec.Cmd, error) {
+	return buildQEMUCommand(manifest, cid, incoming, io.Discard, io.Discard)
 }
 
 func validManifest(workingDir string) *manifest.Manifest {

@@ -60,7 +60,11 @@ type manager struct {
 	sshReadyDialer      launch.SSHReadyDialer
 	logger              *slog.Logger
 	sshLogger           *slog.Logger
-	logWriter           io.Writer
+	balloonLogger       *slog.Logger
+	consoleOutput       io.Writer
+	sshOutput           io.Writer
+	sshError            io.Writer
+	backgroundOutput    io.Writer
 	sshReadyTimeout     time.Duration
 	shutdownDelay       time.Duration
 	qmpRetryDelay       time.Duration
@@ -79,6 +83,10 @@ func newManager() *manager {
 
 func newManagerFromConfig(config Config) *manager {
 	config = mergeConfig(DefaultConfig(), config)
+	logger := config.Logger
+	if logger == nil {
+		logger = discardLogger
+	}
 	return &manager{
 		locker:              config.Locker,
 		vsockCIDChecker:     config.VSockCIDChecker,
@@ -87,9 +95,13 @@ func newManagerFromConfig(config Config) *manager {
 		qmpDialer:           config.QMPDialer,
 		guestAgentDialer:    config.GuestAgentDialer,
 		sshReadyDialer:      config.SSHReadyDialer,
-		logger:              config.Logger,
-		sshLogger:           config.SSHLogger,
-		logWriter:           config.LogWriter,
+		logger:              logger.With("package", "vmm"),
+		sshLogger:           logger.With("package", "ssh"),
+		balloonLogger:       logger.With("package", "balloon"),
+		consoleOutput:       config.ConsoleOutput,
+		sshOutput:           config.SSHOutput,
+		sshError:            config.SSHError,
+		backgroundOutput:    config.BackgroundOutput,
 		sshReadyTimeout:     config.SSHReadyTimeout,
 		shutdownDelay:       config.ShutdownDelay,
 		qmpRetryDelay:       config.QMPRetryDelay,
@@ -131,7 +143,7 @@ func (m *manager) planLaunch(spec launch.Spec) (*launch.Plan, error) {
 	}
 	notifier := m.notifier
 	if notifier == nil {
-		notifier = newCommandNotifier(cfg, m.logger, m.outputWriter())
+		notifier = newCommandNotifier(cfg, m.logger, m.backgroundWriter())
 	}
 	plan, err := launch.BuildPlan(spec, resumeState, notifier)
 	if err != nil {
@@ -232,8 +244,8 @@ func (m *manager) startRuns(cid int) (executor.Group, error) {
 		cmd := executor.Command(run.Exec[0], run.Exec[1:], run.Env)
 		cmd.Dir = run.Dir
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-		cmd.Stdout = m.outputWriter()
-		cmd.Stderr = m.outputWriter()
+		cmd.Stdout = m.backgroundWriter()
+		cmd.Stderr = m.backgroundWriter()
 		process, err := m.startManagedProcess(cmd)
 		if err != nil {
 			_ = started.StopAll(context.Background())
@@ -389,7 +401,8 @@ func (m *manager) runSSHSession(
 		Plan:                   plan,
 		Runner:                 m.runner,
 		Logger:                 m.sshLifecycleLogger(),
-		Output:                 os.Stderr,
+		Stdout:                 m.sshOutput,
+		Stderr:                 m.sshError,
 		RetryOutputRevealDelay: sshRetryOutputRevealDelay,
 		AddProcesses:           processes.Add,
 		RemoveProcess:          processes.Remove,

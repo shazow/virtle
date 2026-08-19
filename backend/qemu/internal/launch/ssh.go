@@ -29,8 +29,6 @@ func buildSSHCommandWithArgv(launchManifest *manifest.Manifest, cid int, remoteC
 	cmd := executor.Command(command.Path, command.Args, renderer.Env())
 	cmd.Dir = launchManifest.Paths.WorkingDir
 	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
 	return cmd, nil
 }
 

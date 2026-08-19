@@ -17,7 +17,7 @@ func TestBuildQEMUCommandAppendsBalloonArgs(t *testing.T) {
 	manifest.QEMU.Devices.Balloon.DeflateOnOOM = true
 	manifest.QEMU.Devices.Balloon.FreePageReporting = true
 
-	spec, err := buildQEMUCommand(manifest, 42, false)
+	spec, err := buildTestQEMUCommand(manifest, 42, false)
 	if err != nil {
 		t.Fatalf("build qemu command: %v", err)
 	}
@@ -166,7 +166,7 @@ func TestBalloonControllerTaskWithNilLoggerDoesNotPanicOnFailure(t *testing.T) {
 			PollInterval:          1 * time.Second,
 			ReclaimHoldoff:        1 * time.Second,
 		},
-	}, nil)
+	}, nil, nil)
 	if task == nil {
 		t.Fatal("expected balloon controller task")
 	}
@@ -199,7 +199,7 @@ func TestBalloonControllerTaskWithNilLoggerDoesNotPanicOnAdjustment(t *testing.T
 			PollInterval:          1 * time.Second,
 			ReclaimHoldoff:        1 * time.Second,
 		},
-	}, nil)
+	}, nil, nil)
 	if task == nil {
 		t.Fatal("expected balloon controller task")
 	}

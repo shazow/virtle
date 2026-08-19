@@ -91,6 +91,7 @@ b, err := qemu.New(qemu.Config{RemoteControl: qemu.QGA{}})
 if err != nil {
 	log.Fatal(err)
 }
+b.SetLogger(slog.Default())
 inst, err := b.Start(ctx, spec)
 if err != nil {
 	log.Fatal(err)

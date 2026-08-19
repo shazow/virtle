@@ -1,6 +1,7 @@
 package launch
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os/exec"
@@ -19,10 +20,13 @@ func TestRunSSHSessionRetriesTransientFailure(t *testing.T) {
 	runner := &fakeSSHSessionRunner{
 		errs: []error{errors.New("Connection refused"), nil},
 	}
+	var stdout, stderr bytes.Buffer
 
 	err := RunSSHSession(context.Background(), SSHSession{
 		Plan:          &Plan{Manifest: launchManifest, CID: 10},
 		Runner:        runner,
+		Stdout:        &stdout,
+		Stderr:        &stderr,
 		AddProcesses:  processes.Add,
 		RemoveProcess: processes.Remove,
 		Watchers:      processes.Watchers,
@@ -36,6 +40,11 @@ func TestRunSSHSessionRetriesTransientFailure(t *testing.T) {
 	}
 	if got, want := len(runner.commands), 2; got != want {
 		t.Fatalf("ssh starts: got %d want %d", got, want)
+	}
+	for _, cmd := range runner.commands {
+		if cmd.Stdout != &stdout || cmd.Stderr == nil {
+			t.Fatal("expected configured ssh output writers")
+		}
 	}
 	if got, want := processes.removed, 1; got != want {
 		t.Fatalf("removed sessions: got %d want %d", got, want)

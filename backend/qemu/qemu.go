@@ -9,10 +9,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"os"
+	"sync/atomic"
 
 	"github.com/shazow/virtle/backend"
-	"github.com/shazow/virtle/backend/qemu/internal/balloon"
 	"github.com/shazow/virtle/backend/qemu/internal/vmm"
 	imanifest "github.com/shazow/virtle/internal/manifest"
 	"github.com/shazow/virtle/units"
@@ -56,20 +58,13 @@ type Config struct {
 	// reports errors.ErrUnsupported, and teardown skips the graceful
 	// guest shutdown attempt.
 	RemoteControl RemoteControl
-}
 
-var manifestLogger = slog.New(slog.DiscardHandler)
-
-// SetLogger configures logging for QEMU backends and their internal
-// components. Logging is process-global and should be configured before
-// starting concurrent backends. A nil logger restores the silent default.
-func SetLogger(logger *slog.Logger) {
-	if logger == nil {
-		logger = slog.New(slog.DiscardHandler)
-	}
-	manifestLogger = logger.With("package", "manifest")
-	vmm.SetLogger(logger.With("package", "vmm"))
-	balloon.SetLogger(logger.With("package", "balloon"))
+	// ConsoleOutput receives explicitly requested console output. The default
+	// is os.Stderr.
+	ConsoleOutput io.Writer
+	// BackgroundOutput receives QEMU and helper-process output. The default is
+	// os.Stderr, preserving the library backend's existing behavior.
+	BackgroundOutput io.Writer
 }
 
 // RemoteControl is a guest-control transport for Config.RemoteControl.
@@ -96,12 +91,34 @@ func (QGA) remoteControl() {}
 //
 //	b, err := qemu.New(qemu.Config{RemoteControl: qemu.QGA{}})
 func New(cfg Config) (backend.Backend, error) {
-	return &qemuBackend{cfg: cfg}, nil
+	return newBackend(cfg, nil), nil
 }
 
 type qemuBackend struct {
-	cfg Config
-	doc *imanifest.Document // non-nil for manifest.Load-configured backends
+	cfg    Config
+	doc    *imanifest.Document // non-nil for manifest.Load-configured backends
+	logger atomic.Pointer[slog.Logger]
+}
+
+func newBackend(cfg Config, doc *imanifest.Document) *qemuBackend {
+	if cfg.ConsoleOutput == nil {
+		cfg.ConsoleOutput = os.Stderr
+	}
+	if cfg.BackgroundOutput == nil {
+		cfg.BackgroundOutput = os.Stderr
+	}
+	b := &qemuBackend{cfg: cfg, doc: doc}
+	b.SetLogger(nil)
+	return b
+}
+
+// SetLogger implements backend.Backend. It affects instances started after the
+// call; already-running instances retain the logger captured at Start.
+func (b *qemuBackend) SetLogger(logger *slog.Logger) {
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
+	b.logger.Store(logger)
 }
 
 func (b *qemuBackend) hasRemoteControl() bool { return b.cfg.RemoteControl != nil }
@@ -122,7 +139,7 @@ func NewBackendFromDocument(doc imanifest.Document, cfg Config) backend.Backend 
 	if cfg.RemoteControl == nil {
 		cfg.RemoteControl = QGA{}
 	}
-	return &qemuBackend{cfg: cfg, doc: &doc}
+	return newBackend(cfg, &doc)
 }
 
 func (b *qemuBackend) Start(ctx context.Context, spec *vm.Spec) (backend.Instance, error) {
@@ -131,12 +148,12 @@ func (b *qemuBackend) Start(ctx context.Context, spec *vm.Spec) (backend.Instanc
 
 // resolveSpec lowers the spec (plus any base document) through the manifest
 // resolution pipeline.
-func (b *qemuBackend) resolveSpec(spec *vm.Spec) (*imanifest.Manifest, error) {
+func (b *qemuBackend) resolveSpec(spec *vm.Spec, logger *slog.Logger) (*imanifest.Manifest, error) {
 	doc, err := specDocument(spec, b.cfg, b.doc)
 	if err != nil {
 		return nil, err
 	}
-	mf, err := doc.ManifestWithOptions(imanifest.ResolveOptions{Logger: manifestLogger})
+	mf, err := doc.ManifestWithOptions(imanifest.ResolveOptions{Logger: logger.With("package", "manifest")})
 	if err != nil {
 		return nil, fmt.Errorf("resolve vm spec: %w", err)
 	}
@@ -144,13 +161,18 @@ func (b *qemuBackend) resolveSpec(spec *vm.Spec) (*imanifest.Manifest, error) {
 }
 
 func (b *qemuBackend) start(ctx context.Context, spec *vm.Spec, resume vmm.ResumeMode) (backend.Instance, error) {
-	mf, err := b.resolveSpec(spec)
+	logger := b.logger.Load()
+	mf, err := b.resolveSpec(spec, logger)
 	if err != nil {
 		return nil, err
 	}
 	handle, err := vmm.StartVM(ctx, mf, vmm.StartOptions{
 		Resume:           resume,
 		HasRemoteControl: b.hasRemoteControl(),
+	}, vmm.Config{
+		Logger:           logger,
+		ConsoleOutput:    b.cfg.ConsoleOutput,
+		BackgroundOutput: b.cfg.BackgroundOutput,
 	})
 	if err != nil {
 		return nil, err

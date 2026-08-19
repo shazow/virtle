@@ -89,10 +89,19 @@ func runLaunch(options *Options) error {
 	// The session layer owns the whole foreground lifecycle; backend
 	// details (suspend-state versioning, readiness, guest control) live
 	// inside the machinery it wraps.
+	backgroundOutput := io.Discard
+	if len(options.Verbose) >= 2 {
+		backgroundOutput = os.Stderr
+	}
 	return session.Run(context.Background(), loaded, session.Options{
-		Resume:        options.Launch.Resume,
-		SSH:           options.Launch.SSH,
-		RemoteCommand: options.Launch.Args.RemoteCommand,
+		Resume:           options.Launch.Resume,
+		SSH:              options.Launch.SSH,
+		RemoteCommand:    options.Launch.Args.RemoteCommand,
+		Logger:           rootLogger,
+		ConsoleOutput:    os.Stderr,
+		SSHOutput:        os.Stdout,
+		SSHError:         os.Stderr,
+		BackgroundOutput: backgroundOutput,
 	})
 }
 
@@ -335,12 +344,6 @@ func run(args []string) error {
 	}
 	rootLogger = virtlelog.New(os.Stderr, len(opts.Verbose))
 	commandLogger = rootLogger.With("package", "main")
-	session.SetLogger(rootLogger)
-	if len(opts.Verbose) >= 2 {
-		session.SetOutput(os.Stderr)
-	} else {
-		session.SetOutput(io.Discard)
-	}
 
 	switch parser.Active.Name {
 	case "launch":
@@ -368,6 +371,7 @@ func run(args []string) error {
 		return fmt.Errorf("unknown command %q", parser.Active.Name)
 	}
 }
+
 func newParserForOptions(opts *Options) *flags.Parser {
 	// PrintErrors is deliberately left out of the parser options: main is the
 	// single place parse errors get printed, so they never appear twice.

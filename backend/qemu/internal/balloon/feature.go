@@ -4,10 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/shazow/virtle/internal/manifest"
+	"log/slog"
 	"strings"
 
 	govmmQemu "github.com/kata-containers/govmm/qemu"
+	"github.com/shazow/virtle/internal/manifest"
 )
 
 func sessionFromMonitor(session MonitorSession) session {
@@ -42,9 +43,12 @@ func AppendQEMUArgs(
 	return append(args, "-device", strings.Join(deviceParams, ",")), nil
 }
 
-func ControllerTask(session MonitorSession, device *manifest.BalloonDevice, notificationSink notifier) func(context.Context) error {
+func ControllerTask(session MonitorSession, device *manifest.BalloonDevice, notificationSink notifier, logger *slog.Logger) func(context.Context) error {
 	if device == nil || device.Controller == nil || session == nil {
 		return nil
+	}
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
 	}
 
 	controller := &controller{

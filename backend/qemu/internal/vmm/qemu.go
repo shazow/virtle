@@ -16,11 +16,7 @@ import (
 	"github.com/shazow/virtle/internal/manifest"
 )
 
-func buildQEMUCommand(manifest *manifest.Manifest, cid int, incoming bool) (*exec.Cmd, error) {
-	return buildQEMUCommandWithOutput(manifest, cid, incoming, backgroundOutput)
-}
-
-func buildQEMUCommandWithOutput(manifest *manifest.Manifest, cid int, incoming bool, output io.Writer) (*exec.Cmd, error) {
+func buildQEMUCommand(manifest *manifest.Manifest, cid int, incoming bool, backgroundOutput, foregroundOutput io.Writer) (*exec.Cmd, error) {
 	qemu, err := manifest.ResolvedQEMU()
 	if err != nil {
 		return nil, err
@@ -38,8 +34,9 @@ func buildQEMUCommandWithOutput(manifest *manifest.Manifest, cid int, incoming b
 	if qemu.Console.Interactive() {
 		cmd.Stdin = os.Stdin
 	}
+	output := backgroundOutput
 	if qemu.Console.Enabled() {
-		output = os.Stderr
+		output = foregroundOutput
 	}
 	cmd.Stdout = output
 	cmd.Stderr = output

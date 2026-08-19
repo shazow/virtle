@@ -1,6 +1,9 @@
 package qemu
 
 import (
+	"bytes"
+	"log/slog"
+	"os"
 	"strings"
 	"testing"
 
@@ -8,6 +11,46 @@ import (
 	"github.com/shazow/virtle/units"
 	"github.com/shazow/virtle/vm"
 )
+
+func TestBackendsKeepIndependentLoggers(t *testing.T) {
+	first, err := New(Config{})
+	if err != nil {
+		t.Fatalf("new first backend: %v", err)
+	}
+	second, err := New(Config{})
+	if err != nil {
+		t.Fatalf("new second backend: %v", err)
+	}
+
+	var firstOutput, secondOutput bytes.Buffer
+	first.SetLogger(slog.New(slog.NewTextHandler(&firstOutput, nil)))
+	second.SetLogger(slog.New(slog.NewTextHandler(&secondOutput, nil)))
+	first.(*qemuBackend).logger.Load().Info("first backend")
+	second.(*qemuBackend).logger.Load().Info("second backend")
+
+	if logs := firstOutput.String(); !strings.Contains(logs, "first backend") || strings.Contains(logs, "second backend") {
+		t.Fatalf("unexpected first backend logs: %q", logs)
+	}
+	if logs := secondOutput.String(); !strings.Contains(logs, "second backend") || strings.Contains(logs, "first backend") {
+		t.Fatalf("unexpected second backend logs: %q", logs)
+	}
+}
+
+func TestBackendOutputDefaultsAndOverrides(t *testing.T) {
+	defaults := newBackend(Config{}, nil)
+	if defaults.cfg.ConsoleOutput != os.Stderr || defaults.cfg.BackgroundOutput != os.Stderr {
+		t.Fatal("expected default backend output on stderr")
+	}
+
+	var foreground, background bytes.Buffer
+	configured := newBackend(Config{
+		ConsoleOutput:    &foreground,
+		BackgroundOutput: &background,
+	}, nil)
+	if configured.cfg.ConsoleOutput != &foreground || configured.cfg.BackgroundOutput != &background {
+		t.Fatal("expected configured backend outputs to be preserved")
+	}
+}
 
 func testSpec() *vm.Spec {
 	return &vm.Spec{

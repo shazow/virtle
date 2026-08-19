@@ -45,8 +45,8 @@ type managedProcessStarter struct {
 }
 
 func (s managedProcessStarter) Start(ctx context.Context, cmd *exec.Cmd) (*executor.Process, error) {
-	cmd.Stdout = s.m.outputWriter()
-	cmd.Stderr = s.m.outputWriter()
+	cmd.Stdout = s.m.backgroundWriter()
+	cmd.Stderr = s.m.backgroundWriter()
 	proc, err := s.m.startManagedProcess(cmd)
 	if err != nil {
 		return nil, err

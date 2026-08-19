@@ -79,7 +79,7 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 	if err != nil {
 		return nil, &launch.StageError{Stage: "preflight", Err: err}
 	}
-	qemuCmd, err := buildQEMUCommandWithOutput(plan.Manifest, cid, plan.ResumeState != nil, m.outputWriter())
+	qemuCmd, err := buildQEMUCommand(plan.Manifest, cid, plan.ResumeState != nil, m.backgroundWriter(), m.consoleOutput)
 	if err != nil {
 		return nil, &launch.StageError{Stage: "preflight", Err: err}
 	}
@@ -227,7 +227,7 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 		stats.Timer(launch.TimerFilesReady, time.Now())
 		writeBackOnExit = plan.Options.HasRemoteControl
 	}
-	if task := balloon.ControllerTask(qmp, plan.Manifest.QEMU.Devices.Balloon, plan.Notifier); task != nil {
+	if task := balloon.ControllerTask(qmp, plan.Manifest.QEMU.Devices.Balloon, plan.Notifier, m.balloonLogger); task != nil {
 		processes.StartTasks(launchCtx, task)
 	}
 	return started, nil

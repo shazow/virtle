@@ -21,7 +21,8 @@ type SSHSession struct {
 	Plan                   *Plan
 	Runner                 Runner
 	Logger                 *slog.Logger
-	Output                 io.Writer
+	Stdout                 io.Writer
+	Stderr                 io.Writer
 	RetryOutputRevealDelay time.Duration
 
 	AddProcesses  func(...*executor.Process)
@@ -44,11 +45,19 @@ func RunSSHSession(ctx context.Context, session SSHSession) error {
 	if sessionLogger == nil {
 		sessionLogger = slog.New(slog.DiscardHandler)
 	}
+	stdout := session.Stdout
+	if stdout == nil {
+		stdout = io.Discard
+	}
+	stderrOutput := session.Stderr
+	if stderrOutput == nil {
+		stderrOutput = io.Discard
+	}
 	retryLog := sshtools.NewRetryLogger(sessionLogger)
 	provisioned := false
 
 	for {
-		stderr := sshtools.NewRetryOutput(session.Output, false, session.RetryOutputRevealDelay)
+		stderr := sshtools.NewRetryOutput(stderrOutput, false, session.RetryOutputRevealDelay)
 		attemptStarted := sshSessionNow(session)
 		if session.RecordTimer != nil {
 			session.RecordTimer(TimerSSHAttempt, attemptStarted)
@@ -58,6 +67,7 @@ func RunSSHSession(ctx context.Context, session SSHSession) error {
 			return wrapSSHSessionStage(session, "active session", err)
 		}
 		sessionLogger.Info("ssh command", "command", shellquote.Join(cmd.Args...))
+		cmd.Stdout = stdout
 		cmd.Stderr = stderr
 		started, err := session.Runner.Start(cmd)
 		if err != nil {

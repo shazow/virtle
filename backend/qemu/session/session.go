@@ -18,43 +18,74 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"os"
 
-	"github.com/shazow/virtle/backend/qemu/internal/balloon"
 	"github.com/shazow/virtle/backend/qemu/internal/vmm"
 	"github.com/shazow/virtle/internal/manifest"
 )
-
-var logger = slog.New(slog.DiscardHandler)
 
 // Options configures a CLI session.
 type Options struct {
 	Resume        string   // resume mode: "no", "auto", "force"; default "no"
 	SSH           bool     // attach the interactive SSH session loop
 	RemoteCommand []string // remote command for the SSH session
+
+	Logger           *slog.Logger // default: discard
+	ConsoleOutput    io.Writer    // default: os.Stderr
+	SSHOutput        io.Writer    // default: os.Stdout
+	SSHError         io.Writer    // default: os.Stderr
+	BackgroundOutput io.Writer    // default: discard
 }
 
 // Run boots the VM with CLI semantics (resume modes, --ssh preflight
 // validation, process signal handlers) and runs the foreground session to
 // completion. A session that ends in a saved suspend reports success.
 func Run(ctx context.Context, mf *manifest.Manifest, opts Options) error {
-	logger.Info("starting vm session", "resume", opts.Resume, "ssh", opts.SSH)
+	logger := opts.Logger
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
+	consoleOutput := opts.ConsoleOutput
+	if consoleOutput == nil {
+		consoleOutput = os.Stderr
+	}
+	sshOutput := opts.SSHOutput
+	if sshOutput == nil {
+		sshOutput = os.Stdout
+	}
+	sshError := opts.SSHError
+	if sshError == nil {
+		sshError = os.Stderr
+	}
+	backgroundOutput := opts.BackgroundOutput
+	if backgroundOutput == nil {
+		backgroundOutput = io.Discard
+	}
+	sessionLogger := logger.With("package", "session")
+	sessionLogger.Info("starting vm session", "resume", opts.Resume, "ssh", opts.SSH)
 	sessionOpts := vmm.SessionOptions{
 		SSH:           opts.SSH,
 		RemoteCommand: opts.RemoteCommand,
 	}
 	vmHandle, err := vmm.StartSessionVM(ctx, mf, vmm.StartOptions{
 		Resume: vmm.ResumeMode(opts.Resume),
-	}, sessionOpts)
+	}, sessionOpts, vmm.Config{
+		Logger:           logger,
+		ConsoleOutput:    consoleOutput,
+		SSHOutput:        sshOutput,
+		SSHError:         sshError,
+		BackgroundOutput: backgroundOutput,
+	})
 	if err != nil {
 		if vmm.IsSavedSuspendExit(err) {
 			return nil
 		}
 		return err
 	}
-	logger.Info("vm started; entering foreground session")
+	sessionLogger.Info("vm started; entering foreground session")
 	err = vmm.RunSession(ctx, vmHandle, sessionOpts)
 	if err == nil {
-		logger.Info("vm session ended")
+		sessionLogger.Info("vm session ended")
 	}
 	return err
 }
@@ -73,18 +104,3 @@ func Hotplug(ctx context.Context, mf *manifest.Manifest, id string, detach bool)
 
 // ExitCode maps session errors onto CLI exit codes.
 func ExitCode(err error) int { return vmm.ExitCode(err) }
-
-// SetLogger configures the session and the subpackages it assembles. Logging
-// is process-global and should be configured before starting a session.
-func SetLogger(l *slog.Logger) {
-	if l == nil {
-		l = slog.New(slog.DiscardHandler)
-	}
-	logger = l.With("package", "session")
-	vmm.SetLogger(l.With("package", "vmm"))
-	vmm.SetSSHLogger(l.With("package", "ssh"))
-	balloon.SetLogger(l.With("package", "balloon"))
-}
-
-// SetOutput configures output from non-interactive background processes.
-func SetOutput(w io.Writer) { vmm.SetOutput(w) }

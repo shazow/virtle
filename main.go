@@ -79,11 +79,9 @@ func runLaunch(options *Options) error {
 	manifestLogger := discardLogger
 	session.SetLogger(discardLogger)
 	session.SetBalloonLogger(discardLogger)
-	if len(options.Verbose) > 0 {
+	if len(options.Verbose) > 1 {
 		manifestLogger = baseLogger.With("package", "manifest")
 		session.SetLogger(baseLogger.With("package", "vmm"))
-	}
-	if len(options.Verbose) > 1 {
 		session.SetBalloonLogger(baseLogger.With("package", "balloon"))
 	}
 
@@ -156,7 +154,7 @@ func runHotplug(options *Options) error {
 	discardLogger := slog.New(slog.DiscardHandler)
 	manifestLogger := discardLogger
 	session.SetLogger(discardLogger)
-	if len(options.Verbose) > 0 {
+	if len(options.Verbose) > 1 {
 		manifestLogger = baseLogger.With("package", "manifest")
 		session.SetLogger(baseLogger.With("package", "vmm"))
 	}

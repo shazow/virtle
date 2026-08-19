@@ -40,11 +40,6 @@ Global flags:
 - `virtle -v ...` - Show useful VM and SSH lifecycle information.
 - `virtle -vv ...` - Show debugging details and output from background commands.
 
-Without a verbosity flag, virtle only reports action consequences and warnings.
-Logs are written to stderr so command results on stdout remain suitable for
-piping. Explicit VM console output and an attached SSH session are always
-preserved.
-
 Launch a VM:
 - `virtle launch [--ssh] [--resume=no|auto|force] [-- <remote-cmd...>]`
 
@@ -52,7 +47,7 @@ Other advanced features:
 - `virtle suspend`
 - `virtle rpc METHOD [JSON_ARGS]`
 - `virtle hotplug ID` (experimental)
-- `virtle hotplug --detach ID`(experimental)
+- `virtle hotplug --detach ID` (experimental)
 
 ### Manifest
 

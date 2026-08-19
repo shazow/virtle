@@ -255,9 +255,9 @@ func stopLaunchLifecycle(lifecycle *launch.Lifecycle, cancel context.CancelFunc)
 func (m *manager) prepareRuntimeState(plan *launch.Plan) error {
 	if m.logger != nil {
 		if plan.ResumeState != nil {
-			m.logger.Info("restoring saved vsock cid", "cid", plan.CID)
+			m.logger.Debug("restoring saved vsock cid", "cid", plan.CID)
 		} else {
-			m.logger.Info("allocated vsock cid", "cid", plan.CID)
+			m.logger.Debug("allocated vsock cid", "cid", plan.CID)
 		}
 	}
 
@@ -322,7 +322,7 @@ func (m *manager) startQEMU(cmd *exec.Cmd) (*executor.Process, error) {
 		return nil, fmt.Errorf("qemu runner is not configured")
 	}
 	if m.logger != nil {
-		m.logger.Info("starting qemu", "command", shellquote.Join(cmd.Args...))
+		m.logger.Debug("starting qemu", "command", shellquote.Join(cmd.Args...))
 	}
 	return m.startManagedProcess(cmd)
 }

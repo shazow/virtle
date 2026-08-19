@@ -880,13 +880,14 @@ func TestManagerLaunchWithoutSSHPrintsConnectHintAndWaitsForQEMU(t *testing.T) {
 
 	runner := &launchRunner{}
 	qmpClient := &fakeQMPClient{}
-	var logOutput bytes.Buffer
+	var logOutput, foregroundOutput bytes.Buffer
 	manager := &manager{
 		locker:            &fileLocker{},
 		runner:            runner,
 		socketWaiter:      &fakeSocketWaiter{callback: func(paths []string) error { return nil }},
 		qmpDialer:         &fakeQMPDialer{client: qmpClient},
 		logger:            debugTestLogger(&logOutput),
+		sessionOutput:     &foregroundOutput,
 		shutdownDelay:     10 * time.Millisecond,
 		qmpRetryDelay:     0,
 		qmpConnectTimeout: time.Millisecond,
@@ -915,8 +916,8 @@ func TestManagerLaunchWithoutSSHPrintsConnectHintAndWaitsForQEMU(t *testing.T) {
 	if strings.Contains(logOutput.String(), "msg=\"ssh command\"") {
 		t.Fatalf("unexpected interactive ssh command log, got %q", logOutput.String())
 	}
-	if logs := logOutput.String(); !strings.Contains(logs, `msg="connect with ssh"`) || !strings.Contains(logs, `command="/bin/ssh agent@vsock/3"`) {
-		t.Fatalf("expected out-of-band ssh hint, got %q", logOutput.String())
+	if got, want := foregroundOutput.String(), "connect with ssh: /bin/ssh agent@vsock/3\n"; got != want {
+		t.Fatalf("out-of-band ssh hint: got %q want %q", got, want)
 	}
 	assertLaunchStatsLog(t, logOutput.String(), []string{
 		"started_to_boot=",
@@ -943,7 +944,7 @@ func TestManagerStartAndWaitForRunningLaunchWithoutSSH(t *testing.T) {
 
 	runner := &launchRunner{}
 	qmpClient := &fakeQMPClient{}
-	var logOutput bytes.Buffer
+	var logOutput, foregroundOutput bytes.Buffer
 	manager := newManagerFromConfig(Config{
 		Locker:            &fileLocker{},
 		Runner:            runner,
@@ -955,6 +956,7 @@ func TestManagerStartAndWaitForRunningLaunchWithoutSSH(t *testing.T) {
 		QMPConnectTimeout: time.Millisecond,
 		QMPQuitTimeout:    time.Millisecond,
 	})
+	manager.sessionOutput = &foregroundOutput
 
 	plan, err := manager.planLaunch(launch.Spec{
 		Manifest: cfg,
@@ -991,8 +993,8 @@ func TestManagerStartAndWaitForRunningLaunchWithoutSSH(t *testing.T) {
 	if got := len(runner.sshArgs()); got != 0 {
 		t.Fatalf("expected no ssh starts, got %d", got)
 	}
-	if logs := logOutput.String(); !strings.Contains(logs, `msg="connect with ssh"`) || !strings.Contains(logs, `command="/bin/ssh agent@vsock/`) {
-		t.Fatalf("expected out-of-band ssh hint, got %q", logOutput.String())
+	if output := foregroundOutput.String(); !strings.HasPrefix(output, "connect with ssh: /bin/ssh agent@vsock/") {
+		t.Fatalf("expected out-of-band ssh hint, got %q", output)
 	}
 }
 

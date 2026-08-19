@@ -29,7 +29,6 @@ import (
 	"github.com/shazow/virtle/backend/qemu/internal/qga"
 	"github.com/shazow/virtle/backend/qemu/internal/qmpclient"
 	"github.com/shazow/virtle/internal/executor"
-	virtlelog "github.com/shazow/virtle/internal/logging"
 	"github.com/shazow/virtle/internal/manifest"
 )
 
@@ -62,8 +61,8 @@ type manager struct {
 	sshLogger           *slog.Logger
 	balloonLogger       *slog.Logger
 	consoleOutput       io.Writer
-	sshOutput           io.Writer
-	sshError            io.Writer
+	sessionOutput       io.Writer
+	sessionError        io.Writer
 	sshReadyTimeout     time.Duration
 	shutdownDelay       time.Duration
 	qmpRetryDelay       time.Duration
@@ -127,7 +126,12 @@ func (m *manager) launchWithOptions(ctx context.Context, manifest *manifest.Mani
 		}
 		return err
 	}
-	return RunSession(ctx, v, SessionOptions{SSH: options.SSH, RemoteCommand: remoteCommand})
+	return RunSession(ctx, v, SessionOptions{
+		SSH:           options.SSH,
+		RemoteCommand: remoteCommand,
+		Stdout:        m.sessionOutput,
+		Stderr:        m.sessionError,
+	})
 }
 
 func (m *manager) planLaunch(spec launch.Spec) (*launch.Plan, error) {
@@ -206,8 +210,10 @@ func (m *manager) waitForLaunchForeground(
 		if m.logger != nil {
 			m.logger.Warn("ssh command hint template failed", "err", err)
 		}
-	} else if hint != "" {
-		virtlelog.Notice(m.logger, "connect with ssh", "command", hint)
+	} else if hint != "" && m.sessionOutput != nil {
+		if _, err := fmt.Fprintf(m.sessionOutput, "connect with ssh: %s\n", hint); err != nil {
+			return fmt.Errorf("write ssh command hint: %w", err)
+		}
 	}
 
 	vmWatchers := processes.VMWatchers()
@@ -239,7 +245,7 @@ func (m *manager) startRuns(cid int) (executor.Group, error) {
 	started := executor.NewGroup()
 	for i, run := range runs {
 		if m.logger != nil {
-			m.logger.Info("starting run", "index", i)
+			m.logger.Debug("starting run", "index", i)
 		}
 		cmd := executor.Command(run.Exec[0], run.Exec[1:], run.Env)
 		cmd.Dir = run.Dir
@@ -399,8 +405,8 @@ func (m *manager) runSSHSession(
 		Plan:                   plan,
 		Runner:                 m.runner,
 		Logger:                 m.sshLifecycleLogger(),
-		Stdout:                 m.sshOutput,
-		Stderr:                 m.sshError,
+		Stdout:                 m.sessionOutput,
+		Stderr:                 m.sessionError,
 		RetryOutputRevealDelay: sshRetryOutputRevealDelay,
 		AddProcesses:           processes.Add,
 		RemoveProcess:          processes.Remove,

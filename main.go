@@ -19,7 +19,6 @@ import (
 	"github.com/jessevdk/go-flags"
 	"github.com/shazow/virtle/backend/qemu/session"
 	"github.com/shazow/virtle/internal/control"
-	virtlelog "github.com/shazow/virtle/internal/logging"
 	"github.com/shazow/virtle/internal/manifest"
 	manifestschema "github.com/shazow/virtle/internal/manifest/schema"
 )
@@ -66,10 +65,7 @@ type Options struct {
 	} `command:"manifest" description:"Inspect and work with virtle manifests" long-description:"Inspect and work with the virtle manifest input format."`
 }
 
-var (
-	rootLogger    = slog.New(slog.DiscardHandler)
-	commandLogger = slog.New(slog.DiscardHandler)
-)
+var rootLogger = slog.New(slog.DiscardHandler)
 
 const extraHelp = `Run 'virtle <command> --help' for more information on a command.
 Project repository: https://github.com/shazow/virtle
@@ -80,7 +76,7 @@ func runLaunch(options *Options) error {
 		return fmt.Errorf("remote command arguments require --ssh")
 	}
 
-	commandLogger.Info("loading launch manifest", "path", options.Manifest)
+	rootLogger.With("package", "main").Info("loading launch manifest", "path", options.Manifest)
 	loaded, err := loadLaunchManifest(options.Manifest, rootLogger.With("package", "manifest"))
 	if err != nil {
 		return err
@@ -109,8 +105,8 @@ func runSuspend(options *Options) error {
 	if err := session.Suspend(ctx, manifest); err != nil {
 		return err
 	}
-	virtlelog.Notice(commandLogger, "suspended vm")
-	return nil
+	_, err = fmt.Fprintln(os.Stdout, "suspended vm")
+	return err
 }
 
 func runManifestDefaults(options *Options) error {
@@ -166,8 +162,8 @@ func runHotplug(options *Options) error {
 	if options.Hotplug.Detach {
 		action = "detached"
 	}
-	virtlelog.Notice(commandLogger, action+" hotplug device", "id", options.Hotplug.Args.ID)
-	return nil
+	_, err = fmt.Fprintf(os.Stdout, "%s hotplug device: %s\n", action, options.Hotplug.Args.ID)
+	return err
 }
 
 func runRPC(options *Options) error {
@@ -334,8 +330,13 @@ func run(args []string) error {
 	if opts.Version {
 		return printVersion(os.Stdout)
 	}
-	rootLogger = virtlelog.New(os.Stderr, len(opts.Verbose))
-	commandLogger = rootLogger.With("package", "main")
+	level := slog.LevelWarn
+	if len(opts.Verbose) == 1 {
+		level = slog.LevelInfo
+	} else if len(opts.Verbose) >= 2 {
+		level = slog.LevelDebug
+	}
+	rootLogger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 
 	switch parser.Active.Name {
 	case "launch":

@@ -186,6 +186,41 @@ func TestParserAcceptsLaunchFlags(t *testing.T) {
 	}
 }
 
+func TestLoggingVerbosity(t *testing.T) {
+	tests := []struct {
+		name      string
+		flags     []string
+		wantInfo  bool
+		wantDebug bool
+	}{
+		{name: "default"},
+		{name: "verbose", flags: []string{"-v"}, wantInfo: true},
+		{name: "debug", flags: []string{"-vv"}, wantInfo: true, wantDebug: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args := append(append([]string(nil), tt.flags...), "manifest", "defaults")
+			captureStdout(t, func() {
+				if err := run(args); err != nil {
+					t.Fatalf("run: %v", err)
+				}
+			})
+
+			ctx := context.Background()
+			if got := rootLogger.Enabled(ctx, slog.LevelInfo); got != tt.wantInfo {
+				t.Fatalf("INFO enabled: got %t want %t", got, tt.wantInfo)
+			}
+			if got := rootLogger.Enabled(ctx, slog.LevelDebug); got != tt.wantDebug {
+				t.Fatalf("DEBUG enabled: got %t want %t", got, tt.wantDebug)
+			}
+			if !rootLogger.Enabled(ctx, slog.LevelWarn) {
+				t.Fatal("expected WARNING to be enabled")
+			}
+		})
+	}
+}
+
 func TestParserAcceptsSharedOptionsBeforeOrAfterSubcommand(t *testing.T) {
 	manifestPath := filepath.Join(t.TempDir(), "manifest.toml")
 	tests := []struct {

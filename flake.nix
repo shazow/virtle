@@ -25,6 +25,10 @@
             inherit (release) version vendorHash;
             src = ./.;
             subPackages = [ "." ];
+            # A Nix build has no VCS metadata for the Go toolchain to stamp, so
+            # the version is passed in. The "v" matches how tag-built binaries
+            # report themselves.
+            ldflags = [ "-X main.version=v${release.version}" ];
             env.CGO_ENABLED = 0;
             meta.mainProgram = "virtle";
           };

@@ -40,8 +40,8 @@ jobs:
           TAG: ${{ inputs.tag || github.ref_name }}
         shell: bash
         run: |
-          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
-            echo "Release tag must look like v1.0 or v1.0.1; got: $TAG" >&2
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tag must be a full semver tag like v1.0.1 so the Go toolchain stamps it into the binary; got: $TAG" >&2
             exit 1
           fi
 

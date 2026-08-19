@@ -26,6 +26,7 @@ import (
 type Options struct {
 	Manifest string `long:"manifest" value-name:"MANIFEST" description:"Path to the virtle manifest"`
 	Verbose  []bool `short:"v" long:"verbose" description:"Show verbose logging."`
+	Version  bool   `long:"version" description:"Print the virtle version and exit"`
 
 	Launch struct {
 		Resume string `long:"resume" choice:"no" choice:"auto" choice:"force" default:"auto" description:"Resume suspended VM instead of launching a fresh one"`
@@ -316,6 +317,11 @@ func run(args []string) error {
 	if _, err := parser.ParseArgs(args); err != nil {
 		var flagsErr *flags.Error
 		if errors.As(err, &flagsErr) && flagsErr.Type == flags.ErrCommandRequired {
+			if opts.Version {
+				// --version stands on its own, so it answers instead of the
+				// parser's missing-command complaint.
+				return printVersion(os.Stdout)
+			}
 			// Missing command: show the relevant help instead of only the
 			// bare "Please specify one command" message.
 			var help bytes.Buffer
@@ -325,6 +331,10 @@ func run(args []string) error {
 			return &flags.Error{Type: flags.ErrCommandRequired, Message: strings.TrimRight(help.String(), "\n")}
 		}
 		return err
+	}
+
+	if opts.Version {
+		return printVersion(os.Stdout)
 	}
 
 	switch parser.Active.Name {

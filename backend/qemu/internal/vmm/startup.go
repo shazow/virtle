@@ -79,7 +79,7 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 	if err != nil {
 		return nil, &launch.StageError{Stage: "preflight", Err: err}
 	}
-	qemuCmd, err := buildQEMUCommand(plan.Manifest, cid, plan.ResumeState != nil, m.backgroundWriter(), m.consoleOutput)
+	qemuCmd, err := buildQEMUCommand(plan.Manifest, cid, plan.ResumeState != nil, m.consoleOutput)
 	if err != nil {
 		return nil, &launch.StageError{Stage: "preflight", Err: err}
 	}

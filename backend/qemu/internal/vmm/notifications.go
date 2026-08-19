@@ -3,7 +3,6 @@ package vmm
 import (
 	"context"
 	"fmt"
-	"io"
 	"log/slog"
 	"os/exec"
 	"path/filepath"
@@ -51,10 +50,10 @@ type commandNotifier struct {
 	states  map[string]struct{}
 	dir     string
 	logger  *slog.Logger
-	output  io.Writer
+	runner  launch.Runner
 }
 
-func newCommandNotifier(manifest *manifest.Manifest, logger *slog.Logger, output io.Writer) launch.NotificationSink {
+func newCommandNotifier(manifest *manifest.Manifest, logger *slog.Logger, runner launch.Runner) launch.NotificationSink {
 	if manifest == nil {
 		return noopNotifier{}
 	}
@@ -87,7 +86,7 @@ func newCommandNotifier(manifest *manifest.Manifest, logger *slog.Logger, output
 		states:  states,
 		dir:     dir,
 		logger:  logger,
-		output:  output,
+		runner:  runner,
 	}
 }
 
@@ -124,10 +123,19 @@ func (n *commandNotifier) Notify(ctx context.Context, state string, message stri
 	cmd := exec.CommandContext(ctx, command.Path, command.Args...)
 	cmd.Env = executor.WrapEnv(env)
 	cmd.Dir = n.dir
-	cmd.Stdout = n.output
-	cmd.Stderr = n.output
-	if err := cmd.Run(); err != nil && n.logger != nil {
-		n.logger.Warn("notification hook failed", "state", state, "err", err)
+	var runErr error
+	if n.runner == nil {
+		runErr = fmt.Errorf("command runner is not configured")
+	} else {
+		process, err := n.runner.Start(cmd)
+		if err != nil {
+			runErr = err
+		} else {
+			runErr = process.Wait()
+		}
+	}
+	if runErr != nil && n.logger != nil {
+		n.logger.Warn("notification hook failed", "state", state, "err", runErr)
 	}
 }
 

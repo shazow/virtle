@@ -89,19 +89,11 @@ func runLaunch(options *Options) error {
 	// The session layer owns the whole foreground lifecycle; backend
 	// details (suspend-state versioning, readiness, guest control) live
 	// inside the machinery it wraps.
-	backgroundOutput := io.Discard
-	if len(options.Verbose) >= 2 {
-		backgroundOutput = os.Stderr
-	}
 	return session.Run(context.Background(), loaded, session.Options{
-		Resume:           options.Launch.Resume,
-		SSH:              options.Launch.SSH,
-		RemoteCommand:    options.Launch.Args.RemoteCommand,
-		Logger:           rootLogger,
-		ConsoleOutput:    os.Stderr,
-		SSHOutput:        os.Stdout,
-		SSHError:         os.Stderr,
-		BackgroundOutput: backgroundOutput,
+		Resume:        options.Launch.Resume,
+		SSH:           options.Launch.SSH,
+		RemoteCommand: options.Launch.Args.RemoteCommand,
+		Logger:        rootLogger,
 	})
 }
 

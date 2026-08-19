@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"sync"
 	"time"
@@ -103,8 +104,10 @@ func IsSavedSuspendExit(err error) bool { return launch.IsSavedSuspendExit(err) 
 
 // SessionOptions configures the CLI foreground session on a started VM.
 type SessionOptions struct {
-	SSH           bool     // attach the interactive SSH session loop
-	RemoteCommand []string // remote command for the SSH session
+	SSH           bool      // attach the interactive SSH session loop
+	RemoteCommand []string  // remote command for the SSH session
+	Stdout        io.Writer // SSH stdout; default: discard
+	Stderr        io.Writer // SSH stderr; default: discard
 }
 
 // RunSession runs the CLI foreground session on a started VM: the
@@ -115,6 +118,8 @@ type SessionOptions struct {
 // saved suspend reports success.
 func RunSession(ctx context.Context, v *VM, opts SessionOptions) (err error) {
 	m, running := v.m, v.running
+	m.sshOutput = opts.Stdout
+	m.sshError = opts.Stderr
 	plan := running.plan
 	if opts.SSH && len(plan.Manifest.SSH.Argv) == 0 {
 		return errors.Join(fmt.Errorf("--ssh requires a non-empty manifest.ssh.exec"), v.Close())

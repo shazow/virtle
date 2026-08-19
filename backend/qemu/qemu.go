@@ -65,9 +65,6 @@ type Config struct {
 	// ConsoleOutput receives explicitly requested console output. The default
 	// is os.Stderr.
 	ConsoleOutput io.Writer
-	// BackgroundOutput receives QEMU and helper-process output. The default is
-	// os.Stderr, preserving the library backend's existing behavior.
-	BackgroundOutput io.Writer
 }
 
 // RemoteControl is a guest-control transport for Config.RemoteControl.
@@ -108,9 +105,6 @@ func newBackend(cfg Config, doc *imanifest.Document) *qemuBackend {
 	}
 	if cfg.ConsoleOutput == nil {
 		cfg.ConsoleOutput = os.Stderr
-	}
-	if cfg.BackgroundOutput == nil {
-		cfg.BackgroundOutput = os.Stderr
 	}
 	return &qemuBackend{cfg: cfg, doc: doc}
 }
@@ -164,9 +158,8 @@ func (b *qemuBackend) start(ctx context.Context, spec *vm.Spec, resume vmm.Resum
 		Resume:           resume,
 		HasRemoteControl: b.hasRemoteControl(),
 	}, vmm.Config{
-		Logger:           logger,
-		ConsoleOutput:    b.cfg.ConsoleOutput,
-		BackgroundOutput: b.cfg.BackgroundOutput,
+		Logger:        logger,
+		ConsoleOutput: b.cfg.ConsoleOutput,
 	})
 	if err != nil {
 		return nil, err

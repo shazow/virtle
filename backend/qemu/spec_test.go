@@ -36,17 +36,16 @@ func TestBackendLoggersAreConfiguredIndependently(t *testing.T) {
 
 func TestBackendOutputDefaultsAndOverrides(t *testing.T) {
 	defaults := newBackend(Config{}, nil)
-	if defaults.cfg.ConsoleOutput != os.Stderr || defaults.cfg.BackgroundOutput != os.Stderr {
-		t.Fatal("expected default backend output on stderr")
+	if defaults.cfg.ConsoleOutput != os.Stderr {
+		t.Fatal("expected default console output on stderr")
 	}
 
-	var foreground, background bytes.Buffer
+	var foreground bytes.Buffer
 	configured := newBackend(Config{
-		ConsoleOutput:    &foreground,
-		BackgroundOutput: &background,
+		ConsoleOutput: &foreground,
 	}, nil)
-	if configured.cfg.ConsoleOutput != &foreground || configured.cfg.BackgroundOutput != &background {
-		t.Fatal("expected configured backend outputs to be preserved")
+	if configured.cfg.ConsoleOutput != &foreground {
+		t.Fatal("expected configured console output to be preserved")
 	}
 }
 

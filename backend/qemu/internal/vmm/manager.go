@@ -64,7 +64,6 @@ type manager struct {
 	consoleOutput       io.Writer
 	sshOutput           io.Writer
 	sshError            io.Writer
-	backgroundOutput    io.Writer
 	sshReadyTimeout     time.Duration
 	shutdownDelay       time.Duration
 	qmpRetryDelay       time.Duration
@@ -87,10 +86,14 @@ func newManagerFromConfig(config Config) *manager {
 	if logger == nil {
 		logger = discardLogger
 	}
+	runner := config.Runner
+	if runner == nil {
+		runner = &executor.Runner{Logger: logger.With("package", "vmm")}
+	}
 	return &manager{
 		locker:              config.Locker,
 		vsockCIDChecker:     config.VSockCIDChecker,
-		runner:              config.Runner,
+		runner:              runner,
 		socketWaiter:        config.SocketWaiter,
 		qmpDialer:           config.QMPDialer,
 		guestAgentDialer:    config.GuestAgentDialer,
@@ -99,9 +102,6 @@ func newManagerFromConfig(config Config) *manager {
 		sshLogger:           logger.With("package", "ssh"),
 		balloonLogger:       logger.With("package", "balloon"),
 		consoleOutput:       config.ConsoleOutput,
-		sshOutput:           config.SSHOutput,
-		sshError:            config.SSHError,
-		backgroundOutput:    config.BackgroundOutput,
 		sshReadyTimeout:     config.SSHReadyTimeout,
 		shutdownDelay:       config.ShutdownDelay,
 		qmpRetryDelay:       config.QMPRetryDelay,
@@ -143,7 +143,7 @@ func (m *manager) planLaunch(spec launch.Spec) (*launch.Plan, error) {
 	}
 	notifier := m.notifier
 	if notifier == nil {
-		notifier = newCommandNotifier(cfg, m.logger, m.backgroundWriter())
+		notifier = newCommandNotifier(cfg, m.logger, m.runner)
 	}
 	plan, err := launch.BuildPlan(spec, resumeState, notifier)
 	if err != nil {
@@ -244,8 +244,6 @@ func (m *manager) startRuns(cid int) (executor.Group, error) {
 		cmd := executor.Command(run.Exec[0], run.Exec[1:], run.Env)
 		cmd.Dir = run.Dir
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-		cmd.Stdout = m.backgroundWriter()
-		cmd.Stderr = m.backgroundWriter()
 		process, err := m.startManagedProcess(cmd)
 		if err != nil {
 			_ = started.StopAll(context.Background())

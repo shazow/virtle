@@ -6,7 +6,6 @@ import (
 	"github.com/shazow/virtle/backend/qemu/internal/launch"
 	"github.com/shazow/virtle/backend/qemu/internal/qga"
 	"github.com/shazow/virtle/backend/qemu/internal/qmpclient"
-	"github.com/shazow/virtle/internal/executor"
 )
 
 type ResumeMode = launch.ResumeMode
@@ -23,16 +22,12 @@ func DefaultConfig() Config {
 	return Config{
 		Locker:              &fileLocker{},
 		VSockCIDChecker:     newHostVSockCIDChecker(),
-		Runner:              &executor.Runner{},
 		SocketWaiter:        &pollingSocketWaiter{},
 		QMPDialer:           &qmpclient.SocketMonitorDialer{},
 		GuestAgentDialer:    &qga.SocketDialer{},
 		SSHReadyDialer:      &unixSSHReadyDialer{},
 		Logger:              discardLogger,
 		ConsoleOutput:       io.Discard,
-		SSHOutput:           io.Discard,
-		SSHError:            io.Discard,
-		BackgroundOutput:    io.Discard,
 		SSHReadyTimeout:     configuredSSHReadyTimeout(),
 		ShutdownDelay:       defaultShutdownDelay,
 		QMPRetryDelay:       defaultQMPRetryDelay,

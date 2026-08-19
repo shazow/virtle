@@ -1,6 +1,10 @@
 package executor
 
 import (
+	"bytes"
+	"fmt"
+	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -74,6 +78,109 @@ func TestRunnerStartsCommand(t *testing.T) {
 	}
 	if err := process.Wait(); err != nil {
 		t.Fatalf("wait child: %v", err)
+	}
+}
+
+func TestRunnerLogsUnsetCommandStreamsAtDebug(t *testing.T) {
+	if os.Getenv("EXECUTOR_STREAM_CHILD") == "1" {
+		fmt.Fprint(os.Stdout, "stdout line\nstdout partial")
+		fmt.Fprintln(os.Stderr, "stderr line")
+		os.Exit(0)
+	}
+
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("resolve test executable: %v", err)
+	}
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	cmd := exec.Command(exe, "-test.run=TestRunnerLogsUnsetCommandStreamsAtDebug")
+	cmd.Env = append(os.Environ(), "EXECUTOR_STREAM_CHILD=1")
+	process, err := (&Runner{Logger: logger}).Start(cmd)
+	if err != nil {
+		t.Fatalf("start child: %v", err)
+	}
+	if err := process.Wait(); err != nil {
+		t.Fatalf("wait child: %v", err)
+	}
+
+	output := logs.String()
+	for _, want := range []string{
+		"level=DEBUG",
+		"command=" + filepath.Base(exe),
+		"stream=stdout",
+		`msg="stdout line"`,
+		`msg="stdout partial"`,
+		"stream=stderr",
+		`msg="stderr line"`,
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected command logs to contain %q, got %q", want, output)
+		}
+	}
+}
+
+func TestRunnerPreservesExplicitCommandStreams(t *testing.T) {
+	if os.Getenv("EXECUTOR_EXPLICIT_STREAM_CHILD") == "1" {
+		fmt.Fprint(os.Stdout, "stdout")
+		fmt.Fprint(os.Stderr, "stderr")
+		os.Exit(0)
+	}
+
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("resolve test executable: %v", err)
+	}
+	var stdout, stderr, logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	cmd := exec.Command(exe, "-test.run=TestRunnerPreservesExplicitCommandStreams")
+	cmd.Env = append(os.Environ(), "EXECUTOR_EXPLICIT_STREAM_CHILD=1")
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	process, err := (&Runner{Logger: logger}).Start(cmd)
+	if err != nil {
+		t.Fatalf("start child: %v", err)
+	}
+	if err := process.Wait(); err != nil {
+		t.Fatalf("wait child: %v", err)
+	}
+	if got, want := stdout.String(), "stdout"; got != want {
+		t.Fatalf("explicit stdout: got %q want %q", got, want)
+	}
+	if got, want := stderr.String(), "stderr"; got != want {
+		t.Fatalf("explicit stderr: got %q want %q", got, want)
+	}
+	if logs.Len() != 0 {
+		t.Fatalf("expected no command logs for explicit streams, got %q", logs.String())
+	}
+}
+
+func TestRunnerLeavesUnsetStreamsDisabledWithoutDebug(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	cmd := exec.Command(os.Args[0], "-test.run=^$")
+	process, err := (&Runner{Logger: logger}).Start(cmd)
+	if err != nil {
+		t.Fatalf("start child: %v", err)
+	}
+	if cmd.Stdout != nil || cmd.Stderr != nil {
+		t.Fatal("expected disabled debug streams to remain unset")
+	}
+	if err := process.Wait(); err != nil {
+		t.Fatalf("wait child: %v", err)
+	}
+}
+
+func TestLineLoggerBoundsUnterminatedOutput(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	output := &lineLogger{logger: logger}
+	line := strings.Repeat("x", maxLogLine+1)
+	if n, err := output.Write([]byte(line)); err != nil || n != len(line) {
+		t.Fatalf("write: n=%d err=%v", n, err)
+	}
+	output.close()
+	if got, want := strings.Count(logs.String(), "level=DEBUG"), 2; got != want {
+		t.Fatalf("debug records: got %d want %d", got, want)
 	}
 }
 

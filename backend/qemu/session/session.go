@@ -16,7 +16,6 @@ package session
 
 import (
 	"context"
-	"io"
 	"log/slog"
 	"os"
 
@@ -30,11 +29,7 @@ type Options struct {
 	SSH           bool     // attach the interactive SSH session loop
 	RemoteCommand []string // remote command for the SSH session
 
-	Logger           *slog.Logger // default: discard
-	ConsoleOutput    io.Writer    // default: os.Stderr
-	SSHOutput        io.Writer    // default: os.Stdout
-	SSHError         io.Writer    // default: os.Stderr
-	BackgroundOutput io.Writer    // default: discard
+	Logger *slog.Logger // default: discard
 }
 
 // Run boots the VM with CLI semantics (resume modes, --ssh preflight
@@ -45,36 +40,19 @@ func Run(ctx context.Context, mf *manifest.Manifest, opts Options) error {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	consoleOutput := opts.ConsoleOutput
-	if consoleOutput == nil {
-		consoleOutput = os.Stderr
-	}
-	sshOutput := opts.SSHOutput
-	if sshOutput == nil {
-		sshOutput = os.Stdout
-	}
-	sshError := opts.SSHError
-	if sshError == nil {
-		sshError = os.Stderr
-	}
-	backgroundOutput := opts.BackgroundOutput
-	if backgroundOutput == nil {
-		backgroundOutput = io.Discard
-	}
 	sessionLogger := logger.With("package", "session")
 	sessionLogger.Info("starting vm session", "resume", opts.Resume, "ssh", opts.SSH)
 	sessionOpts := vmm.SessionOptions{
 		SSH:           opts.SSH,
 		RemoteCommand: opts.RemoteCommand,
+		Stdout:        os.Stdout,
+		Stderr:        os.Stderr,
 	}
 	vmHandle, err := vmm.StartSessionVM(ctx, mf, vmm.StartOptions{
 		Resume: vmm.ResumeMode(opts.Resume),
 	}, sessionOpts, vmm.Config{
-		Logger:           logger,
-		ConsoleOutput:    consoleOutput,
-		SSHOutput:        sshOutput,
-		SSHError:         sshError,
-		BackgroundOutput: backgroundOutput,
+		Logger:        logger,
+		ConsoleOutput: os.Stderr,
 	})
 	if err != nil {
 		if vmm.IsSavedSuspendExit(err) {

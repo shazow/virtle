@@ -1,18 +1,8 @@
 package vmm
 
-import (
-	"io"
-	"log/slog"
-)
+import "log/slog"
 
 var discardLogger = slog.New(slog.DiscardHandler)
-
-func (m *manager) backgroundWriter() io.Writer {
-	if m != nil && m.backgroundOutput != nil {
-		return m.backgroundOutput
-	}
-	return io.Discard
-}
 
 func (m *manager) sshLifecycleLogger() *slog.Logger {
 	if m != nil && m.sshLogger != nil {

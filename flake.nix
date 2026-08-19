@@ -49,19 +49,31 @@
         system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
-        in
-        {
-          # Runs the full Go test suite with the "integration" build tag in an
-          # environment that guarantees the tools the integration tests
-          # exercise (dash for the POSIX guest directory install script).
-          integration = pkgs.buildGoModule {
-            pname = "virtle-integration-tests";
+          integrationTest = pkgs.buildGoModule {
+            pname = "virtle-integration-test-binary";
             inherit (release) version vendorHash;
             src = ./.;
+            subPackages = [ "backend/qemu/internal/launch" ];
             tags = [ "integration" ];
             env.CGO_ENABLED = 0;
-            nativeCheckInputs = [ pkgs.dash ];
+            buildTestBinaries = true;
           };
+        in
+        {
+          # Runs the launch integration tests in a small VM where /bin/sh is
+          # dash, covering the absolute guest shell path Virtle sends to QGA.
+          integration = pkgs.vmTools.runInLinuxVM (
+            pkgs.runCommand "virtle-integration-tests-${release.version}"
+              {
+                memSize = 512;
+              }
+              ''
+                ln -sfn ${pkgs.dash}/bin/dash /bin/sh
+                test "$(readlink -f /bin/sh)" = ${pkgs.dash}/bin/dash
+                ${integrationTest}/bin/launch.test -test.run '^TestIntegration' -test.v
+                touch $out
+              ''
+          );
         }
       );
 

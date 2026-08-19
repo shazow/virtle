@@ -3,39 +3,35 @@
 package launch
 
 // Integration coverage for the guest directory install script, gated behind
-// the "integration" build tag because it exercises the real filesystem and
-// requires dash:
+// the "integration" build tag because it exercises the real filesystem:
 //
 //	go test -tags=integration ./backend/qemu/internal/launch/
 //
-// The `integration` flake check runs this suite in an environment that
-// guarantees the required tools: nix flake check
+// The `integration` flake check runs this suite in a small VM whose /bin/sh is
+// dash: nix flake check
 //
-// The unit tests run the script under whatever sh(1) resolves to; this test
-// pins the script's POSIX claim by running it explicitly under dash. Missing
-// prerequisites fail the test rather than skip it: the environment is part
-// of what an integration run asserts.
+// The test executes the exact guest command emitted by the installer, covering
+// both its absolute shell path and the script's behavior under a POSIX shell.
 
 import (
 	"context"
 	"fmt"
 	"os"
 	"os/exec"
-	"os/user"
 	"path/filepath"
 	"testing"
 )
 
-// runGuestDirScriptDash executes the exact guest command the script installer
-// issues, forcing the dash interpreter in place of the guest's sh.
-func runGuestDirScriptDash(t *testing.T, target, owner, mode string) error {
+// runGuestDirScriptIntegration executes the exact guest command the script
+// installer issues. Unlike the unit-test helper, it also pins the absolute
+// shell path required by QGA installations whose service PATH lacks sh.
+func runGuestDirScriptIntegration(t *testing.T, target, owner, mode string) error {
 	t.Helper()
-	dash, err := exec.LookPath("dash")
-	if err != nil {
-		t.Fatalf("dash is required for integration tests (use `nix flake check` for a guaranteed environment): %v", err)
-	}
-	installer := ScriptGuestDirectoryInstaller(func(_ context.Context, _ string, _ string, args []string) error {
-		cmd := exec.Command(dash, args...)
+	installer := ScriptGuestDirectoryInstaller(func(_ context.Context, _ string, path string, args []string) error {
+		if path != "/bin/sh" {
+			return fmt.Errorf("guest shell path = %q, want /bin/sh", path)
+		}
+		cmd := exec.Command(path, args...)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("%v: %s", err, out)
 		}
@@ -44,17 +40,9 @@ func runGuestDirScriptDash(t *testing.T, target, owner, mode string) error {
 	return installer.InstallTree(context.Background(), target, owner, mode)
 }
 
-func TestIntegrationGuestDirectoryInstallScriptUnderDash(t *testing.T) {
-	current, err := user.Current()
-	if err != nil {
-		t.Fatalf("resolve current user: %v", err)
-	}
-	group, err := user.LookupGroupId(current.Gid)
-	if err != nil {
-		t.Fatalf("resolve current group: %v", err)
-	}
-	owner := current.Username + ":" + group.Name
+func TestIntegrationGuestDirectoryInstallScript(t *testing.T) {
 	wantUID, wantGID := uint32(os.Geteuid()), uint32(os.Getegid())
+	owner := fmt.Sprintf("%d:%d", wantUID, wantGID)
 
 	base := t.TempDir()
 	existing := filepath.Join(base, "existing")
@@ -63,8 +51,8 @@ func TestIntegrationGuestDirectoryInstallScriptUnderDash(t *testing.T) {
 	}
 
 	target := filepath.Join(base, "a", "b c", "d")
-	if err := runGuestDirScriptDash(t, target, owner, "0750"); err != nil {
-		t.Fatalf("install dirs under dash: %v", err)
+	if err := runGuestDirScriptIntegration(t, target, owner, "0750"); err != nil {
+		t.Fatalf("install dirs: %v", err)
 	}
 	for _, rel := range []string{"a", "a/b c", "a/b c/d"} {
 		dir := filepath.Join(base, rel)
@@ -82,8 +70,8 @@ func TestIntegrationGuestDirectoryInstallScriptUnderDash(t *testing.T) {
 	}
 
 	// A re-run with a different mode must leave the now-existing tree alone.
-	if err := runGuestDirScriptDash(t, target, owner, "0700"); err != nil {
-		t.Fatalf("re-run install dirs under dash: %v", err)
+	if err := runGuestDirScriptIntegration(t, target, owner, "0700"); err != nil {
+		t.Fatalf("re-run install dirs: %v", err)
 	}
 	if info, err := os.Stat(target); err != nil || info.Mode().Perm() != 0o750 {
 		t.Fatalf("re-run changed existing tree: mode=%o err=%v", info.Mode().Perm(), err)
@@ -99,7 +87,7 @@ func TestIntegrationGuestDirectoryInstallScriptUnderDash(t *testing.T) {
 	if err := os.WriteFile(blocker, nil, 0o644); err != nil {
 		t.Fatalf("write blocker file: %v", err)
 	}
-	if err := runGuestDirScriptDash(t, filepath.Join(blocker, "sub"), "", ""); err == nil {
+	if err := runGuestDirScriptIntegration(t, filepath.Join(blocker, "sub"), "", ""); err == nil {
 		t.Fatalf("expected install through file component to fail")
 	}
 	if info, err := os.Stat(blocker); err != nil || !info.Mode().IsRegular() {

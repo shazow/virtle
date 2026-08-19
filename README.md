@@ -87,11 +87,13 @@ spec := &vm.Spec{
 	Shares: []vm.Share{{Tag: "src", HostPath: ".", GuestPath: "/workspace"}},
 	Memory: 2048 * units.Mebibyte,
 }
-b, err := qemu.New(qemu.Config{RemoteControl: qemu.QGA{}})
+b, err := qemu.New(qemu.Config{
+	RemoteControl: qemu.QGA{},
+	Logger:        slog.Default(),
+})
 if err != nil {
 	log.Fatal(err)
 }
-b.SetLogger(slog.Default())
 inst, err := b.Start(ctx, spec)
 if err != nil {
 	log.Fatal(err)

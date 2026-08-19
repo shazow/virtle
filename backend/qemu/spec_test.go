@@ -12,21 +12,19 @@ import (
 	"github.com/shazow/virtle/vm"
 )
 
-func TestBackendsKeepIndependentLoggers(t *testing.T) {
-	first, err := New(Config{})
+func TestBackendLoggersAreConfiguredIndependently(t *testing.T) {
+	var firstOutput, secondOutput bytes.Buffer
+	first, err := New(Config{Logger: slog.New(slog.NewTextHandler(&firstOutput, nil))})
 	if err != nil {
 		t.Fatalf("new first backend: %v", err)
 	}
-	second, err := New(Config{})
+	second, err := New(Config{Logger: slog.New(slog.NewTextHandler(&secondOutput, nil))})
 	if err != nil {
 		t.Fatalf("new second backend: %v", err)
 	}
 
-	var firstOutput, secondOutput bytes.Buffer
-	first.SetLogger(slog.New(slog.NewTextHandler(&firstOutput, nil)))
-	second.SetLogger(slog.New(slog.NewTextHandler(&secondOutput, nil)))
-	first.(*qemuBackend).logger.Load().Info("first backend")
-	second.(*qemuBackend).logger.Load().Info("second backend")
+	first.(*qemuBackend).cfg.Logger.Info("first backend")
+	second.(*qemuBackend).cfg.Logger.Info("second backend")
 
 	if logs := firstOutput.String(); !strings.Contains(logs, "first backend") || strings.Contains(logs, "second backend") {
 		t.Fatalf("unexpected first backend logs: %q", logs)

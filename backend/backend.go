@@ -13,7 +13,6 @@ package backend
 import (
 	"context"
 	"errors"
-	"log/slog"
 
 	"github.com/shazow/virtle/units"
 	"github.com/shazow/virtle/vm"
@@ -23,9 +22,6 @@ import (
 // (backend/qemu today; backend/firecracker, an in-process libkrun
 // backend, ... later).
 type Backend interface {
-	// SetLogger sets the logger used by subsequently started instances. A nil
-	// logger discards logs. Implementations must permit concurrent calls.
-	SetLogger(*slog.Logger)
 	Start(ctx context.Context, spec *vm.Spec) (Instance, error)
 }
 

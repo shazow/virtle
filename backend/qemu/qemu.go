@@ -12,7 +12,6 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"sync/atomic"
 
 	"github.com/shazow/virtle/backend"
 	"github.com/shazow/virtle/backend/qemu/internal/vmm"
@@ -59,6 +58,10 @@ type Config struct {
 	// guest shutdown attempt.
 	RemoteControl RemoteControl
 
+	// Logger receives manifest, VM lifecycle, SSH, and balloon logs. The
+	// default discards logs.
+	Logger *slog.Logger
+
 	// ConsoleOutput receives explicitly requested console output. The default
 	// is os.Stderr.
 	ConsoleOutput io.Writer
@@ -95,30 +98,21 @@ func New(cfg Config) (backend.Backend, error) {
 }
 
 type qemuBackend struct {
-	cfg    Config
-	doc    *imanifest.Document // non-nil for manifest.Load-configured backends
-	logger atomic.Pointer[slog.Logger]
+	cfg Config
+	doc *imanifest.Document // non-nil for manifest.Load-configured backends
 }
 
 func newBackend(cfg Config, doc *imanifest.Document) *qemuBackend {
+	if cfg.Logger == nil {
+		cfg.Logger = slog.New(slog.DiscardHandler)
+	}
 	if cfg.ConsoleOutput == nil {
 		cfg.ConsoleOutput = os.Stderr
 	}
 	if cfg.BackgroundOutput == nil {
 		cfg.BackgroundOutput = os.Stderr
 	}
-	b := &qemuBackend{cfg: cfg, doc: doc}
-	b.SetLogger(nil)
-	return b
-}
-
-// SetLogger implements backend.Backend. It affects instances started after the
-// call; already-running instances retain the logger captured at Start.
-func (b *qemuBackend) SetLogger(logger *slog.Logger) {
-	if logger == nil {
-		logger = slog.New(slog.DiscardHandler)
-	}
-	b.logger.Store(logger)
+	return &qemuBackend{cfg: cfg, doc: doc}
 }
 
 func (b *qemuBackend) hasRemoteControl() bool { return b.cfg.RemoteControl != nil }
@@ -161,7 +155,7 @@ func (b *qemuBackend) resolveSpec(spec *vm.Spec, logger *slog.Logger) (*imanifes
 }
 
 func (b *qemuBackend) start(ctx context.Context, spec *vm.Spec, resume vmm.ResumeMode) (backend.Instance, error) {
-	logger := b.logger.Load()
+	logger := b.cfg.Logger
 	mf, err := b.resolveSpec(spec, logger)
 	if err != nil {
 		return nil, err

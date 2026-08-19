@@ -11,7 +11,7 @@ package launch
 // The `integration` flake check runs this suite in an environment that
 // guarantees the required tools: nix flake check
 //
-// The unit tests run the script under whatever sh(1) resolves to; this test
+// The unit tests run the script under the host's own /bin/sh; this test
 // pins the script's POSIX claim by running it explicitly under dash. Missing
 // prerequisites fail the test rather than skip it: the environment is part
 // of what an integration run asserts.

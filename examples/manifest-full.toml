@@ -328,7 +328,10 @@ reclaim_holdoff = "30s"  # Wait after growing before reclaiming
 [[write_files]]
 # Guest file writes depend on the QEMU guest agent. They belong in the manifest
 # because they are part of first-boot guest configuration rather than the host
-# launch command.
+# launch command. Creating the parent directories runs a small POSIX script in
+# the guest, so the guest needs /bin/sh or a shell named sh on the PATH the
+# guest agent inherited; chown and mode additionally need chown(1) and chmod(1)
+# on that PATH.
 guest_path = "/etc/example.conf"
 chown = "agent:users"  # Default: preserve guest agent write ownership
 

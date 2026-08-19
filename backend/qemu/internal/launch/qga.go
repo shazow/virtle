@@ -10,6 +10,14 @@ import (
 	"github.com/shazow/virtle/internal/executor"
 )
 
+// GuestCommandNotStarted reports whether err means a guest command never
+// started because the guest agent could not execute the program. The guest is
+// unchanged in that case, so retrying with a different program path is safe.
+func GuestCommandNotStarted(err error) bool {
+	var startErr *qga.ExecStartError
+	return errors.As(err, &startErr)
+}
+
 type GuestAgentWait struct {
 	Stage          string
 	SocketPath     string

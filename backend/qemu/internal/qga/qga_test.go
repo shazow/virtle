@@ -68,6 +68,30 @@ func TestClientFileAndExecCommands(t *testing.T) {
 	assertCommand(t, commands, "guest-exec-status")
 }
 
+func TestClientExecReportsStartFailure(t *testing.T) {
+	// A guest agent that cannot spawn the program answers guest-exec with an
+	// error; callers rely on the typed error to know the program never ran.
+	client, _, cleanup := newTestClient(t, func(message map[string]any) map[string]any {
+		return map[string]any{"error": map[string]any{
+			"class": "GenericError",
+			"desc":  `Failed to execute child process "sh" (No such file or directory)`,
+		}}
+	})
+	defer cleanup()
+
+	_, err := client.Exec(context.Background(), "sh", []string{"-c", ":"}, true)
+	var startErr *ExecStartError
+	if !errors.As(err, &startErr) {
+		t.Fatalf("exec error: got %v want *ExecStartError", err)
+	}
+	if startErr.Path != "sh" {
+		t.Fatalf("exec error path: got %q want %q", startErr.Path, "sh")
+	}
+	if !strings.Contains(err.Error(), `guest agent exec "sh"`) || !strings.Contains(err.Error(), "No such file or directory") {
+		t.Fatalf("exec error message: got %q", err.Error())
+	}
+}
+
 func TestClientSkipsEvents(t *testing.T) {
 	client, commands, cleanup := newTestClient(t, func(message map[string]any) map[string]any {
 		return map[string]any{

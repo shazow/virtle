@@ -10,6 +10,24 @@ import (
 // execPollDelay is the delay between exit-status polls.
 const execPollDelay = 250 * time.Millisecond
 
+// ExecStartError reports that the guest agent refused to start a guest
+// program, most often because the guest has no such program or because it is
+// not on the PATH the guest agent inherited from whatever started it. The
+// program never ran, so nothing in the guest changed and the caller is free to
+// retry with a different program path.
+type ExecStartError struct {
+	Path string
+	Err  error
+}
+
+func (e *ExecStartError) Error() string {
+	return fmt.Sprintf("guest agent exec %q: %v", e.Path, e.Err)
+}
+
+func (e *ExecStartError) Unwrap() error {
+	return e.Err
+}
+
 // ExecWait configures guest command execution. The command deadline is
 // carried by ctx; RunCommandStatus polls until the command exits or ctx ends.
 type ExecWait struct {

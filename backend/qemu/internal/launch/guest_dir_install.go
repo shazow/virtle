@@ -2,6 +2,7 @@ package launch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path"
 	"strings"
@@ -35,10 +36,31 @@ type GuestCommandRunner func(ctx context.Context, subject string, path string, a
 func ScriptGuestDirectoryInstaller(run GuestCommandRunner) GuestDirectoryInstaller {
 	return GuestDirectoryInstaller{
 		InstallTree: func(ctx context.Context, guestDir string, owner string, mode string) error {
-			return run(ctx, guestDir, "sh", []string{"-c", guestDirectoryInstallScript, "sh", guestDir, owner, mode})
+			var startErrs []error
+			for _, shell := range guestShellPaths {
+				err := run(ctx, guestDir, shell, []string{"-c", guestDirectoryInstallScript, shell, guestDir, owner, mode})
+				// Only a shell the guest agent could not start is worth
+				// retrying with the next candidate: the script never ran, so
+				// the guest is unchanged. Every other error came from the
+				// script itself and re-running it would just repeat it.
+				if err == nil || !GuestCommandNotStarted(err) {
+					return err
+				}
+				startErrs = append(startErrs, err)
+			}
+			return fmt.Errorf("no usable guest shell (tried %s), install a POSIX shell in the guest or put one on the guest agent's PATH: %w",
+				strings.Join(guestShellPaths, ", "), errors.Join(startErrs...))
 		},
 	}
 }
+
+// guestShellPaths are the shells tried, in order, to run the directory install
+// script inside the guest. The absolute path comes first because the guest
+// agent inherits its PATH from whatever started it — an init line or a systemd
+// unit — and that PATH need not list a shell even when the guest ships one;
+// /bin/sh is where POSIX puts it. The bare name is the fallback for guests
+// that keep their shell somewhere else and expose it through that PATH.
+var guestShellPaths = []string{"/bin/sh", "sh"}
 
 // guestDirectoryInstallScript ensures the directory $1 and all of its missing
 // ancestors exist in one guest command. It takes the target directory, an

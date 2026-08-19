@@ -8,8 +8,12 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"slices"
+	"strings"
 	"syscall"
 	"testing"
+
+	"github.com/shazow/virtle/backend/qemu/internal/qga"
 )
 
 // runGuestDirScriptIn executes the exact guest command that the script
@@ -266,6 +270,69 @@ func TestGuestDirectoryInstallScriptAppliesGroupOnlyOwner(t *testing.T) {
 	_, gid := statUIDGID(t, target)
 	if gid != uint32(os.Getegid()) {
 		t.Fatalf("group of %q: got %d want %d", target, gid, os.Getegid())
+	}
+}
+
+func TestScriptGuestDirectoryInstallerFallsBackToPathShell(t *testing.T) {
+	// Guests whose agent PATH has no shell fail to start /bin/sh only when the
+	// guest keeps its shell elsewhere; the PATH-resolved name must still run.
+	var tried []string
+	installer := ScriptGuestDirectoryInstaller(func(_ context.Context, _ string, path string, args []string) error {
+		tried = append(tried, path)
+		if path != "sh" {
+			return &qga.ExecStartError{Path: path, Err: errors.New("No such file or directory")}
+		}
+		if len(args) < 3 || args[0] != "-c" || args[2] != path {
+			t.Fatalf("script args: got %q", args)
+		}
+		return nil
+	})
+
+	if err := installer.InstallTree(context.Background(), "/var/lib/virtle", "", "0750"); err != nil {
+		t.Fatalf("install dirs with fallback shell: %v", err)
+	}
+	if want := []string{"/bin/sh", "sh"}; !slices.Equal(tried, want) {
+		t.Fatalf("shells tried: got %v want %v", tried, want)
+	}
+}
+
+func TestScriptGuestDirectoryInstallerKeepsScriptFailure(t *testing.T) {
+	// The script ran and failed: retrying under another shell would only
+	// repeat the failure and hide its error.
+	scriptErr := errors.New("mkdir: permission denied")
+	calls := 0
+	installer := ScriptGuestDirectoryInstaller(func(context.Context, string, string, []string) error {
+		calls++
+		return scriptErr
+	})
+
+	err := installer.InstallTree(context.Background(), "/var/lib/virtle", "", "")
+	if !errors.Is(err, scriptErr) {
+		t.Fatalf("install error: got %v want %v", err, scriptErr)
+	}
+	if calls != 1 {
+		t.Fatalf("runner calls: got %d want 1", calls)
+	}
+}
+
+func TestScriptGuestDirectoryInstallerReportsMissingShell(t *testing.T) {
+	// No candidate started: the error names every shell tried and keeps each
+	// guest-agent failure so the guest-side cause stays visible.
+	installer := ScriptGuestDirectoryInstaller(func(_ context.Context, _ string, path string, _ []string) error {
+		return fmt.Errorf("install dirs %q: %w", "/var/lib/virtle", &qga.ExecStartError{Path: path, Err: errors.New("No such file or directory")})
+	})
+
+	err := installer.InstallTree(context.Background(), "/var/lib/virtle", "", "")
+	if err == nil {
+		t.Fatalf("expected install without any guest shell to fail")
+	}
+	if !GuestCommandNotStarted(err) {
+		t.Fatalf("install error must stay recognizable as a start failure: %v", err)
+	}
+	for _, want := range []string{"/bin/sh", "sh", "guest agent's PATH", "No such file or directory"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("install error %q does not mention %q", err.Error(), want)
+		}
 	}
 }
 

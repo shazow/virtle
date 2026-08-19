@@ -186,7 +186,7 @@ func (c *socketClient) Exec(ctx context.Context, path string, args []string, cap
 		"capture-output": captureOutput,
 	})
 	if err != nil {
-		return 0, fmt.Errorf("guest agent exec %q: %w", path, err)
+		return 0, &ExecStartError{Path: path, Err: err}
 	}
 
 	var result struct {

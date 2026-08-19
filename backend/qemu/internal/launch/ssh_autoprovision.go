@@ -7,7 +7,7 @@ import (
 	"github.com/shazow/virtle/internal/sshtools"
 )
 
-const GuestShellPath = "sh"
+const GuestShellPath = "/bin/sh"
 
 type SSHAuthorizedKeyInstaller struct {
 	InstallDirectory func(ctx context.Context, guestPath string, owner string, mode string) error

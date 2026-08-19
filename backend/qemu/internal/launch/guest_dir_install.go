@@ -35,7 +35,7 @@ type GuestCommandRunner func(ctx context.Context, subject string, path string, a
 func ScriptGuestDirectoryInstaller(run GuestCommandRunner) GuestDirectoryInstaller {
 	return GuestDirectoryInstaller{
 		InstallTree: func(ctx context.Context, guestDir string, owner string, mode string) error {
-			return run(ctx, guestDir, "sh", []string{"-c", guestDirectoryInstallScript, "sh", guestDir, owner, mode})
+			return run(ctx, guestDir, "/bin/sh", []string{"-c", guestDirectoryInstallScript, "sh", guestDir, owner, mode})
 		},
 	}
 }

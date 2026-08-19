@@ -299,7 +299,7 @@ func main() {
 			os.Exit(0)
 		}
 
-		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(session.ExitCode(err))
 	}
 }

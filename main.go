@@ -333,7 +333,14 @@ func run(args []string) error {
 	if opts.Version {
 		return printVersion(os.Stdout)
 	}
-	configureLogging(len(opts.Verbose))
+	rootLogger = virtlelog.New(os.Stderr, len(opts.Verbose))
+	commandLogger = rootLogger.With("package", "main")
+	session.SetLogger(rootLogger)
+	if len(opts.Verbose) >= 2 {
+		session.SetOutput(os.Stderr)
+	} else {
+		session.SetOutput(io.Discard)
+	}
 
 	switch parser.Active.Name {
 	case "launch":
@@ -361,18 +368,6 @@ func run(args []string) error {
 		return fmt.Errorf("unknown command %q", parser.Active.Name)
 	}
 }
-
-func configureLogging(verbosity int) {
-	rootLogger = virtlelog.New(os.Stderr, verbosity)
-	commandLogger = rootLogger.With("package", "main")
-	session.SetLogger(rootLogger)
-	if verbosity >= 2 {
-		session.SetOutput(os.Stderr)
-	} else {
-		session.SetOutput(io.Discard)
-	}
-}
-
 func newParserForOptions(opts *Options) *flags.Parser {
 	// PrintErrors is deliberately left out of the parser options: main is the
 	// single place parse errors get printed, so they never appear twice.

@@ -887,7 +887,6 @@ func TestManagerLaunchWithoutSSHPrintsConnectHintAndWaitsForQEMU(t *testing.T) {
 		socketWaiter:      &fakeSocketWaiter{callback: func(paths []string) error { return nil }},
 		qmpDialer:         &fakeQMPDialer{client: qmpClient},
 		logger:            debugTestLogger(&logOutput),
-		sessionOutput:     &foregroundOutput,
 		shutdownDelay:     10 * time.Millisecond,
 		qmpRetryDelay:     0,
 		qmpConnectTimeout: time.Millisecond,
@@ -901,7 +900,14 @@ func TestManagerLaunchWithoutSSHPrintsConnectHintAndWaitsForQEMU(t *testing.T) {
 		runner.exitQEMU(nil)
 	}()
 
-	if err := manager.launchWithOptions(context.Background(), cfg, nil, LaunchOptions{Resume: ResumeModeNo}); err != nil {
+	v, err := manager.startVM(context.Background(), launch.Spec{
+		Manifest: cfg,
+		Options:  LaunchOptions{Resume: ResumeModeNo},
+	})
+	if err != nil {
+		t.Fatalf("start without ssh: %v", err)
+	}
+	if err := RunSession(context.Background(), v, SessionOptions{Stdout: &foregroundOutput}); err != nil {
 		t.Fatalf("launch without ssh: %v", err)
 	}
 	<-exitReadyQEMU
@@ -956,8 +962,6 @@ func TestManagerStartAndWaitForRunningLaunchWithoutSSH(t *testing.T) {
 		QMPConnectTimeout: time.Millisecond,
 		QMPQuitTimeout:    time.Millisecond,
 	})
-	manager.sessionOutput = &foregroundOutput
-
 	plan, err := manager.planLaunch(launch.Spec{
 		Manifest: cfg,
 		Options:  LaunchOptions{Resume: ResumeModeNo, SSH: false},
@@ -982,7 +986,7 @@ func TestManagerStartAndWaitForRunningLaunchWithoutSSH(t *testing.T) {
 		runner.exitQEMU(nil)
 	}()
 
-	if err := manager.waitForRunningLaunch(context.Background(), running, launch.WaitVM); err != nil {
+	if err := manager.waitForRunningLaunch(context.Background(), running, SessionOptions{Stdout: &foregroundOutput}); err != nil {
 		t.Fatalf("wait: %v", err)
 	}
 	<-exitReadyQEMU
@@ -1001,7 +1005,7 @@ func TestManagerStartAndWaitForRunningLaunchWithoutSSH(t *testing.T) {
 func TestWaitForRunningLaunchNilRunningReturnsStageError(t *testing.T) {
 	manager := &manager{}
 
-	err := manager.waitForRunningLaunch(context.Background(), nil, launch.WaitVM)
+	err := manager.waitForRunningLaunch(context.Background(), nil, SessionOptions{})
 
 	var stageErr *launch.StageError
 	if !errors.As(err, &stageErr) {
@@ -1037,7 +1041,7 @@ func TestWaitForRunningLaunchWaitModeOverrideEnablesSSH(t *testing.T) {
 		processes:      processes,
 	}
 
-	if err := manager.waitForRunningLaunch(context.Background(), running, launch.WaitSSH); err != nil {
+	if err := manager.waitForRunningLaunch(context.Background(), running, SessionOptions{SSH: true}); err != nil {
 		t.Fatalf("wait: %v", err)
 	}
 	if plan.Options.SSH {
@@ -1079,7 +1083,7 @@ func TestWaitForRunningLaunchSavedSuspendSkipsCloseWriteBack(t *testing.T) {
 		processes:      processes,
 	}
 
-	if err := (&manager{}).waitForRunningLaunch(context.Background(), running, launch.WaitVM); !errors.Is(err, launch.ErrSavedSuspendExit) {
+	if err := (&manager{}).waitForRunningLaunch(context.Background(), running, SessionOptions{}); !errors.Is(err, launch.ErrSavedSuspendExit) {
 		t.Fatalf("wait error: got %v want %v", err, launch.ErrSavedSuspendExit)
 	}
 	if err := running.Close(); err != nil {

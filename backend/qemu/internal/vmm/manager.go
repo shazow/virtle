@@ -61,8 +61,6 @@ type manager struct {
 	sshLogger           *slog.Logger
 	balloonLogger       *slog.Logger
 	consoleOutput       io.Writer
-	sessionOutput       io.Writer
-	sessionError        io.Writer
 	sshReadyTimeout     time.Duration
 	shutdownDelay       time.Duration
 	qmpRetryDelay       time.Duration
@@ -129,8 +127,6 @@ func (m *manager) launchWithOptions(ctx context.Context, manifest *manifest.Mani
 	return RunSession(ctx, v, SessionOptions{
 		SSH:           options.SSH,
 		RemoteCommand: remoteCommand,
-		Stdout:        m.sessionOutput,
-		Stderr:        m.sessionError,
 	})
 }
 
@@ -186,12 +182,13 @@ func (m *manager) waitForLaunchForeground(
 	lifecycle *launch.Lifecycle,
 	suspendHandler suspendHandler,
 	processes *launch.ProcessSet,
+	session SessionOptions,
 ) error {
 	// Restored suspend state is removed only once the session is
 	// established (SSH attached, or the VM wait entered), so a failed
 	// session start leaves the state resumable.
 	if plan.Options.SSH && len(plan.Manifest.SSH.Argv) > 0 {
-		if err := m.runSSHSession(ctx, plan, stats, lifecycle, suspendHandler, processes); err != nil {
+		if err := m.runSSHSession(ctx, plan, stats, lifecycle, suspendHandler, processes, session); err != nil {
 			return err
 		}
 		if plan.ResumeState != nil {
@@ -210,8 +207,8 @@ func (m *manager) waitForLaunchForeground(
 		if m.logger != nil {
 			m.logger.Warn("ssh command hint template failed", "err", err)
 		}
-	} else if hint != "" && m.sessionOutput != nil {
-		if _, err := fmt.Fprintf(m.sessionOutput, "connect with ssh: %s\n", hint); err != nil {
+	} else if hint != "" && session.Stdout != nil {
+		if _, err := fmt.Fprintf(session.Stdout, "connect with ssh: %s\n", hint); err != nil {
 			return fmt.Errorf("write ssh command hint: %w", err)
 		}
 	}
@@ -400,13 +397,14 @@ func (m *manager) runSSHSession(
 	lifecycle *launch.Lifecycle,
 	suspendHandler suspendHandler,
 	processes *launch.ProcessSet,
+	session SessionOptions,
 ) error {
 	return launch.RunSSHSession(ctx, launch.SSHSession{
 		Plan:                   plan,
 		Runner:                 m.runner,
 		Logger:                 m.sshLifecycleLogger(),
-		Stdout:                 m.sessionOutput,
-		Stderr:                 m.sessionError,
+		Stdout:                 session.Stdout,
+		Stderr:                 session.Stderr,
 		RetryOutputRevealDelay: sshRetryOutputRevealDelay,
 		AddProcesses:           processes.Add,
 		RemoveProcess:          processes.Remove,

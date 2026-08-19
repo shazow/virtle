@@ -118,8 +118,6 @@ type SessionOptions struct {
 // saved suspend reports success.
 func RunSession(ctx context.Context, v *VM, opts SessionOptions) (err error) {
 	m, running := v.m, v.running
-	m.sessionOutput = opts.Stdout
-	m.sessionError = opts.Stderr
 	plan := running.plan
 	if opts.SSH && len(plan.Manifest.SSH.Argv) == 0 {
 		return errors.Join(fmt.Errorf("--ssh requires a non-empty manifest.ssh.exec"), v.Close())
@@ -138,11 +136,7 @@ func RunSession(ctx context.Context, v *VM, opts SessionOptions) (err error) {
 		m.sshLifecycleLogger().Info("guest is ready")
 		running.stats.Timer(launch.TimerSSHReady, time.Now())
 	}
-	mode := launch.WaitVM
-	if opts.SSH {
-		mode = launch.WaitSSH
-	}
-	err = m.waitForRunningLaunch(ctx, running, mode)
+	err = m.waitForRunningLaunch(ctx, running, opts)
 	if launch.IsSavedSuspendExit(err) {
 		return nil
 	}

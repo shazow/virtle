@@ -29,7 +29,7 @@ func (r *runningLaunch) Close() error {
 	return r.runtime.Close()
 }
 
-func (m *manager) waitForRunningLaunch(ctx context.Context, running *runningLaunch, mode launch.WaitMode) error {
+func (m *manager) waitForRunningLaunch(ctx context.Context, running *runningLaunch, session SessionOptions) error {
 	if running == nil {
 		return &launch.StageError{Stage: "runtime wait", Err: errRuntimeNotStarted}
 	}
@@ -37,8 +37,12 @@ func (m *manager) waitForRunningLaunch(ctx context.Context, running *runningLaun
 	if running.ctx != nil {
 		waitCtx = running.ctx
 	}
+	mode := launch.WaitVM
+	if session.SSH {
+		mode = launch.WaitSSH
+	}
 	waitPlan := launch.PlanForWaitMode(running.plan, mode)
-	err := m.waitForLaunchForeground(waitCtx, waitPlan, running.stats, running.lifecycle, running.suspendHandler, running.processes)
+	err := m.waitForLaunchForeground(waitCtx, waitPlan, running.stats, running.lifecycle, running.suspendHandler, running.processes, session)
 	if err != nil && launch.IsSavedSuspendExit(err) && running.runtime != nil {
 		running.runtime.MarkSavedSuspend()
 	}

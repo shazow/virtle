@@ -3,8 +3,8 @@ package vmm
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
@@ -51,9 +51,10 @@ type commandNotifier struct {
 	states  map[string]struct{}
 	dir     string
 	logger  *slog.Logger
+	output  io.Writer
 }
 
-func newCommandNotifier(manifest *manifest.Manifest, logger *slog.Logger) launch.NotificationSink {
+func newCommandNotifier(manifest *manifest.Manifest, logger *slog.Logger, output io.Writer) launch.NotificationSink {
 	if manifest == nil {
 		return noopNotifier{}
 	}
@@ -86,6 +87,7 @@ func newCommandNotifier(manifest *manifest.Manifest, logger *slog.Logger) launch
 		states:  states,
 		dir:     dir,
 		logger:  logger,
+		output:  output,
 	}
 }
 
@@ -100,21 +102,21 @@ func (n *commandNotifier) Notify(ctx context.Context, state string, message stri
 	})
 	if err != nil {
 		if n.logger != nil {
-			n.logger.Info("notification hook template failed", "state", state, "err", err)
+			n.logger.Warn("notification hook template failed", "state", state, "err", err)
 		}
 		return
 	}
 	command, err := manifest.RenderCommand(n.command, renderer)
 	if err != nil {
 		if n.logger != nil {
-			n.logger.Info("notification hook template failed", "state", state, "err", err)
+			n.logger.Warn("notification hook template failed", "state", state, "err", err)
 		}
 		return
 	}
 	env, err := notificationEnv(state, message, values)
 	if err != nil {
 		if n.logger != nil {
-			n.logger.Info("notification hook template failed", "state", state, "err", err)
+			n.logger.Warn("notification hook template failed", "state", state, "err", err)
 		}
 		return
 	}
@@ -122,10 +124,10 @@ func (n *commandNotifier) Notify(ctx context.Context, state string, message stri
 	cmd := exec.CommandContext(ctx, command.Path, command.Args...)
 	cmd.Env = executor.WrapEnv(env)
 	cmd.Dir = n.dir
-	cmd.Stdout = os.Stderr
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = n.output
+	cmd.Stderr = n.output
 	if err := cmd.Run(); err != nil && n.logger != nil {
-		n.logger.Info("notification hook failed", "state", state, "err", err)
+		n.logger.Warn("notification hook failed", "state", state, "err", err)
 	}
 }
 

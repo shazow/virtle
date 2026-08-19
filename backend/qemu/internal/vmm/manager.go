@@ -29,6 +29,7 @@ import (
 	"github.com/shazow/virtle/backend/qemu/internal/qga"
 	"github.com/shazow/virtle/backend/qemu/internal/qmpclient"
 	"github.com/shazow/virtle/internal/executor"
+	virtlelog "github.com/shazow/virtle/internal/logging"
 	"github.com/shazow/virtle/internal/manifest"
 )
 
@@ -58,6 +59,7 @@ type manager struct {
 	guestAgentDialer    qga.Dialer
 	sshReadyDialer      launch.SSHReadyDialer
 	logger              *slog.Logger
+	sshLogger           *slog.Logger
 	logWriter           io.Writer
 	sshReadyTimeout     time.Duration
 	shutdownDelay       time.Duration
@@ -86,6 +88,7 @@ func newManagerFromConfig(config Config) *manager {
 		guestAgentDialer:    config.GuestAgentDialer,
 		sshReadyDialer:      config.SSHReadyDialer,
 		logger:              config.Logger,
+		sshLogger:           config.SSHLogger,
 		logWriter:           config.LogWriter,
 		sshReadyTimeout:     config.SSHReadyTimeout,
 		shutdownDelay:       config.ShutdownDelay,
@@ -128,7 +131,7 @@ func (m *manager) planLaunch(spec launch.Spec) (*launch.Plan, error) {
 	}
 	notifier := m.notifier
 	if notifier == nil {
-		notifier = newCommandNotifier(cfg, m.logger)
+		notifier = newCommandNotifier(cfg, m.logger, m.outputWriter())
 	}
 	plan, err := launch.BuildPlan(spec, resumeState, notifier)
 	if err != nil {
@@ -189,10 +192,10 @@ func (m *manager) waitForLaunchForeground(
 
 	if hint, err := launch.BuildSSHCommandHint(plan.Manifest, plan.CID); err != nil {
 		if m.logger != nil {
-			m.logger.Info("ssh command hint template failed", "err", err)
+			m.logger.Warn("ssh command hint template failed", "err", err)
 		}
 	} else if hint != "" {
-		fmt.Fprintf(m.outputWriter(), "connect with: %s\n", hint)
+		virtlelog.Notice(m.logger, "connect with ssh", "command", hint)
 	}
 
 	vmWatchers := processes.VMWatchers()
@@ -229,8 +232,8 @@ func (m *manager) startRuns(cid int) (executor.Group, error) {
 		cmd := executor.Command(run.Exec[0], run.Exec[1:], run.Env)
 		cmd.Dir = run.Dir
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-		cmd.Stdout = os.Stderr
-		cmd.Stderr = os.Stderr
+		cmd.Stdout = m.outputWriter()
+		cmd.Stderr = m.outputWriter()
 		process, err := m.startManagedProcess(cmd)
 		if err != nil {
 			_ = started.StopAll(context.Background())
@@ -385,8 +388,8 @@ func (m *manager) runSSHSession(
 	return launch.RunSSHSession(ctx, launch.SSHSession{
 		Plan:                   plan,
 		Runner:                 m.runner,
-		Logger:                 m.logger,
-		Output:                 m.outputWriter(),
+		Logger:                 m.sshLifecycleLogger(),
+		Output:                 os.Stderr,
 		RetryOutputRevealDelay: sshRetryOutputRevealDelay,
 		AddProcesses:           processes.Add,
 		RemoveProcess:          processes.Remove,

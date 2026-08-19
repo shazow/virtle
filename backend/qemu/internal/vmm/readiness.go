@@ -40,8 +40,6 @@ func (r sshReadySocketReadiness) WaitReady(ctx context.Context, plan *launch.Pla
 	if plan.Paths.SSHReadySocket == "" {
 		return nil
 	}
-	if r.m.logger != nil {
-		r.m.logger.Info("waiting for ssh readiness")
-	}
+	r.m.sshLifecycleLogger().Info("waiting for ssh readiness")
 	return r.m.waitForSSHReady(ctx, plan.Paths.SSHReadySocket, watchers)
 }

@@ -130,6 +130,7 @@ func RunSession(ctx context.Context, v *VM, opts SessionOptions) (err error) {
 		if err := m.guestReadiness().WaitReady(running.ctx, plan, running.processes.Watchers()); err != nil {
 			return err
 		}
+		m.sshLifecycleLogger().Info("guest is ready")
 		running.stats.Timer(launch.TimerSSHReady, time.Now())
 	}
 	mode := launch.WaitVM

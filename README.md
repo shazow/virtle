@@ -37,7 +37,13 @@ First, write a simple manifest and save it as `manifest.toml`. See: [./examples/
 
 Global flags:
 - `virtle [--manifest=MANIFEST] ...` - When `--manifest` is omitted, `./manifest.toml` is used by default.
-- `virtle [-v|-vv] ...` - Verbose and very verbose flags, recommended to understand what virtle is doing.
+- `virtle -v ...` - Show useful VM and SSH lifecycle information.
+- `virtle -vv ...` - Show debugging details and output from background commands.
+
+Without a verbosity flag, virtle only reports action consequences and warnings.
+Logs are written to stderr so command results on stdout remain suitable for
+piping. Explicit VM console output and an attached SSH session are always
+preserved.
 
 Launch a VM:
 - `virtle launch [--ssh] [--resume=no|auto|force] [-- <remote-cmd...>]`

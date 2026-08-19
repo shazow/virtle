@@ -22,7 +22,7 @@ func StartControl(ctx context.Context, socketPath string, router *control.Router
 	}
 	go func() {
 		if err := server.Serve(listener); err != nil && ctx.Err() == nil && logger != nil {
-			logger.Info("control socket stopped", "err", err)
+			logger.Warn("control socket stopped", "err", err)
 		}
 	}()
 	return server, nil

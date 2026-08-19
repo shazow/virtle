@@ -2,6 +2,7 @@ package vmm
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"runtime"
@@ -16,6 +17,10 @@ import (
 )
 
 func buildQEMUCommand(manifest *manifest.Manifest, cid int, incoming bool) (*exec.Cmd, error) {
+	return buildQEMUCommandWithOutput(manifest, cid, incoming, backgroundOutput)
+}
+
+func buildQEMUCommandWithOutput(manifest *manifest.Manifest, cid int, incoming bool, output io.Writer) (*exec.Cmd, error) {
 	qemu, err := manifest.ResolvedQEMU()
 	if err != nil {
 		return nil, err
@@ -33,8 +38,11 @@ func buildQEMUCommand(manifest *manifest.Manifest, cid int, incoming bool) (*exe
 	if qemu.Console.Interactive() {
 		cmd.Stdin = os.Stdin
 	}
-	cmd.Stdout = os.Stderr
-	cmd.Stderr = os.Stderr
+	if qemu.Console.Enabled() {
+		output = os.Stderr
+	}
+	cmd.Stdout = output
+	cmd.Stderr = output
 	return cmd, nil
 }
 

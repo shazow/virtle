@@ -20,6 +20,7 @@ type Config struct {
 	GuestAgentDialer    qga.Dialer
 	SSHReadyDialer      launch.SSHReadyDialer
 	Logger              *slog.Logger
+	SSHLogger           *slog.Logger
 	LogWriter           io.Writer
 	SSHReadyTimeout     time.Duration
 	ShutdownDelay       time.Duration
@@ -67,6 +68,9 @@ func mergeConfig(base Config, override Config) Config {
 	}
 	if override.Logger != nil {
 		base.Logger = override.Logger
+	}
+	if override.SSHLogger != nil {
+		base.SSHLogger = override.SSHLogger
 	}
 	if override.LogWriter != nil {
 		base.LogWriter = override.LogWriter

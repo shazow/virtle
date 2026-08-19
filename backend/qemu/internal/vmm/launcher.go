@@ -1,8 +1,6 @@
 package vmm
 
 import (
-	"os"
-
 	"github.com/shazow/virtle/backend/qemu/internal/launch"
 	"github.com/shazow/virtle/backend/qemu/internal/qga"
 	"github.com/shazow/virtle/backend/qemu/internal/qmpclient"
@@ -29,7 +27,8 @@ func DefaultConfig() Config {
 		GuestAgentDialer:    &qga.SocketDialer{},
 		SSHReadyDialer:      &unixSSHReadyDialer{},
 		Logger:              logger,
-		LogWriter:           os.Stderr,
+		SSHLogger:           sshLogger,
+		LogWriter:           backgroundOutput,
 		SSHReadyTimeout:     configuredSSHReadyTimeout(),
 		ShutdownDelay:       defaultShutdownDelay,
 		QMPRetryDelay:       defaultQMPRetryDelay,

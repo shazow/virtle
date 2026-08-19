@@ -16,12 +16,15 @@ package session
 
 import (
 	"context"
+	"io"
 	"log/slog"
 
 	"github.com/shazow/virtle/backend/qemu/internal/balloon"
 	"github.com/shazow/virtle/backend/qemu/internal/vmm"
 	"github.com/shazow/virtle/internal/manifest"
 )
+
+var logger = slog.New(slog.DiscardHandler)
 
 // Options configures a CLI session.
 type Options struct {
@@ -34,6 +37,7 @@ type Options struct {
 // validation, process signal handlers) and runs the foreground session to
 // completion. A session that ends in a saved suspend reports success.
 func Run(ctx context.Context, mf *manifest.Manifest, opts Options) error {
+	logger.Info("starting vm session", "resume", opts.Resume, "ssh", opts.SSH)
 	sessionOpts := vmm.SessionOptions{
 		SSH:           opts.SSH,
 		RemoteCommand: opts.RemoteCommand,
@@ -47,7 +51,12 @@ func Run(ctx context.Context, mf *manifest.Manifest, opts Options) error {
 		}
 		return err
 	}
-	return vmm.RunSession(ctx, vmHandle, sessionOpts)
+	logger.Info("vm started; entering foreground session")
+	err = vmm.RunSession(ctx, vmHandle, sessionOpts)
+	if err == nil {
+		logger.Info("vm session ended")
+	}
+	return err
 }
 
 // Suspend suspends a running session out-of-process: over the control
@@ -65,10 +74,17 @@ func Hotplug(ctx context.Context, mf *manifest.Manifest, id string, detach bool)
 // ExitCode maps session errors onto CLI exit codes.
 func ExitCode(err error) int { return vmm.ExitCode(err) }
 
-// SetLogger sets the machinery's package logger.
-func SetLogger(l *slog.Logger) { vmm.SetLogger(l) }
+// SetLogger configures the session and the subpackages it assembles. Logging
+// is process-global and should be configured before starting a session.
+func SetLogger(l *slog.Logger) {
+	if l == nil {
+		l = slog.New(slog.DiscardHandler)
+	}
+	logger = l.With("package", "session")
+	vmm.SetLogger(l.With("package", "vmm"))
+	vmm.SetSSHLogger(l.With("package", "ssh"))
+	balloon.SetLogger(l.With("package", "balloon"))
+}
 
-// SetBalloonLogger sets the balloon controller's logger. It is separate
-// from SetLogger because the CLI enables balloon logging at a higher
-// verbosity tier than the rest of the machinery.
-func SetBalloonLogger(l *slog.Logger) { balloon.SetLogger(l) }
+// SetOutput configures output from non-interactive background processes.
+func SetOutput(w io.Writer) { vmm.SetOutput(w) }

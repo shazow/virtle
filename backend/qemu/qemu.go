@@ -12,6 +12,7 @@ import (
 	"log/slog"
 
 	"github.com/shazow/virtle/backend"
+	"github.com/shazow/virtle/backend/qemu/internal/balloon"
 	"github.com/shazow/virtle/backend/qemu/internal/vmm"
 	imanifest "github.com/shazow/virtle/internal/manifest"
 	"github.com/shazow/virtle/units"
@@ -55,8 +56,20 @@ type Config struct {
 	// reports errors.ErrUnsupported, and teardown skips the graceful
 	// guest shutdown attempt.
 	RemoteControl RemoteControl
+}
 
-	Logger *slog.Logger // default: discard
+var manifestLogger = slog.New(slog.DiscardHandler)
+
+// SetLogger configures logging for QEMU backends and their internal
+// components. Logging is process-global and should be configured before
+// starting concurrent backends. A nil logger restores the silent default.
+func SetLogger(logger *slog.Logger) {
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
+	manifestLogger = logger.With("package", "manifest")
+	vmm.SetLogger(logger.With("package", "vmm"))
+	balloon.SetLogger(logger.With("package", "balloon"))
 }
 
 // RemoteControl is a guest-control transport for Config.RemoteControl.
@@ -116,13 +129,6 @@ func (b *qemuBackend) Start(ctx context.Context, spec *vm.Spec) (backend.Instanc
 	return b.start(ctx, spec, vmm.ResumeModeNo)
 }
 
-func (b *qemuBackend) logger() *slog.Logger {
-	if b.cfg.Logger != nil {
-		return b.cfg.Logger
-	}
-	return slog.New(slog.DiscardHandler)
-}
-
 // resolveSpec lowers the spec (plus any base document) through the manifest
 // resolution pipeline.
 func (b *qemuBackend) resolveSpec(spec *vm.Spec) (*imanifest.Manifest, error) {
@@ -130,7 +136,7 @@ func (b *qemuBackend) resolveSpec(spec *vm.Spec) (*imanifest.Manifest, error) {
 	if err != nil {
 		return nil, err
 	}
-	mf, err := doc.ManifestWithOptions(imanifest.ResolveOptions{Logger: b.logger()})
+	mf, err := doc.ManifestWithOptions(imanifest.ResolveOptions{Logger: manifestLogger})
 	if err != nil {
 		return nil, fmt.Errorf("resolve vm spec: %w", err)
 	}
@@ -145,8 +151,6 @@ func (b *qemuBackend) start(ctx context.Context, spec *vm.Spec, resume vmm.Resum
 	handle, err := vmm.StartVM(ctx, mf, vmm.StartOptions{
 		Resume:           resume,
 		HasRemoteControl: b.hasRemoteControl(),
-	}, vmm.Config{
-		Logger: b.logger(),
 	})
 	if err != nil {
 		return nil, err

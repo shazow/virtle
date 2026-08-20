@@ -2,7 +2,26 @@
 
 Brief changes grouped by day, newest first. Consumer-facing changes lead;
 substantial internal changes get a line. Include diffs or before/after examples
-when illustrative of the change.
+when illustrative of the change. Focus on capabilities instead of implementation
+details.
+
+## 2026-08-18 – 2026-08-20
+
+- **v0.3.0 and v0.3.1 released.** Virtle can now be embedded as a Go library:
+  callers can construct or load a VM definition, start and control an
+  instance, run guest commands, and use optional capabilities such as suspend
+  and hotplug. The CLI now runs on the same public interfaces. (#66, #76)
+
+  ```go
+  spec, b, err := manifest.Load(r)
+  inst, err := b.Start(ctx, spec)
+  guest, err := inst.RemoteControl()
+  result, err := guest.Run(ctx, &vm.GuestCmd{Path: "make"})
+  ```
+
+- Logging was overhauled: normal runs show warnings, `-v` adds useful lifecycle
+  information, and `-vv` adds debugging and background-command output while
+  requested SSH and console output remains direct. (#79)
 
 ## 2026-08-08
 

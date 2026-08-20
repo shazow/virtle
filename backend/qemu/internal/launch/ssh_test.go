@@ -42,8 +42,8 @@ func TestBuildSSHCommandBuildsInteractiveSession(t *testing.T) {
 		t.Fatalf("unexpected ssh session args: got %v want %v", commandArgs(session), wantArgs)
 	}
 
-	if session.Stdin != os.Stdin || session.Stdout != os.Stdout || session.Stderr != os.Stderr {
-		t.Fatalf("expected interactive ssh session to inherit stdio")
+	if session.Stdin != os.Stdin {
+		t.Fatal("expected interactive ssh session to read from stdin")
 	}
 }
 

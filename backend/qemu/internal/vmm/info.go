@@ -45,9 +45,8 @@ func (m *manager) printGuestInfo(ctx context.Context, socketPath string, watcher
 		return
 	}
 
-	m.logger.Info("guest info")
 	processList := strings.TrimRight(info.ProcessList, "\n")
 	if processList != "" {
-		fmt.Fprintln(m.outputWriter(), processList)
+		m.logger.Debug("guest info", "processes", processList)
 	}
 }

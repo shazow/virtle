@@ -37,7 +37,8 @@ First, write a simple manifest and save it as `manifest.toml`. See: [./examples/
 
 Global flags:
 - `virtle [--manifest=MANIFEST] ...` - When `--manifest` is omitted, `./manifest.toml` is used by default.
-- `virtle [-v|-vv] ...` - Verbose and very verbose flags, recommended to understand what virtle is doing.
+- `virtle -v ...` - Show useful VM and SSH lifecycle information.
+- `virtle -vv ...` - Show debugging details and output from background commands.
 
 Launch a VM:
 - `virtle launch [--ssh] [--resume=no|auto|force] [-- <remote-cmd...>]`
@@ -46,7 +47,7 @@ Other advanced features:
 - `virtle suspend`
 - `virtle rpc METHOD [JSON_ARGS]`
 - `virtle hotplug ID` (experimental)
-- `virtle hotplug --detach ID`(experimental)
+- `virtle hotplug --detach ID` (experimental)
 
 ### Manifest
 
@@ -81,7 +82,10 @@ spec := &vm.Spec{
 	Shares: []vm.Share{{Tag: "src", HostPath: ".", GuestPath: "/workspace"}},
 	Memory: 2048 * units.Mebibyte,
 }
-b, err := qemu.New(qemu.Config{RemoteControl: qemu.QGA{}})
+b, err := qemu.New(qemu.Config{
+	RemoteControl: qemu.QGA{},
+	Logger:        slog.Default(),
+})
 if err != nil {
 	log.Fatal(err)
 }

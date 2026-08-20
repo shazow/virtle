@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -183,6 +184,69 @@ func TestParserAcceptsLaunchFlags(t *testing.T) {
 				t.Fatalf("ParseArgs(%v) rejected supported flag: %v", tt.args, err)
 			}
 		})
+	}
+}
+
+func TestLoggingVerbosity(t *testing.T) {
+	tests := []struct {
+		name      string
+		flags     []string
+		wantInfo  bool
+		wantDebug bool
+	}{
+		{name: "default"},
+		{name: "verbose", flags: []string{"-v"}, wantInfo: true},
+		{name: "debug", flags: []string{"-vv"}, wantInfo: true, wantDebug: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args := append(append([]string(nil), tt.flags...), "manifest", "defaults")
+			captureStdout(t, func() {
+				if err := run(args); err != nil {
+					t.Fatalf("run: %v", err)
+				}
+			})
+
+			ctx := context.Background()
+			if got := rootLogger.Enabled(ctx, slog.LevelInfo); got != tt.wantInfo {
+				t.Fatalf("INFO enabled: got %t want %t", got, tt.wantInfo)
+			}
+			if got := rootLogger.Enabled(ctx, slog.LevelDebug); got != tt.wantDebug {
+				t.Fatalf("DEBUG enabled: got %t want %t", got, tt.wantDebug)
+			}
+			if !rootLogger.Enabled(ctx, slog.LevelWarn) {
+				t.Fatal("expected WARNING to be enabled")
+			}
+		})
+	}
+}
+
+func TestVerboseLoggingUsesDefaultFormat(t *testing.T) {
+	var logs bytes.Buffer
+	oldOutput := log.Writer()
+	oldFlags := log.Flags()
+	oldPrefix := log.Prefix()
+	oldLevel := slog.SetLogLoggerLevel(slog.LevelInfo)
+	t.Cleanup(func() {
+		log.SetOutput(oldOutput)
+		log.SetFlags(oldFlags)
+		log.SetPrefix(oldPrefix)
+		slog.SetLogLoggerLevel(oldLevel)
+	})
+	log.SetOutput(&logs)
+	log.SetFlags(0)
+	log.SetPrefix("")
+
+	captureStdout(t, func() {
+		if err := run([]string{"-v", "manifest", "defaults"}); err != nil {
+			t.Fatalf("run: %v", err)
+		}
+	})
+	rootLogger.With("package", "main").Info("lifecycle event")
+
+	if got, want := logs.String(), "INFO lifecycle event package=main\n"; got != want {
+		t.Fatalf("log output: got %q want %q", got, want)
 	}
 }
 

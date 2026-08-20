@@ -58,7 +58,9 @@ type manager struct {
 	guestAgentDialer    qga.Dialer
 	sshReadyDialer      launch.SSHReadyDialer
 	logger              *slog.Logger
-	logWriter           io.Writer
+	sshLogger           *slog.Logger
+	balloonLogger       *slog.Logger
+	consoleOutput       io.Writer
 	sshReadyTimeout     time.Duration
 	shutdownDelay       time.Duration
 	qmpRetryDelay       time.Duration
@@ -77,16 +79,26 @@ func newManager() *manager {
 
 func newManagerFromConfig(config Config) *manager {
 	config = mergeConfig(DefaultConfig(), config)
+	logger := config.Logger
+	if logger == nil {
+		logger = discardLogger
+	}
+	runner := config.Runner
+	if runner == nil {
+		runner = &executor.Runner{Logger: logger.With("package", "vmm")}
+	}
 	return &manager{
 		locker:              config.Locker,
 		vsockCIDChecker:     config.VSockCIDChecker,
-		runner:              config.Runner,
+		runner:              runner,
 		socketWaiter:        config.SocketWaiter,
 		qmpDialer:           config.QMPDialer,
 		guestAgentDialer:    config.GuestAgentDialer,
 		sshReadyDialer:      config.SSHReadyDialer,
-		logger:              config.Logger,
-		logWriter:           config.LogWriter,
+		logger:              logger.With("package", "vmm"),
+		sshLogger:           logger.With("package", "ssh"),
+		balloonLogger:       logger.With("package", "balloon"),
+		consoleOutput:       config.ConsoleOutput,
 		sshReadyTimeout:     config.SSHReadyTimeout,
 		shutdownDelay:       config.ShutdownDelay,
 		qmpRetryDelay:       config.QMPRetryDelay,
@@ -98,21 +110,6 @@ func newManagerFromConfig(config Config) *manager {
 		notifier:            config.Notifier,
 		readiness:           config.GuestReadiness,
 	}
-}
-
-func (m *manager) launchWithOptions(ctx context.Context, manifest *manifest.Manifest, remoteCommand []string, options launch.Options) error {
-	// CLI launches always expect an agent-equipped guest (QGA today);
-	// agentless images are a library concern, selected per backend
-	// constructor.
-	options.HasRemoteControl = true
-	v, err := m.startVM(ctx, launch.Spec{Manifest: manifest, RemoteCommand: remoteCommand, Options: options})
-	if err != nil {
-		if launch.IsSavedSuspendExit(err) {
-			return nil
-		}
-		return err
-	}
-	return RunSession(ctx, v, SessionOptions{SSH: options.SSH, RemoteCommand: remoteCommand})
 }
 
 func (m *manager) planLaunch(spec launch.Spec) (*launch.Plan, error) {
@@ -128,7 +125,7 @@ func (m *manager) planLaunch(spec launch.Spec) (*launch.Plan, error) {
 	}
 	notifier := m.notifier
 	if notifier == nil {
-		notifier = newCommandNotifier(cfg, m.logger)
+		notifier = newCommandNotifier(cfg, m.logger, m.runner)
 	}
 	plan, err := launch.BuildPlan(spec, resumeState, notifier)
 	if err != nil {
@@ -167,12 +164,13 @@ func (m *manager) waitForLaunchForeground(
 	lifecycle *launch.Lifecycle,
 	suspendHandler suspendHandler,
 	processes *launch.ProcessSet,
+	session SessionOptions,
 ) error {
 	// Restored suspend state is removed only once the session is
 	// established (SSH attached, or the VM wait entered), so a failed
 	// session start leaves the state resumable.
 	if plan.Options.SSH && len(plan.Manifest.SSH.Argv) > 0 {
-		if err := m.runSSHSession(ctx, plan, stats, lifecycle, suspendHandler, processes); err != nil {
+		if err := m.runSSHSession(ctx, plan, stats, lifecycle, suspendHandler, processes, session); err != nil {
 			return err
 		}
 		if plan.ResumeState != nil {
@@ -189,10 +187,12 @@ func (m *manager) waitForLaunchForeground(
 
 	if hint, err := launch.BuildSSHCommandHint(plan.Manifest, plan.CID); err != nil {
 		if m.logger != nil {
-			m.logger.Info("ssh command hint template failed", "err", err)
+			m.logger.Warn("ssh command hint template failed", "err", err)
 		}
-	} else if hint != "" {
-		fmt.Fprintf(m.outputWriter(), "connect with: %s\n", hint)
+	} else if hint != "" && session.Stdout != nil {
+		if _, err := fmt.Fprintf(session.Stdout, "connect with ssh: %s\n", hint); err != nil {
+			return fmt.Errorf("write ssh command hint: %w", err)
+		}
 	}
 
 	vmWatchers := processes.VMWatchers()
@@ -224,13 +224,11 @@ func (m *manager) startRuns(cid int) (executor.Group, error) {
 	started := executor.NewGroup()
 	for i, run := range runs {
 		if m.logger != nil {
-			m.logger.Info("starting run", "index", i)
+			m.logger.Debug("starting run", "index", i)
 		}
 		cmd := executor.Command(run.Exec[0], run.Exec[1:], run.Env)
 		cmd.Dir = run.Dir
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-		cmd.Stdout = os.Stderr
-		cmd.Stderr = os.Stderr
 		process, err := m.startManagedProcess(cmd)
 		if err != nil {
 			_ = started.StopAll(context.Background())
@@ -381,12 +379,14 @@ func (m *manager) runSSHSession(
 	lifecycle *launch.Lifecycle,
 	suspendHandler suspendHandler,
 	processes *launch.ProcessSet,
+	session SessionOptions,
 ) error {
 	return launch.RunSSHSession(ctx, launch.SSHSession{
 		Plan:                   plan,
 		Runner:                 m.runner,
-		Logger:                 m.logger,
-		Output:                 m.outputWriter(),
+		Logger:                 m.sshLifecycleLogger(),
+		Stdout:                 session.Stdout,
+		Stderr:                 session.Stderr,
 		RetryOutputRevealDelay: sshRetryOutputRevealDelay,
 		AddProcesses:           processes.Add,
 		RemoveProcess:          processes.Remove,

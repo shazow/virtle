@@ -17,8 +17,8 @@ package session
 import (
 	"context"
 	"log/slog"
+	"os"
 
-	"github.com/shazow/virtle/backend/qemu/internal/balloon"
 	"github.com/shazow/virtle/backend/qemu/internal/vmm"
 	"github.com/shazow/virtle/internal/manifest"
 )
@@ -28,26 +28,44 @@ type Options struct {
 	Resume        string   // resume mode: "no", "auto", "force"; default "no"
 	SSH           bool     // attach the interactive SSH session loop
 	RemoteCommand []string // remote command for the SSH session
+
+	Logger *slog.Logger // default: discard
 }
 
 // Run boots the VM with CLI semantics (resume modes, --ssh preflight
 // validation, process signal handlers) and runs the foreground session to
 // completion. A session that ends in a saved suspend reports success.
 func Run(ctx context.Context, mf *manifest.Manifest, opts Options) error {
+	logger := opts.Logger
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
+	sessionLogger := logger.With("package", "session")
+	sessionLogger.Info("starting vm session", "resume", opts.Resume, "ssh", opts.SSH)
 	sessionOpts := vmm.SessionOptions{
 		SSH:           opts.SSH,
 		RemoteCommand: opts.RemoteCommand,
+		Stdout:        os.Stdout,
+		Stderr:        os.Stderr,
 	}
 	vmHandle, err := vmm.StartSessionVM(ctx, mf, vmm.StartOptions{
 		Resume: vmm.ResumeMode(opts.Resume),
-	}, sessionOpts)
+	}, sessionOpts, vmm.Config{
+		Logger:        logger,
+		ConsoleOutput: os.Stderr,
+	})
 	if err != nil {
 		if vmm.IsSavedSuspendExit(err) {
 			return nil
 		}
 		return err
 	}
-	return vmm.RunSession(ctx, vmHandle, sessionOpts)
+	sessionLogger.Info("vm started; entering foreground session")
+	err = vmm.RunSession(ctx, vmHandle, sessionOpts)
+	if err == nil {
+		sessionLogger.Info("vm session ended")
+	}
+	return err
 }
 
 // Suspend suspends a running session out-of-process: over the control
@@ -64,11 +82,3 @@ func Hotplug(ctx context.Context, mf *manifest.Manifest, id string, detach bool)
 
 // ExitCode maps session errors onto CLI exit codes.
 func ExitCode(err error) int { return vmm.ExitCode(err) }
-
-// SetLogger sets the machinery's package logger.
-func SetLogger(l *slog.Logger) { vmm.SetLogger(l) }
-
-// SetBalloonLogger sets the balloon controller's logger. It is separate
-// from SetLogger because the CLI enables balloon logging at a higher
-// verbosity tier than the rest of the machinery.
-func SetBalloonLogger(l *slog.Logger) { balloon.SetLogger(l) }

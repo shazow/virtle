@@ -3,7 +3,6 @@ package vmm
 import (
 	"context"
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -46,8 +45,6 @@ type managedProcessStarter struct {
 }
 
 func (s managedProcessStarter) Start(ctx context.Context, cmd *exec.Cmd) (*executor.Process, error) {
-	cmd.Stdout = os.Stderr
-	cmd.Stderr = os.Stderr
 	proc, err := s.m.startManagedProcess(cmd)
 	if err != nil {
 		return nil, err

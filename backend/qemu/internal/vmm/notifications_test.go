@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/shazow/virtle/backend/qemu/internal/launch"
+	"github.com/shazow/virtle/internal/executor"
 	"github.com/shazow/virtle/internal/manifest"
 )
 
@@ -24,7 +25,8 @@ func TestCommandNotifierHonorsStateAllowlistAndPassesEnv(t *testing.T) {
 		Command: notificationHookCommand(t, recordPath, "--flag"),
 		States:  []string{notifyStateRuntimeResume},
 	}
-	notifier := newCommandNotifier(cfg, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	notifier := newCommandNotifier(cfg, logger, &executor.Runner{Logger: logger})
 
 	notifier.Notify(context.Background(), notifyStateRuntimeSuspend, "ignored", nil)
 	if _, err := os.Stat(recordPath); !os.IsNotExist(err) {
@@ -76,7 +78,8 @@ func TestCommandNotifierKeepsCommandPathAndUsesAbsoluteWorkingDir(t *testing.T) 
 
 	cfg := validManifest("work")
 	cfg.Notifications.Command = notificationHookCommandWithPath(recordPath, "notify")
-	notifier := newCommandNotifier(cfg, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	notifier := newCommandNotifier(cfg, logger, &executor.Runner{Logger: logger})
 
 	notifier.Notify(context.Background(), notifyStateRuntimeResume, "Restored", nil)
 
@@ -96,7 +99,8 @@ func TestCommandNotifierRendersExecTemplates(t *testing.T) {
 	cfg.Notifications.Command = notificationHookCommand(t, recordPath, "{{.Message}}", "{{.cid}}", "{{.Env.USER}}")
 	cfg.Notifications.Command.Env = append(cfg.Notifications.Command.Env, "CUSTOM=1", "STATE={{.State}}", "MESSAGE={{.Message}}", "CID={{.cid}}")
 	t.Setenv("USER", "template-user")
-	notifier := newCommandNotifier(cfg, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	notifier := newCommandNotifier(cfg, logger, &executor.Runner{Logger: logger})
 
 	notifier.Notify(context.Background(), notifyStateRuntimeResume, "Restored", map[string]string{
 		"cid": "7",
@@ -120,7 +124,8 @@ func TestCommandNotifierLogsAndIgnoresHookFailure(t *testing.T) {
 	cfg.Notifications.Command = notificationHookCommand(t, recordPath)
 	cfg.Notifications.Command.Env = append(cfg.Notifications.Command.Env, "VIRTLE_NOTIFY_EXIT=1")
 	var logs bytes.Buffer
-	notifier := newCommandNotifier(cfg, slog.New(slog.NewTextHandler(&logs, nil)))
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	notifier := newCommandNotifier(cfg, logger, &executor.Runner{Logger: logger})
 
 	notifier.Notify(context.Background(), notifyStateRuntimeResume, "Restored", nil)
 

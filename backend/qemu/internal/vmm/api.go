@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"sync"
 	"time"
@@ -103,8 +104,10 @@ func IsSavedSuspendExit(err error) bool { return launch.IsSavedSuspendExit(err) 
 
 // SessionOptions configures the CLI foreground session on a started VM.
 type SessionOptions struct {
-	SSH           bool     // attach the interactive SSH session loop
-	RemoteCommand []string // remote command for the SSH session
+	SSH           bool      // attach the interactive SSH session loop
+	RemoteCommand []string  // remote command for the SSH session
+	Stdout        io.Writer // foreground session and SSH stdout; default: discard
+	Stderr        io.Writer // foreground session and SSH stderr; default: discard
 }
 
 // RunSession runs the CLI foreground session on a started VM: the
@@ -130,13 +133,10 @@ func RunSession(ctx context.Context, v *VM, opts SessionOptions) (err error) {
 		if err := m.guestReadiness().WaitReady(running.ctx, plan, running.processes.Watchers()); err != nil {
 			return err
 		}
+		m.sshLifecycleLogger().Info("guest is ready")
 		running.stats.Timer(launch.TimerSSHReady, time.Now())
 	}
-	mode := launch.WaitVM
-	if opts.SSH {
-		mode = launch.WaitSSH
-	}
-	err = m.waitForRunningLaunch(ctx, running, mode)
+	err = m.waitForRunningLaunch(ctx, running, opts)
 	if launch.IsSavedSuspendExit(err) {
 		return nil
 	}

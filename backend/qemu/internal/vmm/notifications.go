@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
@@ -51,9 +50,10 @@ type commandNotifier struct {
 	states  map[string]struct{}
 	dir     string
 	logger  *slog.Logger
+	runner  launch.Runner
 }
 
-func newCommandNotifier(manifest *manifest.Manifest, logger *slog.Logger) launch.NotificationSink {
+func newCommandNotifier(manifest *manifest.Manifest, logger *slog.Logger, runner launch.Runner) launch.NotificationSink {
 	if manifest == nil {
 		return noopNotifier{}
 	}
@@ -86,6 +86,7 @@ func newCommandNotifier(manifest *manifest.Manifest, logger *slog.Logger) launch
 		states:  states,
 		dir:     dir,
 		logger:  logger,
+		runner:  runner,
 	}
 }
 
@@ -100,21 +101,21 @@ func (n *commandNotifier) Notify(ctx context.Context, state string, message stri
 	})
 	if err != nil {
 		if n.logger != nil {
-			n.logger.Info("notification hook template failed", "state", state, "err", err)
+			n.logger.Warn("notification hook template failed", "state", state, "err", err)
 		}
 		return
 	}
 	command, err := manifest.RenderCommand(n.command, renderer)
 	if err != nil {
 		if n.logger != nil {
-			n.logger.Info("notification hook template failed", "state", state, "err", err)
+			n.logger.Warn("notification hook template failed", "state", state, "err", err)
 		}
 		return
 	}
 	env, err := notificationEnv(state, message, values)
 	if err != nil {
 		if n.logger != nil {
-			n.logger.Info("notification hook template failed", "state", state, "err", err)
+			n.logger.Warn("notification hook template failed", "state", state, "err", err)
 		}
 		return
 	}
@@ -122,10 +123,19 @@ func (n *commandNotifier) Notify(ctx context.Context, state string, message stri
 	cmd := exec.CommandContext(ctx, command.Path, command.Args...)
 	cmd.Env = executor.WrapEnv(env)
 	cmd.Dir = n.dir
-	cmd.Stdout = os.Stderr
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil && n.logger != nil {
-		n.logger.Info("notification hook failed", "state", state, "err", err)
+	var runErr error
+	if n.runner == nil {
+		runErr = fmt.Errorf("command runner is not configured")
+	} else {
+		process, err := n.runner.Start(cmd)
+		if err != nil {
+			runErr = err
+		} else {
+			runErr = process.Wait()
+		}
+	}
+	if runErr != nil && n.logger != nil {
+		n.logger.Warn("notification hook failed", "state", state, "err", runErr)
 	}
 }
 

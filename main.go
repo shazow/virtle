@@ -25,7 +25,7 @@ import (
 
 type Options struct {
 	Manifest string `long:"manifest" value-name:"MANIFEST" description:"Path to the virtle manifest"`
-	Verbose  []bool `short:"v" long:"verbose" description:"Show verbose logging."`
+	Verbose  []bool `short:"v" long:"verbose" description:"Increase logging verbosity (-v for lifecycle, -vv for debugging)."`
 	Version  bool   `long:"version" description:"Print the virtle version and exit"`
 
 	Launch struct {
@@ -65,6 +65,8 @@ type Options struct {
 	} `command:"manifest" description:"Inspect and work with virtle manifests" long-description:"Inspect and work with the virtle manifest input format."`
 }
 
+var rootLogger = slog.New(slog.DiscardHandler)
+
 const extraHelp = `Run 'virtle <command> --help' for more information on a command.
 Project repository: https://github.com/shazow/virtle
 `
@@ -74,18 +76,8 @@ func runLaunch(options *Options) error {
 		return fmt.Errorf("remote command arguments require --ssh")
 	}
 
-	baseLogger := slog.Default()
-	discardLogger := slog.New(slog.DiscardHandler)
-	manifestLogger := discardLogger
-	session.SetLogger(discardLogger)
-	session.SetBalloonLogger(discardLogger)
-	if len(options.Verbose) > 1 {
-		manifestLogger = baseLogger.With("package", "manifest")
-		session.SetLogger(baseLogger.With("package", "vmm"))
-		session.SetBalloonLogger(baseLogger.With("package", "balloon"))
-	}
-
-	loaded, err := loadLaunchManifest(options.Manifest, manifestLogger)
+	rootLogger.With("package", "main").Info("loading launch manifest", "path", options.Manifest)
+	loaded, err := loadLaunchManifest(options.Manifest, rootLogger.With("package", "manifest"))
 	if err != nil {
 		return err
 	}
@@ -97,6 +89,7 @@ func runLaunch(options *Options) error {
 		Resume:        options.Launch.Resume,
 		SSH:           options.Launch.SSH,
 		RemoteCommand: options.Launch.Args.RemoteCommand,
+		Logger:        rootLogger,
 	})
 }
 
@@ -109,7 +102,11 @@ func runSuspend(options *Options) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	return session.Suspend(ctx, manifest)
+	if err := session.Suspend(ctx, manifest); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(os.Stdout, "suspended vm")
+	return err
 }
 
 func runManifestDefaults(options *Options) error {
@@ -150,16 +147,7 @@ func runManifestSchema() error {
 }
 
 func runHotplug(options *Options) error {
-	baseLogger := slog.Default()
-	discardLogger := slog.New(slog.DiscardHandler)
-	manifestLogger := discardLogger
-	session.SetLogger(discardLogger)
-	if len(options.Verbose) > 1 {
-		manifestLogger = baseLogger.With("package", "manifest")
-		session.SetLogger(baseLogger.With("package", "vmm"))
-	}
-
-	manifest, err := loadLaunchManifest(options.Manifest, manifestLogger)
+	manifest, err := loadLaunchManifest(options.Manifest, rootLogger.With("package", "manifest"))
 	if err != nil {
 		return err
 	}
@@ -167,7 +155,15 @@ func runHotplug(options *Options) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	return session.Hotplug(ctx, manifest, options.Hotplug.Args.ID, options.Hotplug.Detach)
+	if err := session.Hotplug(ctx, manifest, options.Hotplug.Args.ID, options.Hotplug.Detach); err != nil {
+		return err
+	}
+	action := "attached"
+	if options.Hotplug.Detach {
+		action = "detached"
+	}
+	_, err = fmt.Fprintf(os.Stdout, "%s hotplug device: %s\n", action, options.Hotplug.Args.ID)
+	return err
 }
 
 func runRPC(options *Options) error {
@@ -303,7 +299,7 @@ func main() {
 			os.Exit(0)
 		}
 
-		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(session.ExitCode(err))
 	}
 }
@@ -334,6 +330,14 @@ func run(args []string) error {
 	if opts.Version {
 		return printVersion(os.Stdout)
 	}
+	level := slog.LevelWarn
+	if len(opts.Verbose) == 1 {
+		level = slog.LevelInfo
+	} else if len(opts.Verbose) >= 2 {
+		level = slog.LevelDebug
+	}
+	slog.SetLogLoggerLevel(level)
+	rootLogger = slog.Default()
 
 	switch parser.Active.Name {
 	case "launch":

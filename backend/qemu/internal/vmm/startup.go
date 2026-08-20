@@ -79,7 +79,7 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 	if err != nil {
 		return nil, &launch.StageError{Stage: "preflight", Err: err}
 	}
-	qemuCmd, err := buildQEMUCommand(plan.Manifest, cid, plan.ResumeState != nil)
+	qemuCmd, err := buildQEMUCommand(plan.Manifest, cid, plan.ResumeState != nil, m.consoleOutput)
 	if err != nil {
 		return nil, &launch.StageError{Stage: "preflight", Err: err}
 	}
@@ -136,7 +136,7 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 			m.logger.Info("requesting guest shutdown", "method", method, "exec", shutdown.ShutdownExec)
 			err := m.requestGuestShutdown(context.Background(), plan.Paths.GuestAgentSocket, shutdown.ShutdownExec)
 			if err != nil {
-				m.logger.Info("guest shutdown request failed; forcing qemu quit", "err", err)
+				m.logger.Warn("guest shutdown request failed; forcing qemu quit", "err", err)
 			} else {
 				m.logger.Info("waiting for guest shutdown", "timeout", shutdown.ShutdownTimeout)
 				waitCtx, cancel := context.WithTimeoutCause(context.Background(), shutdown.ShutdownTimeout,
@@ -147,7 +147,7 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 					m.logger.Info("guest shutdown completed")
 					return nil
 				}
-				m.logger.Info("guest shutdown timed out; forcing qemu quit", "err", waitErr)
+				m.logger.Warn("guest shutdown timed out; forcing qemu quit", "err", waitErr)
 			}
 		} else {
 			m.logger.Info("vm has no remote control; skipping guest shutdown request")
@@ -227,7 +227,7 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 		stats.Timer(launch.TimerFilesReady, time.Now())
 		writeBackOnExit = plan.Options.HasRemoteControl
 	}
-	if task := balloon.ControllerTask(qmp, plan.Manifest.QEMU.Devices.Balloon, plan.Notifier); task != nil {
+	if task := balloon.ControllerTask(qmp, plan.Manifest.QEMU.Devices.Balloon, plan.Notifier, m.balloonLogger); task != nil {
 		processes.StartTasks(launchCtx, task)
 	}
 	return started, nil
@@ -238,8 +238,8 @@ func (m *manager) writeLaunchStats(stats *launch.Stats) {
 		return
 	}
 	stats.Timer(launch.TimerCompleted, time.Now())
-	if output := m.outputWriter(); output != nil {
-		fmt.Fprintf(output, "stats: %s\n", stats.String())
+	if m.logger != nil {
+		m.logger.Debug("launch stats", "stats", stats.String())
 	}
 }
 
@@ -255,9 +255,9 @@ func stopLaunchLifecycle(lifecycle *launch.Lifecycle, cancel context.CancelFunc)
 func (m *manager) prepareRuntimeState(plan *launch.Plan) error {
 	if m.logger != nil {
 		if plan.ResumeState != nil {
-			m.logger.Info("restoring saved vsock cid", "cid", plan.CID)
+			m.logger.Debug("restoring saved vsock cid", "cid", plan.CID)
 		} else {
-			m.logger.Info("allocated vsock cid", "cid", plan.CID)
+			m.logger.Debug("allocated vsock cid", "cid", plan.CID)
 		}
 	}
 
@@ -322,7 +322,7 @@ func (m *manager) startQEMU(cmd *exec.Cmd) (*executor.Process, error) {
 		return nil, fmt.Errorf("qemu runner is not configured")
 	}
 	if m.logger != nil {
-		m.logger.Info("starting qemu", "command", shellquote.Join(cmd.Args...))
+		m.logger.Debug("starting qemu", "command", shellquote.Join(cmd.Args...))
 	}
 	return m.startManagedProcess(cmd)
 }

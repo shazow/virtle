@@ -3,7 +3,9 @@ package executor
 
 import (
 	"bytes"
+	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -41,8 +43,12 @@ type RunningProcess interface {
 	Name() string
 }
 
-// Runner starts external commands and returns process handles.
-type Runner struct{}
+// Runner starts external commands and returns process handles. When Logger
+// enables DEBUG, command streams without an explicit writer are logged one
+// line at a time. Explicit Cmd.Stdout and Cmd.Stderr writers are preserved.
+type Runner struct {
+	Logger *slog.Logger
+}
 
 // Start starts cmd and returns its process handle.
 func (r *Runner) Start(cmd *exec.Cmd) (*Process, error) {
@@ -50,6 +56,19 @@ func (r *Runner) Start(cmd *exec.Cmd) (*Process, error) {
 		return nil, fmt.Errorf("start command: command must not be nil")
 	}
 	handle := &execCmdHandle{cmd: cmd}
+	if r != nil && r.Logger != nil && r.Logger.Enabled(context.Background(), slog.LevelDebug) {
+		logger := r.Logger.With("command", handle.Name())
+		if cmd.Stdout == nil {
+			output := &lineLogger{logger: logger.With("stream", "stdout")}
+			cmd.Stdout = output
+			handle.outputs = append(handle.outputs, output)
+		}
+		if cmd.Stderr == nil {
+			output := &lineLogger{logger: logger.With("stream", "stderr")}
+			cmd.Stderr = output
+			handle.outputs = append(handle.outputs, output)
+		}
+	}
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start %s: %w", handle.Name(), err)
 	}
@@ -58,11 +77,16 @@ func (r *Runner) Start(cmd *exec.Cmd) (*Process, error) {
 }
 
 type execCmdHandle struct {
-	cmd *exec.Cmd
+	cmd     *exec.Cmd
+	outputs []*lineLogger
 }
 
 func (p *execCmdHandle) Wait() error {
-	return p.cmd.Wait()
+	err := p.cmd.Wait()
+	for _, output := range p.outputs {
+		output.close()
+	}
+	return err
 }
 
 func (p *execCmdHandle) Signal(sig os.Signal) error {
@@ -97,6 +121,63 @@ func (p *execCmdHandle) Name() string {
 		return filepath.Base(p.cmd.Path)
 	}
 	return "command"
+}
+
+const maxLogLine = 32 * 1024
+
+// lineLogger turns arbitrary command writes into bounded DEBUG records. Log
+// delivery is best-effort: diagnostics must not change the command's result.
+type lineLogger struct {
+	logger *slog.Logger
+	buffer []byte
+}
+
+func (w *lineLogger) Write(p []byte) (int, error) {
+	n := len(p)
+	for len(p) > 0 {
+		newline := bytes.IndexByte(p, '\n')
+		if newline < 0 {
+			w.append(p)
+			break
+		}
+		w.append(p[:newline])
+		w.flush()
+		p = p[newline+1:]
+	}
+	return n, nil
+}
+
+func (w *lineLogger) append(p []byte) {
+	for len(p) > 0 {
+		available := maxLogLine - len(w.buffer)
+		if available == 0 {
+			w.flush()
+			available = maxLogLine
+		}
+		if available > len(p) {
+			available = len(p)
+		}
+		w.buffer = append(w.buffer, p[:available]...)
+		p = p[available:]
+		if len(w.buffer) == maxLogLine {
+			w.flush()
+		}
+	}
+}
+
+func (w *lineLogger) close() {
+	if len(w.buffer) > 0 {
+		w.flush()
+	}
+}
+
+func (w *lineLogger) flush() {
+	if len(w.buffer) == 0 {
+		return
+	}
+	line := bytes.TrimSuffix(w.buffer, []byte{'\r'})
+	w.logger.Debug(string(line))
+	w.buffer = w.buffer[:0]
 }
 
 // Renderer renders exec command templates from a fixed context.

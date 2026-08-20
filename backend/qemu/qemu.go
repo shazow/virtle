@@ -9,7 +9,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"os"
 
 	"github.com/shazow/virtle/backend"
 	"github.com/shazow/virtle/backend/qemu/internal/vmm"
@@ -56,7 +58,13 @@ type Config struct {
 	// guest shutdown attempt.
 	RemoteControl RemoteControl
 
-	Logger *slog.Logger // default: discard
+	// Logger receives manifest, VM lifecycle, SSH, and balloon logs. The
+	// default discards logs.
+	Logger *slog.Logger
+
+	// ConsoleOutput receives explicitly requested console output. The default
+	// is os.Stderr.
+	ConsoleOutput io.Writer
 }
 
 // RemoteControl is a guest-control transport for Config.RemoteControl.
@@ -83,12 +91,22 @@ func (QGA) remoteControl() {}
 //
 //	b, err := qemu.New(qemu.Config{RemoteControl: qemu.QGA{}})
 func New(cfg Config) (backend.Backend, error) {
-	return &qemuBackend{cfg: cfg}, nil
+	return newBackend(cfg, nil), nil
 }
 
 type qemuBackend struct {
 	cfg Config
 	doc *imanifest.Document // non-nil for manifest.Load-configured backends
+}
+
+func newBackend(cfg Config, doc *imanifest.Document) *qemuBackend {
+	if cfg.Logger == nil {
+		cfg.Logger = slog.New(slog.DiscardHandler)
+	}
+	if cfg.ConsoleOutput == nil {
+		cfg.ConsoleOutput = os.Stderr
+	}
+	return &qemuBackend{cfg: cfg, doc: doc}
 }
 
 func (b *qemuBackend) hasRemoteControl() bool { return b.cfg.RemoteControl != nil }
@@ -109,28 +127,21 @@ func NewBackendFromDocument(doc imanifest.Document, cfg Config) backend.Backend 
 	if cfg.RemoteControl == nil {
 		cfg.RemoteControl = QGA{}
 	}
-	return &qemuBackend{cfg: cfg, doc: &doc}
+	return newBackend(cfg, &doc)
 }
 
 func (b *qemuBackend) Start(ctx context.Context, spec *vm.Spec) (backend.Instance, error) {
 	return b.start(ctx, spec, vmm.ResumeModeNo)
 }
 
-func (b *qemuBackend) logger() *slog.Logger {
-	if b.cfg.Logger != nil {
-		return b.cfg.Logger
-	}
-	return slog.New(slog.DiscardHandler)
-}
-
 // resolveSpec lowers the spec (plus any base document) through the manifest
 // resolution pipeline.
-func (b *qemuBackend) resolveSpec(spec *vm.Spec) (*imanifest.Manifest, error) {
+func (b *qemuBackend) resolveSpec(spec *vm.Spec, logger *slog.Logger) (*imanifest.Manifest, error) {
 	doc, err := specDocument(spec, b.cfg, b.doc)
 	if err != nil {
 		return nil, err
 	}
-	mf, err := doc.ManifestWithOptions(imanifest.ResolveOptions{Logger: b.logger()})
+	mf, err := doc.ManifestWithOptions(imanifest.ResolveOptions{Logger: logger.With("package", "manifest")})
 	if err != nil {
 		return nil, fmt.Errorf("resolve vm spec: %w", err)
 	}
@@ -138,7 +149,8 @@ func (b *qemuBackend) resolveSpec(spec *vm.Spec) (*imanifest.Manifest, error) {
 }
 
 func (b *qemuBackend) start(ctx context.Context, spec *vm.Spec, resume vmm.ResumeMode) (backend.Instance, error) {
-	mf, err := b.resolveSpec(spec)
+	logger := b.cfg.Logger
+	mf, err := b.resolveSpec(spec, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -146,7 +158,8 @@ func (b *qemuBackend) start(ctx context.Context, spec *vm.Spec, resume vmm.Resum
 		Resume:           resume,
 		HasRemoteControl: b.hasRemoteControl(),
 	}, vmm.Config{
-		Logger: b.logger(),
+		Logger:        logger,
+		ConsoleOutput: b.cfg.ConsoleOutput,
 	})
 	if err != nil {
 		return nil, err

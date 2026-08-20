@@ -336,7 +336,8 @@ func run(args []string) error {
 	} else if len(opts.Verbose) >= 2 {
 		level = slog.LevelDebug
 	}
-	rootLogger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+	slog.SetLogLoggerLevel(level)
+	rootLogger = slog.Default()
 
 	switch parser.Active.Name {
 	case "launch":

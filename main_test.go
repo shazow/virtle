@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -218,6 +219,34 @@ func TestLoggingVerbosity(t *testing.T) {
 				t.Fatal("expected WARNING to be enabled")
 			}
 		})
+	}
+}
+
+func TestVerboseLoggingUsesDefaultFormat(t *testing.T) {
+	var logs bytes.Buffer
+	oldOutput := log.Writer()
+	oldFlags := log.Flags()
+	oldPrefix := log.Prefix()
+	oldLevel := slog.SetLogLoggerLevel(slog.LevelInfo)
+	t.Cleanup(func() {
+		log.SetOutput(oldOutput)
+		log.SetFlags(oldFlags)
+		log.SetPrefix(oldPrefix)
+		slog.SetLogLoggerLevel(oldLevel)
+	})
+	log.SetOutput(&logs)
+	log.SetFlags(0)
+	log.SetPrefix("")
+
+	captureStdout(t, func() {
+		if err := run([]string{"-v", "manifest", "defaults"}); err != nil {
+			t.Fatalf("run: %v", err)
+		}
+	})
+	rootLogger.With("package", "main").Info("lifecycle event")
+
+	if got, want := logs.String(), "INFO lifecycle event package=main\n"; got != want {
+		t.Fatalf("log output: got %q want %q", got, want)
 	}
 }
 

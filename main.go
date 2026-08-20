@@ -1,4 +1,3 @@
-// Command virtle launches the supported agentspace sandbox session.
 package main
 
 import (

@@ -93,7 +93,7 @@ func (c *fakeQGAClient) CloseFile(ctx context.Context, handle int) error {
 	return nil
 }
 
-func (c *fakeQGAClient) Exec(ctx context.Context, path string, args []string, captureOutput bool) (int, error) {
+func (c *fakeQGAClient) Exec(ctx context.Context, path string, args []string, env []string, captureOutput bool) (int, error) {
 	c.execPath = path
 	c.execArgs = args
 	return 42, nil

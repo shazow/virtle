@@ -96,7 +96,7 @@ func (g guestCommandRunner) Run(ctx context.Context, command []string) error {
 		return err
 	}
 	defer client.Disconnect()
-	status, err := g.m.runGuestCommandStatus(ctx, client, filepath.Base(command[0]), command[0], command[1:], strings.Join(command, " "))
+	status, err := g.m.runGuestCommandStatus(ctx, client, filepath.Base(command[0]), command[0], command[1:], nil, strings.Join(command, " "))
 	if err != nil {
 		return err
 	}

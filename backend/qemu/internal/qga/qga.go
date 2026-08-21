@@ -37,7 +37,7 @@ type FileReader interface {
 
 // ExecRunner starts a guest process and polls its exit status.
 type ExecRunner interface {
-	Exec(ctx context.Context, path string, args []string, captureOutput bool) (int, error)
+	Exec(ctx context.Context, path string, args []string, env []string, captureOutput bool) (int, error)
 	ExecStatus(ctx context.Context, pid int) (ExecStatus, error)
 }
 
@@ -179,12 +179,16 @@ func (c *socketClient) CloseFile(ctx context.Context, handle int) error {
 	return nil
 }
 
-func (c *socketClient) Exec(ctx context.Context, path string, args []string, captureOutput bool) (int, error) {
-	response, err := c.run(ctx, "guest-exec", map[string]any{
+func (c *socketClient) Exec(ctx context.Context, path string, args []string, env []string, captureOutput bool) (int, error) {
+	arguments := map[string]any{
 		"path":           path,
 		"arg":            args,
 		"capture-output": captureOutput,
-	})
+	}
+	if len(env) > 0 {
+		arguments["env"] = env
+	}
+	response, err := c.run(ctx, "guest-exec", arguments)
 	if err != nil {
 		return 0, fmt.Errorf("guest agent exec %q: %w", path, err)
 	}

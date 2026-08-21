@@ -101,9 +101,11 @@ func (c *retryClient) OpenFileRead(context.Context, string) (int, error) { retur
 func (c *retryClient) ReadFile(context.Context, int, int) (string, bool, error) {
 	return "", false, nil
 }
-func (c *retryClient) WriteFile(context.Context, int, string) error              { return nil }
-func (c *retryClient) CloseFile(context.Context, int) error                      { return nil }
-func (c *retryClient) Exec(context.Context, string, []string, bool) (int, error) { return 0, nil }
+func (c *retryClient) WriteFile(context.Context, int, string) error { return nil }
+func (c *retryClient) CloseFile(context.Context, int) error         { return nil }
+func (c *retryClient) Exec(context.Context, string, []string, []string, bool) (int, error) {
+	return 0, nil
+}
 func (c *retryClient) ExecStatus(context.Context, int) (ExecStatus, error) {
 	return ExecStatus{}, nil
 }

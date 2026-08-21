@@ -3,6 +3,7 @@ package qga
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -21,6 +22,7 @@ func TestRunCommandStatusWaitsForExit(t *testing.T) {
 		Name:          "test",
 		Path:          "/bin/test",
 		Args:          []string{"-e", "/tmp/file"},
+		Env:           []string{"PATH=/bin"},
 		Subject:       "/tmp/file",
 		CaptureOutput: true,
 	})
@@ -32,6 +34,9 @@ func TestRunCommandStatusWaitsForExit(t *testing.T) {
 	}
 	if client.execPath != "/bin/test" || len(client.execArgs) != 2 || !client.capture {
 		t.Fatalf("unexpected exec call: path=%q args=%v capture=%v", client.execPath, client.execArgs, client.capture)
+	}
+	if !reflect.DeepEqual(client.execEnv, []string{"PATH=/bin"}) {
+		t.Fatalf("unexpected exec env: got %v", client.execEnv)
 	}
 	if client.statusCalls != 2 {
 		t.Fatalf("status calls: got %d want 2", client.statusCalls)
@@ -107,6 +112,7 @@ type execClient struct {
 	pid         int
 	execPath    string
 	execArgs    []string
+	execEnv     []string
 	capture     bool
 	execErr     error
 	statuses    []ExecStatus
@@ -114,9 +120,10 @@ type execClient struct {
 	statusCalls int
 }
 
-func (c *execClient) Exec(_ context.Context, path string, args []string, captureOutput bool) (int, error) {
+func (c *execClient) Exec(_ context.Context, path string, args []string, env []string, captureOutput bool) (int, error) {
 	c.execPath = path
 	c.execArgs = append([]string(nil), args...)
+	c.execEnv = append([]string(nil), env...)
 	c.capture = captureOutput
 	return c.pid, c.execErr
 }

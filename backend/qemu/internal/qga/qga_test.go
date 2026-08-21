@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -46,7 +47,8 @@ func TestClientFileAndExecCommands(t *testing.T) {
 	if payload != "aGVsbG8=" || !eof {
 		t.Fatalf("unexpected read: payload=%q eof=%v", payload, eof)
 	}
-	pid, err := client.Exec(context.Background(), "/bin/true", []string{"--flag"}, true)
+	env := []string{"PATH=/bin"}
+	pid, err := client.Exec(context.Background(), "/bin/true", []string{"--flag"}, env, true)
 	if err != nil {
 		t.Fatalf("exec: %v", err)
 	}
@@ -64,7 +66,14 @@ func TestClientFileAndExecCommands(t *testing.T) {
 	assertCommand(t, commands, "guest-file-open")
 	assertCommand(t, commands, "guest-file-write")
 	assertCommand(t, commands, "guest-file-read")
-	assertCommand(t, commands, "guest-exec")
+	execCommand := assertCommand(t, commands, "guest-exec")
+	arguments, ok := execCommand["arguments"].(map[string]any)
+	if !ok {
+		t.Fatalf("guest-exec arguments: got %#v", execCommand["arguments"])
+	}
+	if got := arguments["env"]; !reflect.DeepEqual(got, []any{"PATH=/bin"}) {
+		t.Fatalf("guest-exec env: got %#v", got)
+	}
 	assertCommand(t, commands, "guest-exec-status")
 }
 
@@ -207,7 +216,7 @@ func newTestClient(t *testing.T, handler func(message map[string]any) map[string
 	return client, commands, cleanup
 }
 
-func assertCommand(t *testing.T, commands <-chan map[string]any, execute string) {
+func assertCommand(t *testing.T, commands <-chan map[string]any, execute string) map[string]any {
 	t.Helper()
 
 	select {
@@ -215,7 +224,9 @@ func assertCommand(t *testing.T, commands <-chan map[string]any, execute string)
 		if command["execute"] != execute {
 			t.Fatalf("unexpected command: got %#v want execute=%q", command, execute)
 		}
+		return command
 	case <-time.After(time.Second):
 		t.Fatalf("timed out waiting for command %q", execute)
 	}
+	return nil
 }

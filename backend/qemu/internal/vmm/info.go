@@ -27,7 +27,7 @@ func (m *manager) collectGuestInfo(ctx context.Context, socketPath string, watch
 	}
 	defer client.Disconnect()
 
-	status, err := m.runGuestCommandStatus(infoCtx, client, "ps", guestPSPath, []string{"-eo", "user=,comm="}, "process list")
+	status, err := m.runGuestCommandStatus(infoCtx, client, "ps", guestPSPath, []string{"-eo", "user=,comm="}, []string{guestInternalCommandPathEnv}, "process list")
 	if err != nil {
 		return Info{}, err
 	}

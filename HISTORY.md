@@ -5,6 +5,12 @@ substantial internal changes get a line. Include diffs or before/after examples
 when illustrative of the change. Focus on capabilities instead of implementation
 details.
 
+## 2026-08-21
+
+- `workspace.mount_cwd` and other internal guest commands now search standard
+  system paths, including the NixOS system profile, instead of depending on the
+  QEMU Guest Agent service's restricted `PATH`.
+
 ## 2026-08-18 – 2026-08-20
 
 - **v0.3.0 and v0.3.1 released.** Virtle can now be embedded as a Go library:

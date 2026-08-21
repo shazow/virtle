@@ -1493,11 +1493,13 @@ func TestManagerMountsWorkspaceCWD(t *testing.T) {
 		{
 			path:          "install",
 			args:          []string{"-d", "/home/agent/workspace", "/home/agent/workspace/agentspace"},
+			env:           []string{guestInternalCommandPathEnv},
 			captureOutput: true,
 		},
 		{
 			path:          "mount",
 			args:          []string{"--bind", "/mnt/cwd", "/home/agent/workspace/agentspace"},
+			env:           []string{guestInternalCommandPathEnv},
 			captureOutput: true,
 		},
 	}
@@ -1585,11 +1587,13 @@ func TestManagerLaunchWritesGuestFilesBeforeSSHSession(t *testing.T) {
 		{
 			path:          guestChownPath,
 			args:          []string{"agent:users", "/etc/virtle/inline"},
+			env:           []string{guestInternalCommandPathEnv},
 			captureOutput: true,
 		},
 		{
 			path:          guestChmodPath,
 			args:          []string{"0640", "/etc/virtle/inline"},
+			env:           []string{guestInternalCommandPathEnv},
 			captureOutput: true,
 		},
 		guestDirInstallCall(t, "/var/lib/virtle", "", ""),
@@ -1961,6 +1965,7 @@ func TestManagerLaunchRunsGuestDirectoryInstallScript(t *testing.T) {
 		{
 			path:          guestChownPath,
 			args:          []string{"agent:users", "/etc/virtle/inline"},
+			env:           []string{guestInternalCommandPathEnv},
 			captureOutput: true,
 		},
 	}; !reflect.DeepEqual(got, want) {
@@ -2018,6 +2023,7 @@ func TestManagerLaunchSkipsGuestFileWhenOverwriteFalseAndPathExists(t *testing.T
 		{
 			path:          guestTestPath,
 			args:          []string{"-e", "/etc/virtle/existing"},
+			env:           []string{guestInternalCommandPathEnv},
 			captureOutput: true,
 		},
 	}; !reflect.DeepEqual(got, want) {
@@ -2082,11 +2088,13 @@ func TestManagerLaunchCreatesAllMissingGuestParentDirectoriesWithOwnerAndMode(t 
 		{
 			path:          guestChownPath,
 			args:          []string{"agent:users", "/etc/virtle/nested/new"},
+			env:           []string{guestInternalCommandPathEnv},
 			captureOutput: true,
 		},
 		{
 			path:          guestChmodPath,
 			args:          []string{"0640", "/etc/virtle/nested/new"},
+			env:           []string{guestInternalCommandPathEnv},
 			captureOutput: true,
 		},
 	}; !reflect.DeepEqual(got, want) {
@@ -2144,6 +2152,7 @@ func TestManagerLaunchWritesGuestFileWhenOverwriteFalseAndPathMissing(t *testing
 		{
 			path:          guestTestPath,
 			args:          []string{"-e", "/etc/virtle/new"},
+			env:           []string{guestInternalCommandPathEnv},
 			captureOutput: true,
 		},
 		guestDirInstallCall(t, "/etc/virtle", "", ""),
@@ -2210,6 +2219,7 @@ func TestManagerLaunchFailsOnGuestFileChownFailure(t *testing.T) {
 		{
 			path:          guestChownPath,
 			args:          []string{"agent:users", "/etc/inline"},
+			env:           []string{guestInternalCommandPathEnv},
 			captureOutput: true,
 		},
 	}; !reflect.DeepEqual(got, want) {
@@ -4820,6 +4830,7 @@ type fakeGuestAgentClient struct {
 type guestExecCall struct {
 	path          string
 	args          []string
+	env           []string
 	captureOutput bool
 	// timeout is the remaining ctx deadline observed at exec time; zero when
 	// the exec ctx had no deadline.
@@ -4834,7 +4845,12 @@ func guestDirInstallCall(t *testing.T, guestDir string, owner string, mode strin
 	var call guestExecCall
 	captured := false
 	installer := launch.ScriptGuestDirectoryInstaller(func(_ context.Context, _ string, path string, args []string) error {
-		call = guestExecCall{path: path, args: args, captureOutput: true}
+		call = guestExecCall{
+			path:          path,
+			args:          args,
+			env:           []string{guestInternalCommandPathEnv},
+			captureOutput: true,
+		}
 		captured = true
 		return nil
 	})
@@ -4989,7 +5005,7 @@ func (c *fakeGuestAgentClient) CloseFile(ctx context.Context, handle int) error 
 	return c.closeErr
 }
 
-func (c *fakeGuestAgentClient) Exec(ctx context.Context, path string, args []string, captureOutput bool) (int, error) {
+func (c *fakeGuestAgentClient) Exec(ctx context.Context, path string, args []string, env []string, captureOutput bool) (int, error) {
 	remaining := time.Duration(0)
 	if deadline, ok := ctx.Deadline(); ok {
 		remaining = time.Until(deadline)
@@ -4998,6 +5014,7 @@ func (c *fakeGuestAgentClient) Exec(ctx context.Context, path string, args []str
 	c.execs = append(c.execs, guestExecCall{
 		path:          path,
 		args:          append([]string(nil), args...),
+		env:           append([]string(nil), env...),
 		captureOutput: captureOutput,
 		timeout:       remaining,
 	})

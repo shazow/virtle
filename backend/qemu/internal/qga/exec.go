@@ -13,9 +13,11 @@ const execPollDelay = 250 * time.Millisecond
 // ExecWait configures guest command execution. The command deadline is
 // carried by ctx; RunCommandStatus polls until the command exits or ctx ends.
 type ExecWait struct {
-	Name          string
-	Path          string
-	Args          []string
+	Name string
+	Path string
+	Args []string
+	// Env replaces the guest agent's inherited environment when non-empty.
+	Env           []string
 	Subject       string
 	CaptureOutput bool
 
@@ -25,7 +27,7 @@ type ExecWait struct {
 
 // RunCommandStatus starts a guest command and waits for its exit status.
 func RunCommandStatus(ctx context.Context, client ExecRunner, wait ExecWait) (ExecStatus, error) {
-	pid, err := client.Exec(ctx, wait.Path, wait.Args, wait.CaptureOutput)
+	pid, err := client.Exec(ctx, wait.Path, wait.Args, wait.Env, wait.CaptureOutput)
 	if err != nil {
 		return ExecStatus{}, fmt.Errorf("%s %q: %w", wait.Name, wait.Subject, err)
 	}

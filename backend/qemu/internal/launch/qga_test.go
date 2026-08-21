@@ -152,7 +152,7 @@ func (c *fakeGuestAgentClient) ReadFile(context.Context, int, int) (string, bool
 }
 func (c *fakeGuestAgentClient) WriteFile(context.Context, int, string) error { return nil }
 func (c *fakeGuestAgentClient) CloseFile(context.Context, int) error         { return nil }
-func (c *fakeGuestAgentClient) Exec(context.Context, string, []string, bool) (int, error) {
+func (c *fakeGuestAgentClient) Exec(context.Context, string, []string, []string, bool) (int, error) {
 	return 0, nil
 }
 func (c *fakeGuestAgentClient) ExecStatus(context.Context, int) (qga.ExecStatus, error) {

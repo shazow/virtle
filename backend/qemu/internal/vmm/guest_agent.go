@@ -56,7 +56,7 @@ func (m *manager) requestGuestShutdown(ctx context.Context, socketPath string, e
 
 	ctx, cancel := m.launchManifest.GuestCommandContext(ctx)
 	defer cancel()
-	pid, err := client.Exec(ctx, exec[0], exec[1:], true)
+	pid, err := client.Exec(ctx, exec[0], exec[1:], nil, true)
 	if err != nil {
 		return fmt.Errorf("execute guest shutdown command %v: %w", exec, err)
 	}
@@ -178,6 +178,10 @@ const (
 	guestMountPath   = "mount"
 	guestPSPath      = "ps"
 	guestTestPath    = "test"
+
+	// Default PATH to use to find the commands above, should cover common distros like busybox/alpine, debian/ubuntu, nixos/guix, etc.
+	// TODO: Add some way for users to bring their own path, or better yet: preload guest's default PATH and prefix it here.
+	guestInternalCommandPathEnv = "PATH=/bin:/usr/bin:/run/current-system/sw/bin:/run/current-system/profile/bin"
 )
 
 func (m *manager) mountWorkspaceCWD(ctx context.Context, client qga.Client) error {
@@ -209,7 +213,7 @@ func (m *manager) installGuestFileDirectory(ctx context.Context, client qga.Clie
 }
 
 func (m *manager) guestPathExists(ctx context.Context, client qga.Client, guestPath string) (bool, error) {
-	status, err := m.runGuestCommandStatus(ctx, client, "test -e", guestTestPath, []string{"-e", guestPath}, guestPath)
+	status, err := m.runGuestCommandStatus(ctx, client, "test -e", guestTestPath, []string{"-e", guestPath}, []string{guestInternalCommandPathEnv}, guestPath)
 	if err != nil {
 		return false, err
 	}
@@ -240,7 +244,7 @@ func (m *manager) chmodGuestFile(ctx context.Context, client qga.Client, guestPa
 }
 
 func (m *manager) runGuestFileCommand(ctx context.Context, client qga.Client, name string, path string, args []string, guestPath string) error {
-	status, err := m.runGuestCommandStatus(ctx, client, name, path, args, guestPath)
+	status, err := m.runGuestCommandStatus(ctx, client, name, path, args, []string{guestInternalCommandPathEnv}, guestPath)
 	if err != nil {
 		return err
 	}
@@ -252,13 +256,14 @@ func (m *manager) runGuestFileCommand(ctx context.Context, client qga.Client, na
 
 // runGuestCommandStatus runs one guest command under the manifest's guest
 // command bound; call sites must not re-wrap.
-func (m *manager) runGuestCommandStatus(ctx context.Context, client qga.Client, name string, path string, args []string, subject string) (qga.ExecStatus, error) {
+func (m *manager) runGuestCommandStatus(ctx context.Context, client qga.Client, name string, path string, args []string, env []string, subject string) (qga.ExecStatus, error) {
 	ctx, cancel := m.launchManifest.GuestCommandContext(ctx)
 	defer cancel()
 	return qga.RunCommandStatus(ctx, client, qga.ExecWait{
 		Name:          name,
 		Path:          path,
 		Args:          args,
+		Env:           env,
 		Subject:       subject,
 		CaptureOutput: true,
 	})

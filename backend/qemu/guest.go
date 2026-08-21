@@ -38,9 +38,9 @@ func (g *qgaGuest) Run(ctx context.Context, cmd *vm.GuestCmd) (*vm.GuestResult, 
 	}
 	path, args := cmd.Path, cmd.Args
 	if cmd.Dir != "" || len(cmd.Env) > 0 {
-		// QGA's guest-exec has no working directory and virtle's client
-		// does not expose its env parameter, so both are lowered onto a
-		// shell wrapper.
+		// QGA's guest-exec has no working directory, and its env parameter
+		// replaces rather than augments the inherited environment. Lower both
+		// operations onto a shell wrapper to preserve GuestCmd's semantics.
 		script := ""
 		if cmd.Dir != "" {
 			script += "cd " + shellquote.Join(cmd.Dir) + " && "

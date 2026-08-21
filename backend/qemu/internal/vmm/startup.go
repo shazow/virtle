@@ -239,7 +239,7 @@ func (m *manager) writeLaunchStats(stats *launch.Stats) {
 	}
 	stats.Timer(launch.TimerCompleted, time.Now())
 	if m.logger != nil {
-		m.logger.Debug("launch stats", "stats", stats.String())
+		m.logger.Info("launch stats", "stats", stats.String())
 	}
 }
 

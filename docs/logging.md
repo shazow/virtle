@@ -16,12 +16,13 @@ level from the number of `-v` flags:
 | Flags | Minimum level | Intended use |
 | --- | --- | --- |
 | none | `WARN` | Results, warnings, and errors |
-| `-v` | `INFO` | Useful VM and SSH lifecycle events |
+| `-v` | `INFO` | Useful VM and SSH lifecycle events, and launch stats |
 | `-vv` | `DEBUG` | Troubleshooting details and background command output |
 
-Lifecycle messages that are useful during a normal launch are logged at
-`INFO`. Detailed commands, launch statistics, allocations, and guest
-diagnostics are logged at `DEBUG`. Warnings are visible at every verbosity.
+Lifecycle messages that are useful during a normal launch, including the launch
+statistics summary, are logged at `INFO`. Detailed commands, allocations, and
+guest diagnostics are logged at `DEBUG`. Warnings are visible at every
+verbosity.
 
 The logger is created in `main` and passed into the QEMU backend at
 construction. Sub-packages derive loggers carrying a `package` attribute such
@@ -65,6 +66,7 @@ $ virtle -v launch --ssh -- echo ready
 2026/08/20 00:01:04 INFO vm started; entering foreground session package=session
 2026/08/20 00:01:04 INFO ssh command package=ssh command="ssh ... echo ready"
 ready
+2026/08/20 00:01:04 INFO launch stats package=vmm stats="total=2s ..."
 2026/08/20 00:01:04 INFO vm session ended package=session
 ```
 
@@ -82,7 +84,7 @@ $ virtle -vv launch --ssh -- echo ready
 2026/08/20 00:01:04 INFO guest is ready package=ssh
 2026/08/20 00:01:04 INFO ssh command package=ssh command="ssh ... echo ready"
 ready
-2026/08/20 00:01:04 DEBUG launch stats package=vmm stats="total=2s ..."
+2026/08/20 00:01:04 INFO launch stats package=vmm stats="total=2s ..."
 2026/08/20 00:01:04 INFO vm session ended package=session
 ```
 

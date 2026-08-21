@@ -7,6 +7,14 @@ details.
 
 ## 2026-08-21
 
+- Launch stats are now shown with a single `-v` instead of requiring `-vv`:
+
+  ```console
+  $ virtle -v launch --ssh -- echo ready
+  ...
+  2026/08/21 00:01:04 INFO launch stats package=vmm stats="started_to_boot=8ms boot_to_ssh=1.8s total=2s ssh_attempts=3"
+  ```
+
 - `workspace.mount_cwd` and other internal guest commands now search standard
   system paths, including the NixOS system profile, instead of depending on the
   QEMU Guest Agent service's restricted `PATH`.

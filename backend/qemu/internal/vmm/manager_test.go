@@ -4288,6 +4288,19 @@ func TestStartRunsUsesNamedVirtioFSRunEnv(t *testing.T) {
 	}
 }
 
+func TestWriteLaunchStatsLogsAtInfoLevel(t *testing.T) {
+	var logOutput bytes.Buffer
+	manager := &manager{
+		logger: slog.New(slog.NewTextHandler(&logOutput, &slog.HandlerOptions{Level: slog.LevelInfo})),
+	}
+
+	stats := launch.NewStats(time.Now())
+	stats.Timer(launch.TimerBootStarted, time.Now())
+	manager.writeLaunchStats(stats)
+
+	assertLaunchStatsLog(t, logOutput.String(), []string{"started_to_boot=", "total="}, nil)
+}
+
 func assertLaunchStatsLog(t *testing.T, logs string, want []string, unwanted []string) {
 	t.Helper()
 

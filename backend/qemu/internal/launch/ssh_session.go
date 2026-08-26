@@ -58,8 +58,15 @@ func RunSSHSession(ctx context.Context, session SSHSession) error {
 			return nil
 		}
 		if sshtools.ClassifyFailure(err, stderrText) == sshtools.FailureTransient {
-			if waitErr := retrySSHTransient(ctx, session, stderr, retryLog, err, stderrText, started, watchers); waitErr != nil {
-				return waitErr
+			stderr.Suppress()
+			retryLog.Log(err, stderrText)
+			if session.RemoveProcess != nil {
+				session.RemoveProcess(started)
+			}
+			if session.WaitForRetry != nil {
+				if waitErr := session.WaitForRetry(ctx, watchers); waitErr != nil {
+					return waitErr
+				}
 			}
 			continue
 		}
@@ -121,20 +128,6 @@ func startSSHAttempt(session SSHSession, argv []string, stdout, stderr io.Writer
 		session.RecordTimer(TimerSSHStarted, attemptStarted)
 	}
 	return started, watchers, nil
-}
-
-func retrySSHTransient(ctx context.Context, session SSHSession, stderr *sshtools.RetryOutput, retryLog *sshtools.RetryLogger, err error, stderrText string, started *executor.Process, watchers executor.Group) error {
-	stderr.Suppress()
-	retryLog.Log(err, stderrText)
-	if session.RemoveProcess != nil {
-		session.RemoveProcess(started)
-	}
-	if session.WaitForRetry != nil {
-		if waitErr := session.WaitForRetry(ctx, watchers); waitErr != nil {
-			return waitErr
-		}
-	}
-	return nil
 }
 
 func autoprovisionSSHSessionKey(ctx context.Context, session SSHSession, stderr *sshtools.RetryOutput, sessionLogger *slog.Logger, started *executor.Process, watchers executor.Group) ([]string, error) {

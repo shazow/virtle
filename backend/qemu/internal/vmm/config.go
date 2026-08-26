@@ -44,13 +44,6 @@ type Config struct {
 const StateVersion = "qemu-v1"
 
 func mergeConfig(base Config, override Config) Config {
-	base = mergeConfigBackends(base, override)
-	base = mergeConfigTimeouts(base, override)
-	base = mergeConfigIO(base, override)
-	return base
-}
-
-func mergeConfigBackends(base Config, override Config) Config {
 	if override.Locker != nil {
 		base.Locker = override.Locker
 	}
@@ -72,10 +65,12 @@ func mergeConfigBackends(base Config, override Config) Config {
 	if override.SSHReadyDialer != nil {
 		base.SSHReadyDialer = override.SSHReadyDialer
 	}
-	return base
-}
-
-func mergeConfigTimeouts(base Config, override Config) Config {
+	if override.Logger != nil {
+		base.Logger = override.Logger
+	}
+	if override.ConsoleOutput != nil {
+		base.ConsoleOutput = override.ConsoleOutput
+	}
 	if override.SSHReadyTimeout != 0 {
 		base.SSHReadyTimeout = override.SSHReadyTimeout
 	}
@@ -93,16 +88,6 @@ func mergeConfigTimeouts(base Config, override Config) Config {
 	}
 	if override.QMPMigrationTimeout != 0 {
 		base.QMPMigrationTimeout = override.QMPMigrationTimeout
-	}
-	return base
-}
-
-func mergeConfigIO(base Config, override Config) Config {
-	if override.Logger != nil {
-		base.Logger = override.Logger
-	}
-	if override.ConsoleOutput != nil {
-		base.ConsoleOutput = override.ConsoleOutput
 	}
 	if override.Signals != nil {
 		base.Signals = override.Signals

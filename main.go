@@ -316,7 +316,31 @@ func run(args []string) error {
 	}
 	setupLogging(opts)
 
-	return dispatchCommand(parser, opts)
+	switch parser.Active.Name {
+	case "launch":
+		return runLaunch(opts)
+	case "suspend":
+		return runSuspend(opts)
+	case "hotplug":
+		return runHotplug(opts)
+	case "rpc":
+		return runRPC(opts)
+	case "manifest":
+		switch parser.Active.Active.Name {
+		case "defaults":
+			return runManifestDefaults(opts)
+		case "validate":
+			return runManifestValidate(opts)
+		case "resolve":
+			return runManifestResolve(opts)
+		case "schema":
+			return runManifestSchema()
+		default:
+			return fmt.Errorf("unknown manifest command %q", parser.Active.Active.Name)
+		}
+	default:
+		return fmt.Errorf("unknown command %q", parser.Active.Name)
+	}
 }
 
 func handleParseError(parser *flags.Parser, opts *Options, err error) error {
@@ -347,38 +371,6 @@ func setupLogging(opts *Options) {
 	}
 	slog.SetLogLoggerLevel(level)
 	rootLogger = slog.Default()
-}
-
-func dispatchCommand(parser *flags.Parser, opts *Options) error {
-	switch parser.Active.Name {
-	case "launch":
-		return runLaunch(opts)
-	case "suspend":
-		return runSuspend(opts)
-	case "hotplug":
-		return runHotplug(opts)
-	case "rpc":
-		return runRPC(opts)
-	case "manifest":
-		return dispatchManifestCommand(parser, opts)
-	default:
-		return fmt.Errorf("unknown command %q", parser.Active.Name)
-	}
-}
-
-func dispatchManifestCommand(parser *flags.Parser, opts *Options) error {
-	switch parser.Active.Active.Name {
-	case "defaults":
-		return runManifestDefaults(opts)
-	case "validate":
-		return runManifestValidate(opts)
-	case "resolve":
-		return runManifestResolve(opts)
-	case "schema":
-		return runManifestSchema()
-	default:
-		return fmt.Errorf("unknown manifest command %q", parser.Active.Active.Name)
-	}
 }
 
 func newParserForOptions(opts *Options) *flags.Parser {

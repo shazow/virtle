@@ -111,7 +111,13 @@ func (h HostInput) withDefaults() HostInput {
 	return h
 }
 
-func (d Document) resolveCPUModelKVM(host HostInput) (string, bool) {
+func (d Document) resolveQEMU(host HostInput, hostName string, workingDir string, stateDir string, hotplugCount int) (QEMU, error) {
+	machineType := d.Machine.Type
+	graphics := resolveGraphics(d.Graphics)
+	transport := qemuTransport(machineType, d.Mounts, graphics, hotplugCount > 0)
+	virtioFSMounts := d.Mounts.VirtioFS()
+	hasVirtioFS := len(virtioFSMounts) > 0 || len(d.Hotplug.VirtioFS()) > 0
+	memorySize := d.Machine.Memory
 	cpuModel := d.Machine.CPU
 	if cpuModel == "" {
 		cpuModel = defaultCPUModel(host)
@@ -120,17 +126,6 @@ func (d Document) resolveCPUModelKVM(host HostInput) (string, bool) {
 	if d.Machine.KVM != nil {
 		enableKVM = *d.Machine.KVM
 	}
-	return cpuModel, enableKVM
-}
-
-func (d Document) resolveQEMU(host HostInput, hostName string, workingDir string, stateDir string, hotplugCount int) (QEMU, error) {
-	machineType := d.Machine.Type
-	graphics := resolveGraphics(d.Graphics)
-	transport := qemuTransport(machineType, d.Mounts, graphics, hotplugCount > 0)
-	virtioFSMounts := d.Mounts.VirtioFS()
-	hasVirtioFS := len(virtioFSMounts) > 0 || len(d.Hotplug.VirtioFS()) > 0
-	memorySize := d.Machine.Memory
-	cpuModel, enableKVM := d.resolveCPUModelKVM(host)
 	qemuRenderer, err := NewTemplateRenderer(QEMUTemplateProvider{
 		HostName:   hostName,
 		WorkingDir: workingDir,

@@ -116,7 +116,7 @@ func (h hotplugBase) attach(ctx context.Context, device manifest.HotplugDevice, 
 	if detachHost == nil {
 		detachHost = func(*executor.Process) {}
 	}
-	statePath, err := h.detachedStatePath()
+	statePath, err := h.statePathForAttach()
 	if err != nil {
 		return err
 	}
@@ -155,9 +155,9 @@ func (h hotplugBase) attach(ctx context.Context, device manifest.HotplugDevice, 
 	return nil
 }
 
-// detachedStatePath returns the state path for this hotplug after confirming
+// statePathForAttach returns the state path for this hotplug after confirming
 // no state file exists there yet.
-func (h hotplugBase) detachedStatePath() (string, error) {
+func (h hotplugBase) statePathForAttach() (string, error) {
 	statePath, err := StatePath(h.runner.StateDir, h.id)
 	if err != nil {
 		return "", err

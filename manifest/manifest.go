@@ -106,17 +106,7 @@ func specFromDocument(doc imanifest.Document) (*vm.Spec, error) {
 			})
 		}
 	}
-	files, err := specFiles(doc.WriteFiles)
-	if err != nil {
-		return nil, err
-	}
-	spec.Files = files
-	return spec, nil
-}
-
-func specFiles(writeFiles []imanifest.WriteFileInput) ([]vm.File, error) {
-	var files []vm.File
-	for _, file := range writeFiles {
+	for _, file := range doc.WriteFiles {
 		if file.Text == nil {
 			continue // host-sourced files stay a backend concern
 		}
@@ -131,7 +121,7 @@ func specFiles(writeFiles []imanifest.WriteFileInput) ([]vm.File, error) {
 			}
 			f.Mode = fs.FileMode(mode)
 		}
-		files = append(files, f)
+		spec.Files = append(spec.Files, f)
 	}
-	return files, nil
+	return spec, nil
 }

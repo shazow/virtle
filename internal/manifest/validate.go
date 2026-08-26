@@ -326,8 +326,10 @@ func validateRun(index int, run Run) error {
 	if err := validateRunTemplates(index, "env", run.Env); err != nil {
 		return err
 	}
-	if err := validateRunVars(index, run.Vars); err != nil {
-		return err
+	for key := range run.Vars {
+		if key == "CID" || key == "StateDir" || key == "Workspace" || key == "Env" {
+			return fmt.Errorf("manifest.run[%d].vars key %q is reserved", index, key)
+		}
 	}
 	if _, err := NewTemplateRenderer(RunTemplateProvider{
 		CID:      3,
@@ -339,15 +341,6 @@ func validateRun(index int, run Run) error {
 		Vars: run.Vars,
 	}); err != nil {
 		return fmt.Errorf("manifest.run[%d].vars: %w", index, err)
-	}
-	return nil
-}
-
-func validateRunVars(index int, vars map[string]any) error {
-	for key := range vars {
-		if key == "CID" || key == "StateDir" || key == "Workspace" || key == "Env" {
-			return fmt.Errorf("manifest.run[%d].vars key %q is reserved", index, key)
-		}
 	}
 	return nil
 }
@@ -439,18 +432,6 @@ func validateWriteFile(guestPath string, entry WriteFile) error {
 		return fmt.Errorf("manifest.writeFiles contains an empty guest path")
 	case !filepath.IsAbs(guestPath):
 		return fmt.Errorf("manifest.writeFiles[%q] guest path must be absolute", guestPath)
-	}
-	if err := validateWriteFileContent(guestPath, entry); err != nil {
-		return err
-	}
-	if entry.Mode != "" && !writeFileModePattern.MatchString(entry.Mode) {
-		return fmt.Errorf("manifest.writeFiles[%q].mode must match ^0?[0-7]{3}$", guestPath)
-	}
-	return nil
-}
-
-func validateWriteFileContent(guestPath string, entry WriteFile) error {
-	switch {
 	case entry.Content.Kind == WriteFileContentNone:
 		return fmt.Errorf("manifest.writeFiles[%q] must set exactly one of text or path", guestPath)
 	case entry.Content.Kind != WriteFileContentText && entry.Content.Kind != WriteFileContentPath:
@@ -459,6 +440,8 @@ func validateWriteFileContent(guestPath string, entry WriteFile) error {
 		return fmt.Errorf("manifest.writeFiles[%q].path must not be empty", guestPath)
 	case entry.WriteBack && entry.Content.Kind != WriteFileContentPath:
 		return fmt.Errorf("manifest.writeFiles[%q].writeBack requires path", guestPath)
+	case entry.Mode != "" && !writeFileModePattern.MatchString(entry.Mode):
+		return fmt.Errorf("manifest.writeFiles[%q].mode must match ^0?[0-7]{3}$", guestPath)
 	}
 	return nil
 }

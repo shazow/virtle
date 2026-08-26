@@ -41,10 +41,8 @@ func applyBalloonDefaults(memory units.MiB, device *BalloonDevice) {
 	if device.Controller == nil {
 		device.Controller = &BalloonControllerConfig{}
 	}
-	applyBalloonControllerDefaults(memory, device.Controller)
-}
 
-func applyBalloonControllerDefaults(memory units.MiB, controller *BalloonControllerConfig) {
+	controller := device.Controller
 	if controller.MaxActual == 0 {
 		controller.MaxActual = memory
 	}
@@ -131,13 +129,6 @@ func validateBalloonController(memory units.MiB, controller *BalloonControllerCo
 		return fmt.Errorf("reclaimAboveAvailableMiB must be greater than or equal to zero")
 	case controller.GrowBelowAvailable >= controller.ReclaimAboveAvailable:
 		return fmt.Errorf("growBelowAvailableMiB must be less than reclaimAboveAvailableMiB")
-	}
-
-	return validateBalloonControllerTiming(controller)
-}
-
-func validateBalloonControllerTiming(controller *BalloonControllerConfig) error {
-	switch {
 	case controller.Step <= 0:
 		return fmt.Errorf("stepMiB must be greater than zero")
 	case controller.PollInterval <= 0:

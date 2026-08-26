@@ -50,14 +50,55 @@ func buildQEMUArgs(qemu manifest.QEMU, cid int, incoming bool) ([]string, error)
 
 	args := appendQEMUBaseArgs(make([]string, 0, 64), qemu)
 
-	args, err := appendQEMUConsoleRNGArgs(config, args, qemu)
+	if qemu.Console.Enabled() {
+		chardev := "stdio,id=stdio,signal=off"
+		if qemu.Console.Interactive() {
+			chardev = "stdio,id=stdio,mux=on,signal=off"
+		}
+		args = append(args, "-chardev", chardev)
+	}
+
+	rngTransport, err := resolveQEMUTransport(qemu.Devices.RNG.Transport)
 	if err != nil {
 		return nil, err
 	}
-	args, err = appendQEMUCPUDisplayArgs(args, qemu)
-	if err != nil {
-		return nil, err
+	args = append(args, govmmQemu.RngDevice{
+		ID:        qemu.Devices.RNG.ID,
+		Transport: rngTransport,
+	}.QemuParams(config)...)
+
+	if qemu.MachineID != "" {
+		args = append(args, "-smbios", fmt.Sprintf("type=1,uuid=%s", qemu.MachineID))
 	}
+
+	if qemu.Console.Enabled() {
+		args = append(args, "-serial", "chardev:stdio")
+	}
+	if qemu.CPU.EnableKVM {
+		args = append(args, "-enable-kvm")
+	}
+
+	args = append(args, "-cpu", qemu.CPU.Model)
+
+	if qemu.Kernel.Params != "" {
+		args = append(args, "-append", qemu.Kernel.Params)
+	}
+	if qemu.Devices.I8042 {
+		args = append(args, "-device", "i8042")
+	}
+	if qemu.NoGraphicEnabled() {
+		args = append(args, "-nographic")
+	} else if !qemu.Graphics.IsZero() {
+		displayArgs, err := qemuGraphicsArgs(qemu.Graphics)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, displayArgs...)
+	}
+	if qemu.Knobs.SeccompSandbox {
+		args = append(args, "-sandbox", "on")
+	}
+
 	args, err = appendQEMUChannelArgs(args, qemu)
 	if err != nil {
 		return nil, err
@@ -129,61 +170,6 @@ func appendQEMUBaseArgs(args []string, qemu manifest.QEMU) []string {
 	args = append(args, "-kernel", qemu.Kernel.Path)
 	args = append(args, "-initrd", qemu.Kernel.InitrdPath)
 	return args
-}
-
-func appendQEMUConsoleRNGArgs(config *govmmQemu.Config, args []string, qemu manifest.QEMU) ([]string, error) {
-	if qemu.Console.Enabled() {
-		chardev := "stdio,id=stdio,signal=off"
-		if qemu.Console.Interactive() {
-			chardev = "stdio,id=stdio,mux=on,signal=off"
-		}
-		args = append(args, "-chardev", chardev)
-	}
-
-	rngTransport, err := resolveQEMUTransport(qemu.Devices.RNG.Transport)
-	if err != nil {
-		return nil, err
-	}
-	args = append(args, govmmQemu.RngDevice{
-		ID:        qemu.Devices.RNG.ID,
-		Transport: rngTransport,
-	}.QemuParams(config)...)
-
-	if qemu.MachineID != "" {
-		args = append(args, "-smbios", fmt.Sprintf("type=1,uuid=%s", qemu.MachineID))
-	}
-	return args, nil
-}
-
-func appendQEMUCPUDisplayArgs(args []string, qemu manifest.QEMU) ([]string, error) {
-	if qemu.Console.Enabled() {
-		args = append(args, "-serial", "chardev:stdio")
-	}
-	if qemu.CPU.EnableKVM {
-		args = append(args, "-enable-kvm")
-	}
-
-	args = append(args, "-cpu", qemu.CPU.Model)
-
-	if qemu.Kernel.Params != "" {
-		args = append(args, "-append", qemu.Kernel.Params)
-	}
-	if qemu.Devices.I8042 {
-		args = append(args, "-device", "i8042")
-	}
-	if qemu.NoGraphicEnabled() {
-		args = append(args, "-nographic")
-	} else if !qemu.Graphics.IsZero() {
-		displayArgs, err := qemuGraphicsArgs(qemu.Graphics)
-		if err != nil {
-			return nil, err
-		}
-		args = append(args, displayArgs...)
-	}
-	if qemu.Knobs.SeccompSandbox {
-		args = append(args, "-sandbox", "on")
-	}
-	return args, nil
 }
 
 func appendQEMUChannelArgs(args []string, qemu manifest.QEMU) ([]string, error) {

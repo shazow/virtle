@@ -116,14 +116,9 @@ func (h hotplugBase) attach(ctx context.Context, device manifest.HotplugDevice, 
 	if detachHost == nil {
 		detachHost = func(*executor.Process) {}
 	}
-	statePath, err := StatePath(h.runner.StateDir, h.id)
+	statePath, err := h.detachedStatePath()
 	if err != nil {
 		return err
-	}
-	if _, err := os.Stat(statePath); err == nil {
-		return fmt.Errorf("hotplug %q is already attached; state exists at %q", h.id, statePath)
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("stat hotplug state %q: %w", statePath, err)
 	}
 
 	var proc *executor.Process
@@ -160,20 +155,44 @@ func (h hotplugBase) attach(ctx context.Context, device manifest.HotplugDevice, 
 	return nil
 }
 
-func (h hotplugBase) detach(ctx context.Context, device manifest.HotplugDevice, cleanup func(State) error) error {
+// detachedStatePath returns the state path for this hotplug after confirming
+// no state file exists there yet.
+func (h hotplugBase) detachedStatePath() (string, error) {
 	statePath, err := StatePath(h.runner.StateDir, h.id)
 	if err != nil {
-		return err
+		return "", err
+	}
+	if _, err := os.Stat(statePath); err == nil {
+		return "", fmt.Errorf("hotplug %q is already attached; state exists at %q", h.id, statePath)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("stat hotplug state %q: %w", statePath, err)
+	}
+	return statePath, nil
+}
+
+// attachedState loads and validates the state file for this hotplug.
+func (h hotplugBase) attachedState() (string, State, error) {
+	statePath, err := StatePath(h.runner.StateDir, h.id)
+	if err != nil {
+		return "", State{}, err
 	}
 	state, err := ReadState(statePath)
 	if err != nil {
-		return err
+		return "", State{}, err
 	}
 	if state.ID != h.id {
-		return fmt.Errorf("hotplug state %q belongs to %q, not %q", statePath, state.ID, h.id)
+		return "", State{}, fmt.Errorf("hotplug state %q belongs to %q, not %q", statePath, state.ID, h.id)
 	}
 	if state.Kind != h.kind {
-		return fmt.Errorf("hotplug state %q is kind %q, not current manifest kind %q", statePath, state.Kind, h.kind)
+		return "", State{}, fmt.Errorf("hotplug state %q is kind %q, not current manifest kind %q", statePath, state.Kind, h.kind)
+	}
+	return statePath, state, nil
+}
+
+func (h hotplugBase) detach(ctx context.Context, device manifest.HotplugDevice, cleanup func(State) error) error {
+	statePath, state, err := h.attachedState()
+	if err != nil {
+		return err
 	}
 
 	guestUnmounted := device.Kind == manifest.HotplugKindVirtioFS && device.VirtioFS.Target != ""

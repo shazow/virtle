@@ -133,52 +133,81 @@ func (m *Manifest) ResolvedQEMU() (QEMU, error) {
 	resolved.Kernel.InitrdPath = m.resolvePath(resolved.Kernel.InitrdPath)
 	resolved.PassthroughArgs = append([]string(nil), resolved.PassthroughArgs...)
 
+	if err := m.resolveQEMUSockets(&resolved); err != nil {
+		return QEMU{}, err
+	}
+
+	resolved.Machine.Options = append([]string(nil), resolved.Machine.Options...)
+
+	if err := m.resolveQEMUDevices(&resolved.Devices); err != nil {
+		return QEMU{}, err
+	}
+
+	return resolved, nil
+}
+
+func (m *Manifest) resolveQEMUSockets(resolved *QEMU) error {
 	qmpSocketPath, err := m.resolveSocketPath(resolved.QMP.SocketPath)
 	if err != nil {
-		return QEMU{}, err
+		return err
 	}
 	resolved.QMP.SocketPath = qmpSocketPath
 
 	guestAgentSocketPath, err := m.resolveSocketPath(resolved.GuestAgent.SocketPath)
 	if err != nil {
-		return QEMU{}, err
+		return err
 	}
 	resolved.GuestAgent.SocketPath = guestAgentSocketPath
 
 	sshReadySocketPath, err := m.resolveSocketPath(resolved.SSHReady.SocketPath)
 	if err != nil {
-		return QEMU{}, err
+		return err
 	}
 	resolved.SSHReady.SocketPath = sshReadySocketPath
+	return nil
+}
 
-	resolved.Machine.Options = append([]string(nil), resolved.Machine.Options...)
-
-	resolved.Devices.VirtioFS = append([]QEMUVirtioFSShare(nil), resolved.Devices.VirtioFS...)
-	for i := range resolved.Devices.VirtioFS {
-		socketPath, err := m.resolveSocketPath(resolved.Devices.VirtioFS[i].SocketPath)
+func (m *Manifest) resolveQEMUDevices(devices *QEMUDevices) error {
+	devices.VirtioFS = append([]QEMUVirtioFSShare(nil), devices.VirtioFS...)
+	for i := range devices.VirtioFS {
+		socketPath, err := m.resolveSocketPath(devices.VirtioFS[i].SocketPath)
 		if err != nil {
-			return QEMU{}, err
+			return err
 		}
-		resolved.Devices.VirtioFS[i].SocketPath = socketPath
+		devices.VirtioFS[i].SocketPath = socketPath
 	}
 
-	resolved.Devices.NineP = append([]QEMUNinePShare(nil), resolved.Devices.NineP...)
-	for i := range resolved.Devices.NineP {
-		resolved.Devices.NineP[i].SourcePath = m.resolvePath(resolved.Devices.NineP[i].SourcePath)
+	devices.NineP = append([]QEMUNinePShare(nil), devices.NineP...)
+	for i := range devices.NineP {
+		devices.NineP[i].SourcePath = m.resolvePath(devices.NineP[i].SourcePath)
 	}
 
-	resolved.Devices.Block = append([]QEMUBlockDevice(nil), resolved.Devices.Block...)
-	for i := range resolved.Devices.Block {
-		resolved.Devices.Block[i].ImagePath = m.resolvePath(resolved.Devices.Block[i].ImagePath)
+	devices.Block = append([]QEMUBlockDevice(nil), devices.Block...)
+	for i := range devices.Block {
+		devices.Block[i].ImagePath = m.resolvePath(devices.Block[i].ImagePath)
 	}
 
-	resolved.Devices.Mounts = cloneQEMUMountDevices(resolved.Devices.Mounts)
-	for i := range resolved.Devices.Mounts {
-		mount := &resolved.Devices.Mounts[i]
+	if err := m.resolveQEMUMounts(devices); err != nil {
+		return err
+	}
+
+	devices.Network = append([]QEMUNetDevice(nil), devices.Network...)
+	for i := range devices.Network {
+		devices.Network[i].NetdevOptions = append([]string(nil), devices.Network[i].NetdevOptions...)
+	}
+
+	devices.Balloon = cloneBalloonDevice(devices.Balloon)
+	return nil
+}
+
+func (m *Manifest) resolveQEMUMounts(devices *QEMUDevices) error {
+	devices.Mounts = cloneQEMUMountDevices(devices.Mounts)
+	for i := range devices.Mounts {
+		mount := &devices.Mounts[i]
 		if mount.VirtioFS != nil {
 			socketPath, err := m.resolveSocketPath(mount.VirtioFS.SocketPath)
 			if err != nil {
-				return QEMU{}, err
+				return err
 			}
 			mount.VirtioFS.SocketPath = socketPath
 		}
@@ -189,15 +218,7 @@ func (m *Manifest) ResolvedQEMU() (QEMU, error) {
 			mount.Block.ImagePath = m.resolvePath(mount.Block.ImagePath)
 		}
 	}
-
-	resolved.Devices.Network = append([]QEMUNetDevice(nil), resolved.Devices.Network...)
-	for i := range resolved.Devices.Network {
-		resolved.Devices.Network[i].NetdevOptions = append([]string(nil), resolved.Devices.Network[i].NetdevOptions...)
-	}
-
-	resolved.Devices.Balloon = cloneBalloonDevice(resolved.Devices.Balloon)
-
-	return resolved, nil
+	return nil
 }
 
 func cloneQEMUMountDevices(mounts []QEMUMountDevice) []QEMUMountDevice {

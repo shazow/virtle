@@ -17,6 +17,7 @@ import (
 	runtimepkg "github.com/shazow/virtle/backend/qemu/internal/runtime"
 	controlpkg "github.com/shazow/virtle/internal/control"
 	"github.com/shazow/virtle/internal/executor"
+	"github.com/shazow/virtle/internal/manifest"
 )
 
 func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started *runningLaunch, err error) {
@@ -50,60 +51,98 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 	socketCleanupReached := false
 	cleanupRuntime := func() error { return runtimeLock.Cleanup() }
 	defer func() {
-		if err == nil {
-			return
-		}
-		if started != nil {
-			if launch.IsSavedSuspendExit(err) && started.runtime != nil {
-				started.runtime.MarkSavedSuspend()
-			}
-			err = errors.Join(err, started.Close())
-			m.writeLaunchStats(stats)
-			return
-		}
-
-		var cleanupErr error
-		cleanupErr = errors.Join(cleanupErr, processes.Close(context.Background()))
-		cleanupErr = errors.Join(cleanupErr, cleanupRuntime())
-		if qmp != nil {
-			cleanupErr = errors.Join(cleanupErr, qmp.Disconnect())
-		}
-		if socketCleanupReached {
-			cleanupErr = errors.Join(cleanupErr, launch.RemoveStaleSockets(plan.RuntimeSocketCleanupFiles()...))
-		}
-		m.writeLaunchStats(stats)
-		err = errors.Join(err, cleanupErr)
+		err = m.finishFailedLaunch(err, started, processes, qmp, socketCleanupReached, cleanupRuntime, stats, plan)
 	}()
 
+	if err := m.prepareLaunchPreflight(plan); err != nil {
+		return nil, err
+	}
+	socketCleanupReached = true
+
+	if err := m.startLaunchProcesses(launchCtx, plan, processes); err != nil {
+		return nil, err
+	}
+
+	qmp, err = m.launchQEMUWithQMP(launchCtx, plan, processes, stats)
+	if err != nil {
+		return nil, err
+	}
+
+	if plan.ResumeState != nil {
+		if err := m.restoreLaunchRuntime(launchCtx, plan, qmp); err != nil {
+			return nil, err
+		}
+		writeBackOnExit = true
+	}
+
+	started = m.newRunningLaunch(launchCtx, plan, stats, qmp, lifecycle, processes, cleanupRuntime, &writeBackOnExit)
+	if err := m.completeLaunchStartup(started, &writeBackOnExit); err != nil {
+		return nil, err
+	}
+	return started, nil
+}
+
+func (m *manager) finishFailedLaunch(err error, started *runningLaunch, processes *launch.ProcessSet, qmp qmpclient.Client, socketCleanupReached bool, cleanupRuntime func() error, stats *launch.Stats, plan *launch.Plan) error {
+	if err == nil {
+		return nil
+	}
+	if started != nil {
+		if launch.IsSavedSuspendExit(err) && started.runtime != nil {
+			started.runtime.MarkSavedSuspend()
+		}
+		err = errors.Join(err, started.Close())
+		m.writeLaunchStats(stats)
+		return err
+	}
+
+	var cleanupErr error
+	cleanupErr = errors.Join(cleanupErr, processes.Close(context.Background()))
+	cleanupErr = errors.Join(cleanupErr, cleanupRuntime())
+	if qmp != nil {
+		cleanupErr = errors.Join(cleanupErr, qmp.Disconnect())
+	}
+	if socketCleanupReached {
+		cleanupErr = errors.Join(cleanupErr, launch.RemoveStaleSockets(plan.RuntimeSocketCleanupFiles()...))
+	}
+	m.writeLaunchStats(stats)
+	return errors.Join(err, cleanupErr)
+}
+
+func (m *manager) prepareLaunchPreflight(plan *launch.Plan) error {
 	cid, err := launch.AcquireCID(plan.Manifest, plan.ResumeState, m.vsockCIDChecker)
 	if err != nil {
-		return nil, &launch.StageError{Stage: "preflight", Err: err}
+		return &launch.StageError{Stage: "preflight", Err: err}
 	}
 	qemuCmd, err := buildQEMUCommand(plan.Manifest, cid, plan.ResumeState != nil, m.consoleOutput)
 	if err != nil {
-		return nil, &launch.StageError{Stage: "preflight", Err: err}
+		return &launch.StageError{Stage: "preflight", Err: err}
 	}
 	if qemuCmd == nil {
-		return nil, &launch.StageError{Stage: "preflight", Err: errors.New("qemu command is required")}
+		return &launch.StageError{Stage: "preflight", Err: errors.New("qemu command is required")}
 	}
 	plan.CID = cid
 	plan.QEMUCommand = qemuCmd
 	if err := m.prepareRuntimeState(plan); err != nil {
-		return nil, &launch.StageError{Stage: "preflight", Err: err}
+		return &launch.StageError{Stage: "preflight", Err: err}
 	}
-	socketCleanupReached = true
+	return nil
+}
 
+func (m *manager) startLaunchProcesses(launchCtx context.Context, plan *launch.Plan, processes *launch.ProcessSet) error {
 	runProcesses, err := m.startRuns(plan.CID)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	processes.AddGroup(runProcesses)
 	if len(plan.VirtioFSSocketPaths) > 0 {
 		if err := m.waitForSockets(launchCtx, "virtiofs startup", plan.VirtioFSSocketPaths, processes.Watchers()); err != nil {
-			return nil, err
+			return err
 		}
 	}
+	return nil
+}
 
+func (m *manager) launchQEMUWithQMP(launchCtx context.Context, plan *launch.Plan, processes *launch.ProcessSet, stats *launch.Stats) (qmpclient.Client, error) {
 	stats.Timer(launch.TimerBootStarted, time.Now())
 	qemu, err := m.startQEMU(plan.QEMUCommand)
 	if err != nil {
@@ -113,15 +152,20 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 		return nil, launch.WrapFixedStage("vm startup")(errors.New("qemu process is required"))
 	}
 	processes.SetQEMU(qemu)
-	qmp, err = m.waitForQMP(launchCtx, plan.Paths.QMPSocket, processes.Watchers())
+	qmp, err := m.waitForQMP(launchCtx, plan.Paths.QMPSocket, processes.Watchers())
 	if err != nil {
-		return nil, err
+		return qmp, err
 	}
 	if qmp == nil {
 		return nil, launch.WrapFixedStage("vm startup")(errors.New("qmp client is required"))
 	}
 	stats.Timer(launch.TimerQMPReady, time.Now())
-	qemu.SetShutdown(func() error {
+	qemu.SetShutdown(m.launchShutdownFunc(plan, qemu, qmp))
+	return qmp, nil
+}
+
+func (m *manager) launchShutdownFunc(plan *launch.Plan, qemu *executor.Process, qmp qmpclient.Client) func() error {
+	return func() error {
 		// Shutdown runs during teardown, after the launch context may already
 		// be canceled, so each step gets its own context. The graceful guest
 		// shutdown is attempted only when the VM has remote control; without
@@ -163,17 +207,12 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 			quitErr = m.quitFreshQMP(ctx, plan.Paths.QMPSocket)
 		}
 		return quitErr
-	})
-
-	if plan.ResumeState != nil {
-		if err := m.restoreLaunchRuntime(launchCtx, plan, qmp); err != nil {
-			return nil, err
-		}
-		writeBackOnExit = true
 	}
+}
 
+func (m *manager) newRunningLaunch(launchCtx context.Context, plan *launch.Plan, stats *launch.Stats, qmp qmpclient.Client, lifecycle *launch.Lifecycle, processes *launch.ProcessSet, cleanupRuntime func() error, writeBackOnExit *bool) *runningLaunch {
 	suspendHandler := newLaunchSuspendHandler(m, plan.Paths.QMPSocket, qmp, plan.CID, plan.Notifier, func() bool {
-		return writeBackOnExit
+		return *writeBackOnExit
 	})
 	runtime := runtimepkg.New(runtimepkg.RuntimeConfig{
 		Manifest:        plan.Manifest,
@@ -184,7 +223,7 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 		SuspendRequests: lifecycle.Suspend(),
 		Processes:       processes,
 		WriteBack: func(ctx context.Context) error {
-			if !writeBackOnExit {
+			if !*writeBackOnExit {
 				return nil
 			}
 			return m.writeBackGuestFiles(ctx, executor.Group{})
@@ -196,7 +235,7 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 		Logger:           m.logger,
 		SavedSuspendExit: launch.IsSavedSuspendExit,
 	})
-	started = &runningLaunch{
+	return &runningLaunch{
 		ctx:            launchCtx,
 		runtime:        runtime,
 		plan:           plan,
@@ -206,31 +245,43 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 		suspendHandler: suspendHandler,
 		processes:      processes,
 	}
-	runtime.SetReady()
-	if _, err := runtime.StartControl(launchCtx, controlpkg.Handlers{
-		Guest:   m.guestFeature(plan.Paths.GuestAgentSocket, processes),
-		Hotplug: m.hotplugFeature(runtime.QMP()),
+}
+
+func (m *manager) completeLaunchStartup(started *runningLaunch, writeBackOnExit *bool) error {
+	launchCtx := started.ctx
+	plan := started.plan
+	started.runtime.SetReady()
+	if _, err := started.runtime.StartControl(launchCtx, controlpkg.Handlers{
+		Guest:   m.guestFeature(plan.Paths.GuestAgentSocket, started.processes),
+		Hotplug: m.hotplugFeature(started.runtime.QMP()),
 	}); err != nil {
-		return nil, launch.WrapFixedStage("control startup")(err)
+		return launch.WrapFixedStage("control startup")(err)
 	}
-	if err := launch.HandleQueuedSuspend(launchCtx, lifecycle, suspendHandler.Handle); err != nil {
-		return nil, err
+	if err := launch.HandleQueuedSuspend(launchCtx, started.lifecycle, started.suspendHandler.Handle); err != nil {
+		return err
 	}
 	if plan.ResumeState == nil {
-		if plan.Options.HasRemoteControl {
-			if err := m.writeGuestFiles(launchCtx, stats, processes.Watchers()); err != nil {
-				return nil, err
-			}
-		} else if len(plan.Manifest.ResolvedWriteFiles()) > 0 || plan.Manifest.Workspace.MountCWD {
-			return nil, &launch.StageError{Stage: "guest agent", Err: errors.New("guest file writes require remote control (write_files, workspace.mount_cwd)")}
+		if err := m.writeInitialGuestFiles(launchCtx, plan, started.stats, started.processes); err != nil {
+			return err
 		}
-		stats.Timer(launch.TimerFilesReady, time.Now())
-		writeBackOnExit = plan.Options.HasRemoteControl
+		*writeBackOnExit = plan.Options.HasRemoteControl
 	}
-	if task := balloon.ControllerTask(qmp, plan.Manifest.QEMU.Devices.Balloon, plan.Notifier, m.balloonLogger); task != nil {
-		processes.StartTasks(launchCtx, task)
+	if task := balloon.ControllerTask(started.qmp, plan.Manifest.QEMU.Devices.Balloon, plan.Notifier, m.balloonLogger); task != nil {
+		started.processes.StartTasks(launchCtx, task)
 	}
-	return started, nil
+	return nil
+}
+
+func (m *manager) writeInitialGuestFiles(launchCtx context.Context, plan *launch.Plan, stats *launch.Stats, processes *launch.ProcessSet) error {
+	if plan.Options.HasRemoteControl {
+		if err := m.writeGuestFiles(launchCtx, stats, processes.Watchers()); err != nil {
+			return err
+		}
+	} else if len(plan.Manifest.ResolvedWriteFiles()) > 0 || plan.Manifest.Workspace.MountCWD {
+		return &launch.StageError{Stage: "guest agent", Err: errors.New("guest file writes require remote control (write_files, workspace.mount_cwd)")}
+	}
+	stats.Timer(launch.TimerFilesReady, time.Now())
+	return nil
 }
 
 func (m *manager) writeLaunchStats(stats *launch.Stats) {
@@ -261,6 +312,25 @@ func (m *manager) prepareRuntimeState(plan *launch.Plan) error {
 		}
 	}
 
+	if err := createRuntimeDirectories(plan); err != nil {
+		return err
+	}
+	if err := checkExternalVirtioFSSockets(plan.ExternalVirtioFSSocketPaths); err != nil {
+		return err
+	}
+	for _, path := range plan.VolumeImagePaths {
+		dir := filepath.Dir(path)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("create directory %q: %w", dir, err)
+		}
+	}
+	if err := launch.RemoveStaleSockets(plan.RuntimeSocketCleanupFiles()...); err != nil {
+		return err
+	}
+	return m.createVolumeImages(plan.Volumes)
+}
+
+func createRuntimeDirectories(plan *launch.Plan) error {
 	for _, dir := range plan.Manifest.ResolvedPersistenceDirectories() {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("create directory %q: %w", dir, err)
@@ -272,7 +342,11 @@ func (m *manager) prepareRuntimeState(plan *launch.Plan) error {
 			return fmt.Errorf("create directory %q: %w", dir, err)
 		}
 	}
-	for _, path := range plan.ExternalVirtioFSSocketPaths {
+	return nil
+}
+
+func checkExternalVirtioFSSockets(paths []string) error {
+	for _, path := range paths {
 		info, err := os.Stat(path)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
@@ -284,16 +358,11 @@ func (m *manager) prepareRuntimeState(plan *launch.Plan) error {
 			return fmt.Errorf("external virtiofs socket %q is not a socket", path)
 		}
 	}
-	for _, path := range plan.VolumeImagePaths {
-		dir := filepath.Dir(path)
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return fmt.Errorf("create directory %q: %w", dir, err)
-		}
-	}
-	if err := launch.RemoveStaleSockets(plan.RuntimeSocketCleanupFiles()...); err != nil {
-		return err
-	}
-	for _, volume := range plan.Volumes {
+	return nil
+}
+
+func (m *manager) createVolumeImages(volumes []manifest.Volume) error {
+	for _, volume := range volumes {
 		if !volume.AutoCreate {
 			continue
 		}

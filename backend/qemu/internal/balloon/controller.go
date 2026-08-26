@@ -262,70 +262,93 @@ func evaluate(
 	actualBytes int64,
 	stats guestStatsSample,
 ) (int64, bool, error) {
-	staleAfter := 2 * config.PollInterval
-
-	if stats.LastUpdate.IsZero() {
-		if now.Sub(state.startedAt) >= staleAfter {
-			return 0, false, errGuestStatsUnavailable
-		}
-		return 0, false, nil
+	if ok, err := statsUsable(config, state, now, stats); !ok {
+		return 0, false, err
 	}
 
-	if now.Sub(stats.LastUpdate) > staleAfter {
-		return 0, false, errGuestStatsStale
-	}
-
-	if !stats.HasAvailableMemory {
-		if now.Sub(state.startedAt) >= staleAfter {
-			return 0, false, errGuestStatsUnavailable
-		}
-		return 0, false, nil
-	}
-
-	minActualBytes := config.MinActual.Bytes()
-	maxActualBytes := config.MaxActual.Bytes()
-	stepBytes := config.Step.Bytes()
-	growBelowBytes := config.GrowBelowAvailable.Bytes()
-	reclaimAboveBytes := config.ReclaimAboveAvailable.Bytes()
-
-	if stats.AvailableMemoryBytes < growBelowBytes {
+	if stats.AvailableMemoryBytes < config.GrowBelowAvailable.Bytes() {
 		state.aboveThresholdSince = time.Time{}
-		target := actualBytes + stepBytes
-		if target > maxActualBytes {
-			target = maxActualBytes
-		}
-		if target <= actualBytes {
-			return 0, false, nil
-		}
-		return target, true, nil
+		target, ok := evaluateGrow(config, actualBytes)
+		return target, ok, nil
 	}
 
-	if stats.AvailableMemoryBytes > reclaimAboveBytes {
-		if actualBytes <= minActualBytes {
-			state.aboveThresholdSince = time.Time{}
-			return 0, false, nil
-		}
-		if state.aboveThresholdSince.IsZero() {
-			state.aboveThresholdSince = now
-			return 0, false, nil
-		}
-		if now.Sub(state.aboveThresholdSince) < config.ReclaimHoldoff {
-			return 0, false, nil
-		}
-
-		state.aboveThresholdSince = time.Time{}
-		target := actualBytes - stepBytes
-		if target < minActualBytes {
-			target = minActualBytes
-		}
-		if target >= actualBytes {
-			return 0, false, nil
-		}
-		return target, true, nil
+	if stats.AvailableMemoryBytes > config.ReclaimAboveAvailable.Bytes() {
+		target, ok := evaluateReclaim(config, state, now, actualBytes)
+		return target, ok, nil
 	}
 
 	state.aboveThresholdSince = time.Time{}
 	return 0, false, nil
+}
+
+// statsUsable reports whether the guest stats sample is fresh enough to act
+// on. A missing sample is tolerated until staleAfter has passed since startup.
+func statsUsable(
+	config manifest.BalloonControllerConfig,
+	state *controllerState,
+	now time.Time,
+	stats guestStatsSample,
+) (bool, error) {
+	staleAfter := 2 * config.PollInterval
+
+	if stats.LastUpdate.IsZero() {
+		return false, unavailableAfter(state, now, staleAfter)
+	}
+	if now.Sub(stats.LastUpdate) > staleAfter {
+		return false, errGuestStatsStale
+	}
+	if !stats.HasAvailableMemory {
+		return false, unavailableAfter(state, now, staleAfter)
+	}
+	return true, nil
+}
+
+func unavailableAfter(state *controllerState, now time.Time, staleAfter time.Duration) error {
+	if now.Sub(state.startedAt) >= staleAfter {
+		return errGuestStatsUnavailable
+	}
+	return nil
+}
+
+func evaluateGrow(config manifest.BalloonControllerConfig, actualBytes int64) (int64, bool) {
+	target := actualBytes + config.Step.Bytes()
+	if maxActualBytes := config.MaxActual.Bytes(); target > maxActualBytes {
+		target = maxActualBytes
+	}
+	if target <= actualBytes {
+		return 0, false
+	}
+	return target, true
+}
+
+func evaluateReclaim(
+	config manifest.BalloonControllerConfig,
+	state *controllerState,
+	now time.Time,
+	actualBytes int64,
+) (int64, bool) {
+	minActualBytes := config.MinActual.Bytes()
+	if actualBytes <= minActualBytes {
+		state.aboveThresholdSince = time.Time{}
+		return 0, false
+	}
+	if state.aboveThresholdSince.IsZero() {
+		state.aboveThresholdSince = now
+		return 0, false
+	}
+	if now.Sub(state.aboveThresholdSince) < config.ReclaimHoldoff {
+		return 0, false
+	}
+
+	state.aboveThresholdSince = time.Time{}
+	target := actualBytes - config.Step.Bytes()
+	if target < minActualBytes {
+		target = minActualBytes
+	}
+	if target >= actualBytes {
+		return 0, false
+	}
+	return target, true
 }
 
 func hasQOMProperty(props []objectPropertyInfo, name string) bool {

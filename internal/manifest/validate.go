@@ -51,6 +51,59 @@ func (m *Manifest) applyDefaults() {
 func (m *Manifest) Validate() error {
 	m.applyDefaults()
 
+	if err := m.validateRequired(); err != nil {
+		return err
+	}
+	if err := m.validateGuestAgent(); err != nil {
+		return err
+	}
+	if err := m.validateVSockAndTransports(); err != nil {
+		return err
+	}
+
+	if err := m.validateRuns(); err != nil {
+		return err
+	}
+	if err := m.validateHotplugs(); err != nil {
+		return err
+	}
+	if err := m.validateCleanupFiles(); err != nil {
+		return err
+	}
+
+	if err := m.validateDevices(); err != nil {
+		return err
+	}
+
+	if err := validateWriteFiles(m.WriteFiles); err != nil {
+		return err
+	}
+	if err := m.validateVolumes(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (m *Manifest) validateRuns() error {
+	for i, run := range m.Run {
+		if err := validateRun(i, run); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *Manifest) validateVolumes() error {
+	for i, volume := range m.Volumes {
+		if err := validateVolume(i, volume); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *Manifest) validateRequired() error {
 	switch {
 	case m == nil:
 		return fmt.Errorf("manifest is nil")
@@ -68,6 +121,12 @@ func (m *Manifest) Validate() error {
 		return fmt.Errorf("manifest.qemu.binaryPath is required")
 	case m.QEMU.QMP.SocketPath == "":
 		return fmt.Errorf("manifest.qemu.qmp.socketPath is required")
+	}
+	return nil
+}
+
+func (m *Manifest) validateGuestAgent() error {
+	switch {
 	case m.QEMU.GuestAgent.CommandTimeout < 0:
 		return fmt.Errorf("manifest.qemu.guestAgent.commandTimeout must be greater than or equal to zero")
 	case m.QEMU.GuestAgent.ShutdownTimeout < 0:
@@ -78,6 +137,12 @@ func (m *Manifest) Validate() error {
 		return fmt.Errorf("manifest.qemu.guestAgent.socketPath is required when shutdown_exec is set")
 	case len(m.WriteFiles) > 0 && m.QEMU.GuestAgent.SocketPath == "":
 		return fmt.Errorf("manifest.qemu.guestAgent.socketPath is required when manifest.writeFiles is set")
+	}
+	return nil
+}
+
+func (m *Manifest) validateVSockAndTransports() error {
+	switch {
 	case m.VSock.CIDRange.Start < defaultVSockCIDStart:
 		return fmt.Errorf("manifest.vsock.cidRange.start must be at least %d", defaultVSockCIDStart)
 	case m.VSock.CIDRange.End < m.VSock.CIDRange.Start:
@@ -91,12 +156,10 @@ func (m *Manifest) Validate() error {
 	if !m.QEMU.Graphics.IsZero() && !validQEMUGraphicsBackend(m.QEMU.Graphics.Backend) {
 		return fmt.Errorf("manifest.qemu.graphics.backend must be one of gtk or cocoa")
 	}
+	return nil
+}
 
-	for i, run := range m.Run {
-		if err := validateRun(i, run); err != nil {
-			return err
-		}
-	}
+func (m *Manifest) validateHotplugs() error {
 	if m.QEMU.Hotplug.PCIEPorts < 0 {
 		return fmt.Errorf("manifest.qemu.hotplug.pciePorts must be greater than or equal to zero")
 	}
@@ -116,12 +179,34 @@ func (m *Manifest) Validate() error {
 		}
 		hotplugIDs[hotplug.ID] = i
 	}
+	return nil
+}
+
+func (m *Manifest) validateCleanupFiles() error {
 	for i, path := range m.CleanupFiles {
 		if path == "" {
 			return fmt.Errorf("manifest.cleanupFiles[%d] must not be empty", i)
 		}
 	}
+	return nil
+}
 
+func (m *Manifest) validateDevices() error {
+	if err := m.validateShareDevices(); err != nil {
+		return err
+	}
+	if err := m.validateBlockDevices(); err != nil {
+		return err
+	}
+	for i, netdev := range m.QEMU.Devices.Network {
+		if !validQEMUTransport(netdev.Transport) {
+			return fmt.Errorf("manifest.qemu.devices.network[%d].transport must be one of pci, mmio, or ccw", i)
+		}
+	}
+	return validateBalloonDevice(m.QEMU.Memory.Size, m.QEMU.Devices.Balloon)
+}
+
+func (m *Manifest) validateShareDevices() error {
 	for i, share := range m.QEMU.Devices.VirtioFS {
 		switch {
 		case share.SocketPath == "":
@@ -136,7 +221,10 @@ func (m *Manifest) Validate() error {
 			return fmt.Errorf("manifest.qemu.devices.9p[%d].transport must be one of pci, mmio, or ccw", i)
 		}
 	}
+	return nil
+}
 
+func (m *Manifest) validateBlockDevices() error {
 	for i, block := range m.QEMU.Devices.Block {
 		if !validQEMUTransport(block.Transport) {
 			return fmt.Errorf("manifest.qemu.devices.block[%d].transport must be one of pci, mmio, or ccw", i)
@@ -151,38 +239,25 @@ func (m *Manifest) Validate() error {
 			return fmt.Errorf("manifest.qemu.devices.mounts[%d].block.format must be raw or qcow2", i)
 		}
 	}
+	return nil
+}
 
-	for i, netdev := range m.QEMU.Devices.Network {
-		if !validQEMUTransport(netdev.Transport) {
-			return fmt.Errorf("manifest.qemu.devices.network[%d].transport must be one of pci, mmio, or ccw", i)
-		}
+func validateVolume(index int, volume Volume) error {
+	if !volume.AutoCreate {
+		return nil
 	}
-
-	if err := validateBalloonDevice(m.QEMU.Memory.Size, m.QEMU.Devices.Balloon); err != nil {
-		return err
+	switch {
+	case volume.ImagePath == "":
+		return fmt.Errorf("manifest.mounts.image[%d].source is required", index)
+	case volume.Size <= 0:
+		return fmt.Errorf("manifest.mounts.image[%d].image.size must be greater than zero when image.create is true", index)
+	case volume.Size < minAutoVolumeSize:
+		return fmt.Errorf("manifest.mounts.image[%d].image.size must be at least %d when image.create is true", index, minAutoVolumeSize)
+	case volume.FSType != defaultVolumeFSType:
+		return fmt.Errorf("manifest.mounts.image[%d].image.fs must be %q when image.create is true", index, defaultVolumeFSType)
+	case len(volume.MkfsExtraArgs) > 0:
+		return fmt.Errorf("manifest.mounts.image[%d].image.mkfs_extra_args is not supported when image.create is true", index)
 	}
-
-	if err := validateWriteFiles(m.WriteFiles); err != nil {
-		return err
-	}
-	for i, volume := range m.Volumes {
-		if volume.AutoCreate && volume.ImagePath == "" {
-			return fmt.Errorf("manifest.mounts.image[%d].source is required", i)
-		}
-		if volume.AutoCreate && volume.Size <= 0 {
-			return fmt.Errorf("manifest.mounts.image[%d].image.size must be greater than zero when image.create is true", i)
-		}
-		if volume.AutoCreate && volume.Size < minAutoVolumeSize {
-			return fmt.Errorf("manifest.mounts.image[%d].image.size must be at least %d when image.create is true", i, minAutoVolumeSize)
-		}
-		if volume.AutoCreate && volume.FSType != defaultVolumeFSType {
-			return fmt.Errorf("manifest.mounts.image[%d].image.fs must be %q when image.create is true", i, defaultVolumeFSType)
-		}
-		if volume.AutoCreate && len(volume.MkfsExtraArgs) > 0 {
-			return fmt.Errorf("manifest.mounts.image[%d].image.mkfs_extra_args is not supported when image.create is true", i)
-		}
-	}
-
 	return nil
 }
 
@@ -195,31 +270,45 @@ func validateHotplug(index int, device HotplugDevice) error {
 	}
 	switch device.Kind {
 	case HotplugKindVirtioFS:
-		if device.VirtioFS.Source == "" {
-			return fmt.Errorf("manifest.hotplug[%d].virtiofs.source is required", index)
-		}
-		if device.VirtioFS.SocketPath == "" {
-			return fmt.Errorf("manifest.hotplug[%d].virtiofs.socket is required", index)
-		}
-		if device.VirtioFS.Bin == "" {
-			return fmt.Errorf("manifest.hotplug[%d].virtiofs.bin is required", index)
-		}
+		return validateHotplugVirtioFS(index, device)
 	case HotplugKindNet:
-		if device.Net.Backend != "user" {
-			return fmt.Errorf("manifest.hotplug[%d].net.backend must be user", index)
-		}
-		if device.Net.MAC == "" {
-			return fmt.Errorf("manifest.hotplug[%d].net.mac is required", index)
-		}
+		return validateHotplugNet(index, device)
 	case HotplugKindBlock:
-		if device.Block.ImagePath == "" {
-			return fmt.Errorf("manifest.hotplug[%d].block.image is required", index)
-		}
-		if !validImageFormat(device.Block.Format) {
-			return fmt.Errorf("manifest.hotplug[%d].block.format must be raw or qcow2", index)
-		}
+		return validateHotplugBlock(index, device)
 	default:
 		return fmt.Errorf("manifest.hotplug[%d].kind is required", index)
+	}
+}
+
+func validateHotplugVirtioFS(index int, device HotplugDevice) error {
+	if device.VirtioFS.Source == "" {
+		return fmt.Errorf("manifest.hotplug[%d].virtiofs.source is required", index)
+	}
+	if device.VirtioFS.SocketPath == "" {
+		return fmt.Errorf("manifest.hotplug[%d].virtiofs.socket is required", index)
+	}
+	if device.VirtioFS.Bin == "" {
+		return fmt.Errorf("manifest.hotplug[%d].virtiofs.bin is required", index)
+	}
+	return nil
+}
+
+func validateHotplugNet(index int, device HotplugDevice) error {
+	if device.Net.Backend != "user" {
+		return fmt.Errorf("manifest.hotplug[%d].net.backend must be user", index)
+	}
+	if device.Net.MAC == "" {
+		return fmt.Errorf("manifest.hotplug[%d].net.mac is required", index)
+	}
+	return nil
+}
+
+func validateHotplugBlock(index int, device HotplugDevice) error {
+	if device.Block.ImagePath == "" {
+		return fmt.Errorf("manifest.hotplug[%d].block.image is required", index)
+	}
+	if !validImageFormat(device.Block.Format) {
+		return fmt.Errorf("manifest.hotplug[%d].block.format must be raw or qcow2", index)
 	}
 	return nil
 }
@@ -237,10 +326,8 @@ func validateRun(index int, run Run) error {
 	if err := validateRunTemplates(index, "env", run.Env); err != nil {
 		return err
 	}
-	for key := range run.Vars {
-		if key == "CID" || key == "StateDir" || key == "Workspace" || key == "Env" {
-			return fmt.Errorf("manifest.run[%d].vars key %q is reserved", index, key)
-		}
+	if err := validateRunVars(index, run.Vars); err != nil {
+		return err
 	}
 	if _, err := NewTemplateRenderer(RunTemplateProvider{
 		CID:      3,
@@ -252,6 +339,15 @@ func validateRun(index int, run Run) error {
 		Vars: run.Vars,
 	}); err != nil {
 		return fmt.Errorf("manifest.run[%d].vars: %w", index, err)
+	}
+	return nil
+}
+
+func validateRunVars(index int, vars map[string]any) error {
+	for key := range vars {
+		if key == "CID" || key == "StateDir" || key == "Workspace" || key == "Env" {
+			return fmt.Errorf("manifest.run[%d].vars key %q is reserved", index, key)
+		}
 	}
 	return nil
 }
@@ -270,41 +366,49 @@ func validateRunTemplates(index int, field string, values []string) error {
 }
 
 func templateUsesBareWorkspace(node parse.Node) bool {
+	if templateIsBareWorkspace(node) {
+		return true
+	}
+	for _, child := range templateChildNodes(node) {
+		if templateUsesBareWorkspace(child) {
+			return true
+		}
+	}
+	return false
+}
+
+func templateIsBareWorkspace(node parse.Node) bool {
 	switch node := node.(type) {
-	case nil:
-		return false
-	case *parse.ListNode:
-		for _, child := range node.Nodes {
-			if templateUsesBareWorkspace(child) {
-				return true
-			}
-		}
-	case *parse.ActionNode:
-		return templateUsesBareWorkspace(node.Pipe)
-	case *parse.IfNode:
-		return templateUsesBareWorkspace(node.Pipe) || templateUsesBareWorkspace(node.List) || templateUsesBareWorkspace(node.ElseList)
-	case *parse.RangeNode:
-		return templateUsesBareWorkspace(node.Pipe) || templateUsesBareWorkspace(node.List) || templateUsesBareWorkspace(node.ElseList)
-	case *parse.WithNode:
-		return templateUsesBareWorkspace(node.Pipe) || templateUsesBareWorkspace(node.List) || templateUsesBareWorkspace(node.ElseList)
-	case *parse.PipeNode:
-		for _, command := range node.Cmds {
-			if templateUsesBareWorkspace(command) {
-				return true
-			}
-		}
-	case *parse.CommandNode:
-		for _, arg := range node.Args {
-			if templateUsesBareWorkspace(arg) {
-				return true
-			}
-		}
 	case *parse.FieldNode:
 		return len(node.Ident) == 1 && node.Ident[0] == "Workspace"
 	case *parse.VariableNode:
 		return len(node.Ident) == 1 && node.Ident[0] == "Workspace"
 	}
 	return false
+}
+
+func templateChildNodes(node parse.Node) []parse.Node {
+	switch node := node.(type) {
+	case *parse.ListNode:
+		return node.Nodes
+	case *parse.ActionNode:
+		return []parse.Node{node.Pipe}
+	case *parse.IfNode:
+		return []parse.Node{node.Pipe, node.List, node.ElseList}
+	case *parse.RangeNode:
+		return []parse.Node{node.Pipe, node.List, node.ElseList}
+	case *parse.WithNode:
+		return []parse.Node{node.Pipe, node.List, node.ElseList}
+	case *parse.PipeNode:
+		children := make([]parse.Node, 0, len(node.Cmds))
+		for _, command := range node.Cmds {
+			children = append(children, command)
+		}
+		return children
+	case *parse.CommandNode:
+		return node.Args
+	}
+	return nil
 }
 
 func (m *Manifest) SSHRetryDelay(fallback time.Duration) time.Duration {
@@ -322,23 +426,39 @@ func validateWriteFiles(files WriteFiles) error {
 	sort.Strings(paths)
 
 	for _, guestPath := range paths {
-		entry := files[guestPath]
-		switch {
-		case guestPath == "":
-			return fmt.Errorf("manifest.writeFiles contains an empty guest path")
-		case !filepath.IsAbs(guestPath):
-			return fmt.Errorf("manifest.writeFiles[%q] guest path must be absolute", guestPath)
-		case entry.Content.Kind == WriteFileContentNone:
-			return fmt.Errorf("manifest.writeFiles[%q] must set exactly one of text or path", guestPath)
-		case entry.Content.Kind != WriteFileContentText && entry.Content.Kind != WriteFileContentPath:
-			return fmt.Errorf("manifest.writeFiles[%q] must set exactly one of text or path", guestPath)
-		case entry.Content.Kind == WriteFileContentPath && entry.Content.Path == "":
-			return fmt.Errorf("manifest.writeFiles[%q].path must not be empty", guestPath)
-		case entry.WriteBack && entry.Content.Kind != WriteFileContentPath:
-			return fmt.Errorf("manifest.writeFiles[%q].writeBack requires path", guestPath)
-		case entry.Mode != "" && !writeFileModePattern.MatchString(entry.Mode):
-			return fmt.Errorf("manifest.writeFiles[%q].mode must match ^0?[0-7]{3}$", guestPath)
+		if err := validateWriteFile(guestPath, files[guestPath]); err != nil {
+			return err
 		}
+	}
+	return nil
+}
+
+func validateWriteFile(guestPath string, entry WriteFile) error {
+	switch {
+	case guestPath == "":
+		return fmt.Errorf("manifest.writeFiles contains an empty guest path")
+	case !filepath.IsAbs(guestPath):
+		return fmt.Errorf("manifest.writeFiles[%q] guest path must be absolute", guestPath)
+	}
+	if err := validateWriteFileContent(guestPath, entry); err != nil {
+		return err
+	}
+	if entry.Mode != "" && !writeFileModePattern.MatchString(entry.Mode) {
+		return fmt.Errorf("manifest.writeFiles[%q].mode must match ^0?[0-7]{3}$", guestPath)
+	}
+	return nil
+}
+
+func validateWriteFileContent(guestPath string, entry WriteFile) error {
+	switch {
+	case entry.Content.Kind == WriteFileContentNone:
+		return fmt.Errorf("manifest.writeFiles[%q] must set exactly one of text or path", guestPath)
+	case entry.Content.Kind != WriteFileContentText && entry.Content.Kind != WriteFileContentPath:
+		return fmt.Errorf("manifest.writeFiles[%q] must set exactly one of text or path", guestPath)
+	case entry.Content.Kind == WriteFileContentPath && entry.Content.Path == "":
+		return fmt.Errorf("manifest.writeFiles[%q].path must not be empty", guestPath)
+	case entry.WriteBack && entry.Content.Kind != WriteFileContentPath:
+		return fmt.Errorf("manifest.writeFiles[%q].writeBack requires path", guestPath)
 	}
 	return nil
 }

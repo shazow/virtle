@@ -33,29 +33,54 @@ func specDocument(spec *vm.Spec, cfg Config, base *imanifest.Document) (imanifes
 		doc.HostName = cfg.HostName
 	}
 
+	if err := applySpecWorkingDir(&doc, spec, base); err != nil {
+		return imanifest.Document{}, err
+	}
+	if err := applySpecMachine(&doc, spec, base); err != nil {
+		return imanifest.Document{}, err
+	}
+	if err := applySpecKernel(&doc, spec); err != nil {
+		return imanifest.Document{}, err
+	}
+	applyConfigKnobs(&doc, cfg)
+
+	if err := applySpecDevices(&doc, spec); err != nil {
+		return imanifest.Document{}, err
+	}
+	return doc, nil
+}
+
+// applySpecWorkingDir resolves the document's working directory from the
+// spec, creating a temporary one for a bare spec with no base manifest.
+func applySpecWorkingDir(doc *imanifest.Document, spec *vm.Spec, base *imanifest.Document) error {
 	dir := spec.Dir
 	if dir == "" && base == nil {
 		tmp, err := os.MkdirTemp("", "virtle-")
 		if err != nil {
-			return imanifest.Document{}, fmt.Errorf("create working directory: %w", err)
+			return fmt.Errorf("create working directory: %w", err)
 		}
 		dir = tmp
 	}
 	if dir != "" {
 		abs, err := filepath.Abs(dir)
 		if err != nil {
-			return imanifest.Document{}, fmt.Errorf("resolve working directory %q: %w", dir, err)
+			return fmt.Errorf("resolve working directory %q: %w", dir, err)
 		}
 		doc.WorkingDir = abs
 	}
 	if !filepath.IsAbs(doc.WorkingDir) {
 		abs, err := filepath.Abs(doc.WorkingDir)
 		if err != nil {
-			return imanifest.Document{}, fmt.Errorf("resolve working directory %q: %w", doc.WorkingDir, err)
+			return fmt.Errorf("resolve working directory %q: %w", doc.WorkingDir, err)
 		}
 		doc.WorkingDir = abs
 	}
+	return nil
+}
 
+// applySpecMachine lowers the spec's CPU and memory sizing onto the
+// document, defaulting both for a bare spec with no base manifest.
+func applySpecMachine(doc *imanifest.Document, spec *vm.Spec, base *imanifest.Document) error {
 	cpus := spec.CPUs
 	if cpus == 0 && base == nil && doc.Machine.VCPU == 0 {
 		cpus = runtime.NumCPU()
@@ -70,32 +95,49 @@ func specDocument(spec *vm.Spec, cfg Config, base *imanifest.Document) (imanifes
 	}
 	if memory != 0 {
 		if memory%units.Mebibyte != 0 {
-			return imanifest.Document{}, fmt.Errorf("memory size %s is not MiB-aligned", memory)
+			return fmt.Errorf("memory size %s is not MiB-aligned", memory)
 		}
 		doc.Machine.Memory = iunits.MiB(memory.Mebibytes())
 	}
+	return nil
+}
 
+// applySpecKernel lowers the spec's kernel boot source onto the document.
+func applySpecKernel(doc *imanifest.Document, spec *vm.Spec) error {
 	if spec.Kernel != (vm.Kernel{}) {
 		doc.Kernel.Path = spec.Kernel.Path
 		doc.Kernel.InitrdPath = spec.Kernel.Initrd
 		doc.Kernel.Params = strings.Fields(spec.Kernel.Cmdline)
 	}
 	if doc.Kernel.Path == "" {
-		return imanifest.Document{}, fmt.Errorf("the qemu backend requires a direct kernel boot source (vm.Spec.Kernel)")
+		return fmt.Errorf("the qemu backend requires a direct kernel boot source (vm.Spec.Kernel)")
 	}
+	return nil
+}
 
-	// Backend knobs.
-	if cfg.Binary != "" || len(cfg.ExtraArgs) > 0 {
-		binary := cfg.Binary
-		if binary == "" && len(doc.QEMU.Exec) > 0 {
-			binary = doc.QEMU.Exec[0]
-		}
-		exec := []string{}
-		if binary != "" {
-			exec = append(exec, binary)
-		}
-		doc.QEMU.Exec = append(exec, cfg.ExtraArgs...)
+// applyConfigKnobs lowers the backend Config's knobs onto the document.
+func applyConfigKnobs(doc *imanifest.Document, cfg Config) {
+	applyConfigExec(doc, cfg)
+	applyConfigMachine(doc, cfg)
+	applyConfigRuntime(doc, cfg)
+}
+
+func applyConfigExec(doc *imanifest.Document, cfg Config) {
+	if cfg.Binary == "" && len(cfg.ExtraArgs) == 0 {
+		return
 	}
+	binary := cfg.Binary
+	if binary == "" && len(doc.QEMU.Exec) > 0 {
+		binary = doc.QEMU.Exec[0]
+	}
+	exec := []string{}
+	if binary != "" {
+		exec = append(exec, binary)
+	}
+	doc.QEMU.Exec = append(exec, cfg.ExtraArgs...)
+}
+
+func applyConfigMachine(doc *imanifest.Document, cfg Config) {
 	if cfg.Machine != "" {
 		doc.Machine.Type = cfg.Machine
 	}
@@ -114,6 +156,9 @@ func specDocument(spec *vm.Spec, cfg Config, base *imanifest.Document) (imanifes
 		kvm := *cfg.KVM
 		doc.Machine.KVM = &kvm
 	}
+}
+
+func applyConfigRuntime(doc *imanifest.Document, cfg Config) {
 	if cfg.Console != "" {
 		doc.Kernel.Serial = string(cfg.Console)
 	}
@@ -129,17 +174,25 @@ func specDocument(spec *vm.Spec, cfg Config, base *imanifest.Document) (imanifes
 	if cfg.HotplugPorts > doc.QEMU.HotplugPorts {
 		doc.QEMU.HotplugPorts = cfg.HotplugPorts
 	}
-
-	if err := applySpecDevices(&doc, spec); err != nil {
-		return imanifest.Document{}, err
-	}
-	return doc, nil
 }
 
 // applySpecDevices appends Shares, Disks, Ports, and Files from the spec
 // that the document does not already carry (matched by tag/path), so a
 // spec produced by manifest.Load overlays cleanly instead of duplicating.
 func applySpecDevices(doc *imanifest.Document, spec *vm.Spec) error {
+	if err := applySpecShares(doc, spec); err != nil {
+		return err
+	}
+	if err := applySpecDisks(doc, spec); err != nil {
+		return err
+	}
+	if err := applySpecPorts(doc, spec); err != nil {
+		return err
+	}
+	return applySpecFiles(doc, spec)
+}
+
+func applySpecShares(doc *imanifest.Document, spec *vm.Spec) error {
 	haveShare := map[string]bool{}
 	for _, m := range doc.Mounts.VirtioFS() {
 		haveShare[m.Tag] = true
@@ -164,7 +217,10 @@ func applySpecDevices(doc *imanifest.Document, spec *vm.Spec) error {
 			VirtioFS: imanifest.VirtioFSInput{Socket: share.Tag + ".sock"},
 		})
 	}
+	return nil
+}
 
+func applySpecDisks(doc *imanifest.Document, spec *vm.Spec) error {
 	haveDisk := map[string]bool{}
 	for _, m := range doc.Mounts.Image() {
 		haveDisk[m.SourcePath] = true
@@ -189,7 +245,10 @@ func applySpecDevices(doc *imanifest.Document, spec *vm.Spec) error {
 			},
 		})
 	}
+	return nil
+}
 
+func applySpecPorts(doc *imanifest.Document, spec *vm.Spec) error {
 	if len(spec.Ports) > 0 {
 		if len(doc.Networks) == 0 {
 			return fmt.Errorf("port forwards require a network device")
@@ -215,7 +274,10 @@ func applySpecDevices(doc *imanifest.Document, spec *vm.Spec) error {
 			})
 		}
 	}
+	return nil
+}
 
+func applySpecFiles(doc *imanifest.Document, spec *vm.Spec) error {
 	haveFile := map[string]bool{}
 	for _, f := range doc.WriteFiles {
 		haveFile[f.GuestPath] = true

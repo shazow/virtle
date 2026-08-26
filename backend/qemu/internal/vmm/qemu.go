@@ -48,8 +48,59 @@ func buildQEMUArgs(qemu manifest.QEMU, cid int, incoming bool) ([]string, error)
 		},
 	}
 
-	args := make([]string, 0, 64)
+	args := appendQEMUBaseArgs(make([]string, 0, 64), qemu)
 
+	args, err := appendQEMUConsoleRNGArgs(config, args, qemu)
+	if err != nil {
+		return nil, err
+	}
+	args, err = appendQEMUCPUDisplayArgs(args, qemu)
+	if err != nil {
+		return nil, err
+	}
+	args, err = appendQEMUChannelArgs(args, qemu)
+	if err != nil {
+		return nil, err
+	}
+	args, err = appendQEMUMemoryBackendArgs(args, qemu)
+	if err != nil {
+		return nil, err
+	}
+
+	args, err = balloon.AppendQEMUArgs(args, config, resolveQEMUTransport, qemu.Devices.Balloon)
+	if err != nil {
+		return nil, err
+	}
+
+	args, err = appendQEMUStorageArgs(config, args, qemu)
+	if err != nil {
+		return nil, err
+	}
+	args, err = appendQEMUNetworkArgs(args, qemu)
+	if err != nil {
+		return nil, err
+	}
+
+	vsockTransport, err := resolveQEMUTransport(qemu.Devices.VSOCK.Transport)
+	if err != nil {
+		return nil, err
+	}
+	args = append(args, govmmQemu.VSOCKDevice{
+		ID:        qemu.Devices.VSOCK.ID,
+		ContextID: uint64(cid),
+		Transport: vsockTransport,
+	}.QemuParams(config)...)
+
+	if incoming {
+		args = append(args, "-incoming", "defer")
+	}
+
+	args = append(args, qemu.PassthroughArgs...)
+
+	return args, nil
+}
+
+func appendQEMUBaseArgs(args []string, qemu manifest.QEMU) []string {
 	args = append(args, "-name", qemu.Name)
 
 	machineArg := qemu.Machine.Type
@@ -77,7 +128,10 @@ func buildQEMUArgs(qemu manifest.QEMU, cid int, incoming bool) ([]string, error)
 
 	args = append(args, "-kernel", qemu.Kernel.Path)
 	args = append(args, "-initrd", qemu.Kernel.InitrdPath)
+	return args
+}
 
+func appendQEMUConsoleRNGArgs(config *govmmQemu.Config, args []string, qemu manifest.QEMU) ([]string, error) {
 	if qemu.Console.Enabled() {
 		chardev := "stdio,id=stdio,signal=off"
 		if qemu.Console.Interactive() {
@@ -98,7 +152,10 @@ func buildQEMUArgs(qemu manifest.QEMU, cid int, incoming bool) ([]string, error)
 	if qemu.MachineID != "" {
 		args = append(args, "-smbios", fmt.Sprintf("type=1,uuid=%s", qemu.MachineID))
 	}
+	return args, nil
+}
 
+func appendQEMUCPUDisplayArgs(args []string, qemu manifest.QEMU) ([]string, error) {
 	if qemu.Console.Enabled() {
 		args = append(args, "-serial", "chardev:stdio")
 	}
@@ -126,7 +183,10 @@ func buildQEMUArgs(qemu manifest.QEMU, cid int, incoming bool) ([]string, error)
 	if qemu.Knobs.SeccompSandbox {
 		args = append(args, "-sandbox", "on")
 	}
+	return args, nil
+}
 
+func appendQEMUChannelArgs(args []string, qemu manifest.QEMU) ([]string, error) {
 	args = append(args, "-qmp", fmt.Sprintf("unix:%s,server,nowait", qemu.QMP.SocketPath))
 
 	if qemu.GuestAgent.SocketPath != "" {
@@ -152,7 +212,10 @@ func buildQEMUArgs(qemu manifest.QEMU, cid int, incoming bool) ([]string, error)
 			"-device", "virtserialport,chardev=ready_char,name=virtle.ready",
 		)
 	}
+	return args, nil
+}
 
+func appendQEMUMemoryBackendArgs(args []string, qemu manifest.QEMU) ([]string, error) {
 	switch qemu.Memory.Backend {
 	case "", "default":
 		// No extra memory object required.
@@ -162,12 +225,11 @@ func buildQEMUArgs(qemu manifest.QEMU, cid int, incoming bool) ([]string, error)
 	default:
 		return nil, fmt.Errorf("unsupported qemu memory backend %q", qemu.Memory.Backend)
 	}
+	return args, nil
+}
 
-	args, err = balloon.AppendQEMUArgs(args, config, resolveQEMUTransport, qemu.Devices.Balloon)
-	if err != nil {
-		return nil, err
-	}
-
+func appendQEMUStorageArgs(config *govmmQemu.Config, args []string, qemu manifest.QEMU) ([]string, error) {
+	var err error
 	if len(qemu.Devices.Mounts) > 0 {
 		for _, mount := range qemu.Devices.Mounts {
 			args, err = appendQEMUMountArgs(config, args, mount)
@@ -175,27 +237,35 @@ func buildQEMUArgs(qemu manifest.QEMU, cid int, incoming bool) ([]string, error)
 				return nil, err
 			}
 		}
-	} else {
-		for _, share := range qemu.Devices.VirtioFS {
-			args, err = appendVirtioFSArgs(config, args, share)
-			if err != nil {
-				return nil, err
-			}
-		}
-		for _, share := range qemu.Devices.NineP {
-			args, err = appendNinePArgs(args, share)
-			if err != nil {
-				return nil, err
-			}
-		}
-		for _, block := range qemu.Devices.Block {
-			args, err = appendBlockArgs(args, block)
-			if err != nil {
-				return nil, err
-			}
+		return args, nil
+	}
+	return appendQEMUShareArgs(config, args, qemu)
+}
+
+func appendQEMUShareArgs(config *govmmQemu.Config, args []string, qemu manifest.QEMU) ([]string, error) {
+	var err error
+	for _, share := range qemu.Devices.VirtioFS {
+		args, err = appendVirtioFSArgs(config, args, share)
+		if err != nil {
+			return nil, err
 		}
 	}
+	for _, share := range qemu.Devices.NineP {
+		args, err = appendNinePArgs(args, share)
+		if err != nil {
+			return nil, err
+		}
+	}
+	for _, block := range qemu.Devices.Block {
+		args, err = appendBlockArgs(args, block)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return args, nil
+}
 
+func appendQEMUNetworkArgs(args []string, qemu manifest.QEMU) ([]string, error) {
 	for _, netdev := range qemu.Devices.Network {
 		netTransport, err := resolveQEMUTransport(netdev.Transport)
 		if err != nil {
@@ -226,23 +296,6 @@ func buildQEMUArgs(qemu manifest.QEMU, cid int, incoming bool) ([]string, error)
 		args = append(args, "-netdev", strings.Join(netdevParams, ","))
 		args = append(args, "-device", strings.Join(deviceParams, ","))
 	}
-
-	vsockTransport, err := resolveQEMUTransport(qemu.Devices.VSOCK.Transport)
-	if err != nil {
-		return nil, err
-	}
-	args = append(args, govmmQemu.VSOCKDevice{
-		ID:        qemu.Devices.VSOCK.ID,
-		ContextID: uint64(cid),
-		Transport: vsockTransport,
-	}.QemuParams(config)...)
-
-	if incoming {
-		args = append(args, "-incoming", "defer")
-	}
-
-	args = append(args, qemu.PassthroughArgs...)
-
 	return args, nil
 }
 

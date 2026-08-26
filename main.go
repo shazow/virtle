@@ -308,27 +308,37 @@ func run(args []string) error {
 	parser := newParserForOptions(opts)
 
 	if _, err := parser.ParseArgs(args); err != nil {
-		var flagsErr *flags.Error
-		if errors.As(err, &flagsErr) && flagsErr.Type == flags.ErrCommandRequired {
-			if opts.Version {
-				// --version stands on its own, so it answers instead of the
-				// parser's missing-command complaint.
-				return printVersion(os.Stdout)
-			}
-			// Missing command: show the relevant help instead of only the
-			// bare "Please specify one command" message.
-			var help bytes.Buffer
-			parser.WriteHelp(&help)
-			help.WriteString("\n")
-			help.WriteString(extraHelp)
-			return &flags.Error{Type: flags.ErrCommandRequired, Message: strings.TrimRight(help.String(), "\n")}
-		}
-		return err
+		return handleParseError(parser, opts, err)
 	}
 
 	if opts.Version {
 		return printVersion(os.Stdout)
 	}
+	setupLogging(opts)
+
+	return dispatchCommand(parser, opts)
+}
+
+func handleParseError(parser *flags.Parser, opts *Options, err error) error {
+	var flagsErr *flags.Error
+	if errors.As(err, &flagsErr) && flagsErr.Type == flags.ErrCommandRequired {
+		if opts.Version {
+			// --version stands on its own, so it answers instead of the
+			// parser's missing-command complaint.
+			return printVersion(os.Stdout)
+		}
+		// Missing command: show the relevant help instead of only the
+		// bare "Please specify one command" message.
+		var help bytes.Buffer
+		parser.WriteHelp(&help)
+		help.WriteString("\n")
+		help.WriteString(extraHelp)
+		return &flags.Error{Type: flags.ErrCommandRequired, Message: strings.TrimRight(help.String(), "\n")}
+	}
+	return err
+}
+
+func setupLogging(opts *Options) {
 	level := slog.LevelWarn
 	if len(opts.Verbose) == 1 {
 		level = slog.LevelInfo
@@ -337,7 +347,9 @@ func run(args []string) error {
 	}
 	slog.SetLogLoggerLevel(level)
 	rootLogger = slog.Default()
+}
 
+func dispatchCommand(parser *flags.Parser, opts *Options) error {
 	switch parser.Active.Name {
 	case "launch":
 		return runLaunch(opts)
@@ -348,20 +360,24 @@ func run(args []string) error {
 	case "rpc":
 		return runRPC(opts)
 	case "manifest":
-		switch parser.Active.Active.Name {
-		case "defaults":
-			return runManifestDefaults(opts)
-		case "validate":
-			return runManifestValidate(opts)
-		case "resolve":
-			return runManifestResolve(opts)
-		case "schema":
-			return runManifestSchema()
-		default:
-			return fmt.Errorf("unknown manifest command %q", parser.Active.Active.Name)
-		}
+		return dispatchManifestCommand(parser, opts)
 	default:
 		return fmt.Errorf("unknown command %q", parser.Active.Name)
+	}
+}
+
+func dispatchManifestCommand(parser *flags.Parser, opts *Options) error {
+	switch parser.Active.Active.Name {
+	case "defaults":
+		return runManifestDefaults(opts)
+	case "validate":
+		return runManifestValidate(opts)
+	case "resolve":
+		return runManifestResolve(opts)
+	case "schema":
+		return runManifestSchema()
+	default:
+		return fmt.Errorf("unknown manifest command %q", parser.Active.Active.Name)
 	}
 }
 

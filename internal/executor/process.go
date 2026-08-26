@@ -153,31 +153,50 @@ func (p *Process) Stop(ctx context.Context) error {
 	}
 
 	gracePeriod := p.getGracePeriod()
-	var shutdownErr error
-	if p.shutdown != nil && ctx.Err() == nil {
-		if err := p.shutdown(); err != nil {
-			shutdownErr = fmt.Errorf("shutdown %s: %w", p.Name(), err)
-		} else if p.waitGrace(ctx, gracePeriod) {
-			return nil
-		}
+	exited, shutdownErr := p.stopShutdown(ctx, gracePeriod)
+	if exited {
+		return nil
 	}
 
-	if ctx.Err() == nil {
-		if err := p.Signal(syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) {
-			if shutdownErr != nil {
-				return errors.Join(shutdownErr, fmt.Errorf("stop %s: %w", p.Name(), err))
-			}
-			return fmt.Errorf("stop %s: %w", p.Name(), err)
-		}
-		if p.waitGrace(ctx, gracePeriod) {
-			return shutdownErr
-		}
+	exited, termErr := p.stopTerm(ctx, gracePeriod)
+	if termErr != nil {
+		return joinStopErr(shutdownErr, termErr)
+	}
+	if exited {
+		return shutdownErr
 	}
 
+	return joinStopErr(shutdownErr, p.stopKill(gracePeriod))
+}
+
+// stopShutdown runs the graceful shutdown callback, if any, and waits out the
+// grace period. A shutdown failure is reported without waiting so Stop can
+// escalate immediately.
+func (p *Process) stopShutdown(ctx context.Context, gracePeriod time.Duration) (exited bool, err error) {
+	if p.shutdown == nil || ctx.Err() != nil {
+		return false, nil
+	}
+	if err := p.shutdown(); err != nil {
+		return false, fmt.Errorf("shutdown %s: %w", p.Name(), err)
+	}
+	return p.waitGrace(ctx, gracePeriod), nil
+}
+
+// stopTerm sends SIGTERM and waits out the grace period, skipped entirely once
+// ctx has ended so Stop escalates straight to SIGKILL.
+func (p *Process) stopTerm(ctx context.Context, gracePeriod time.Duration) (exited bool, err error) {
+	if ctx.Err() != nil {
+		return false, nil
+	}
+	if err := p.Signal(syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		return false, fmt.Errorf("stop %s: %w", p.Name(), err)
+	}
+	return p.waitGrace(ctx, gracePeriod), nil
+}
+
+// stopKill sends SIGKILL and waits for the reaper to confirm exit.
+func (p *Process) stopKill(gracePeriod time.Duration) error {
 	if err := p.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
-		if shutdownErr != nil {
-			return errors.Join(shutdownErr, fmt.Errorf("kill %s: %w", p.Name(), err))
-		}
 		return fmt.Errorf("kill %s: %w", p.Name(), err)
 	}
 	// Bound the post-kill wait: a process wedged in uninterruptible sleep must
@@ -193,13 +212,22 @@ func (p *Process) Stop(ctx context.Context) error {
 	}
 	// Background's nil Done channel means the ctx arm of waitGrace never fires.
 	if !p.waitGrace(context.Background(), killWait) {
-		err := fmt.Errorf("kill %s: process did not exit", p.Name())
-		if shutdownErr != nil {
-			return errors.Join(shutdownErr, err)
-		}
-		return err
+		return fmt.Errorf("kill %s: process did not exit", p.Name())
 	}
-	return shutdownErr
+	return nil
+}
+
+// joinStopErr pairs an escalation failure with the earlier shutdown failure,
+// keeping whichever exists when the other is nil.
+func joinStopErr(shutdownErr, err error) error {
+	switch {
+	case err == nil:
+		return shutdownErr
+	case shutdownErr == nil:
+		return err
+	default:
+		return errors.Join(shutdownErr, err)
+	}
 }
 
 // KillAndWait kills the process and waits for it to exit.

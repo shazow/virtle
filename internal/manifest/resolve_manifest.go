@@ -3,6 +3,7 @@ package manifest
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -110,13 +111,7 @@ func (h HostInput) withDefaults() HostInput {
 	return h
 }
 
-func (d Document) resolveQEMU(host HostInput, hostName string, workingDir string, stateDir string, hotplugCount int) (QEMU, error) {
-	machineType := d.Machine.Type
-	graphics := resolveGraphics(d.Graphics)
-	transport := qemuTransport(machineType, d.Mounts, graphics, hotplugCount > 0)
-	virtioFSMounts := d.Mounts.VirtioFS()
-	hasVirtioFS := len(virtioFSMounts) > 0 || len(d.Hotplug.VirtioFS()) > 0
-	memorySize := d.Machine.Memory
+func (d Document) resolveCPUModelKVM(host HostInput) (string, bool) {
 	cpuModel := d.Machine.CPU
 	if cpuModel == "" {
 		cpuModel = defaultCPUModel(host)
@@ -125,6 +120,17 @@ func (d Document) resolveQEMU(host HostInput, hostName string, workingDir string
 	if d.Machine.KVM != nil {
 		enableKVM = *d.Machine.KVM
 	}
+	return cpuModel, enableKVM
+}
+
+func (d Document) resolveQEMU(host HostInput, hostName string, workingDir string, stateDir string, hotplugCount int) (QEMU, error) {
+	machineType := d.Machine.Type
+	graphics := resolveGraphics(d.Graphics)
+	transport := qemuTransport(machineType, d.Mounts, graphics, hotplugCount > 0)
+	virtioFSMounts := d.Mounts.VirtioFS()
+	hasVirtioFS := len(virtioFSMounts) > 0 || len(d.Hotplug.VirtioFS()) > 0
+	memorySize := d.Machine.Memory
+	cpuModel, enableKVM := d.resolveCPUModelKVM(host)
 	qemuRenderer, err := NewTemplateRenderer(QEMUTemplateProvider{
 		HostName:   hostName,
 		WorkingDir: workingDir,
@@ -523,28 +529,12 @@ func (m *Manifest) resolveVirtioFSRuns(mounts []VirtioFSMountInput, options Reso
 		if err != nil {
 			return nil, err
 		}
-		if info, err := os.Stat(socketPath); err == nil {
-			if info.Mode()&os.ModeSocket == 0 {
-				if options.Logger != nil {
-					options.Logger.Warn("virtiofs socket path exists but is not a socket (possibly leftover from crash); starting virtiofsd anyway", "socket", socketPath)
-				}
-			} else {
-				stale, err := staleUnixSocket(socketPath)
-				if stale {
-					if options.Logger != nil {
-						options.Logger.Warn("virtiofs socket path exists but appears stale; starting virtiofsd anyway", "socket", socketPath, "error", err)
-					}
-				} else {
-					if err != nil && options.Logger != nil {
-						options.Logger.Warn("virtiofs socket liveness probe failed; assuming it is externally managed", "socket", socketPath, "error", err)
-					} else if options.Logger != nil {
-						options.Logger.Info("using existing virtiofs socket", "socket", socketPath)
-					}
-					continue
-				}
-			}
-		} else if !os.IsNotExist(err) {
-			return nil, fmt.Errorf("stat virtiofs socket %q: %w", socketPath, err)
+		reuse, err := virtioFSSocketReusable(socketPath, options.Logger)
+		if err != nil {
+			return nil, err
+		}
+		if reuse {
+			continue
 		}
 
 		args := append([]string(nil), mount.VirtioFS.Args...)
@@ -567,6 +557,37 @@ func (m *Manifest) resolveVirtioFSRuns(mounts []VirtioFSMountInput, options Reso
 		m.addCleanupFile(mount.VirtioFS.Socket)
 	}
 	return runs, nil
+}
+
+// virtioFSSocketReusable reports whether an existing socket at socketPath can
+// be reused instead of starting a new virtiofsd for it.
+func virtioFSSocketReusable(socketPath string, logger *slog.Logger) (bool, error) {
+	info, err := os.Stat(socketPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("stat virtiofs socket %q: %w", socketPath, err)
+	}
+	if info.Mode()&os.ModeSocket == 0 {
+		if logger != nil {
+			logger.Warn("virtiofs socket path exists but is not a socket (possibly leftover from crash); starting virtiofsd anyway", "socket", socketPath)
+		}
+		return false, nil
+	}
+	stale, probeErr := staleUnixSocket(socketPath)
+	if stale {
+		if logger != nil {
+			logger.Warn("virtiofs socket path exists but appears stale; starting virtiofsd anyway", "socket", socketPath, "error", probeErr)
+		}
+		return false, nil
+	}
+	if probeErr != nil && logger != nil {
+		logger.Warn("virtiofs socket liveness probe failed; assuming it is externally managed", "socket", socketPath, "error", probeErr)
+	} else if logger != nil {
+		logger.Info("using existing virtiofs socket", "socket", socketPath)
+	}
+	return true, nil
 }
 
 func (m *Manifest) resolveHotplug(d Document) ([]HotplugDevice, error) {
@@ -751,41 +772,49 @@ func (m *Manifest) addCleanupFile(path string) {
 func resolveNetwork(networks []NetworkInput, fwdTunnelExec []string, host HostInput, transport string, cpus CPUCount) ([]QEMUNetDevice, error) {
 	devices := make([]QEMUNetDevice, 0, len(networks))
 	for i, network := range networks {
-		id := network.ID
-		if id == "" {
-			id = defaultNetworkID
-		}
-		backend := network.Type
-		if backend == "" {
-			backend = defaultNetworkType
-		}
-		mac := network.MAC
-		if mac == "" {
-			mac = defaultNetworkMAC
-		}
-		disableROM := false
-		if transport == "pci" || (host.System != "x86_64-linux") {
-			disableROM = true
-		}
-		mqVectors := 0
-		if cpus.Set && cpus.Value > 1 && transport == "pci" {
-			mqVectors = 2*cpus.Value + 2
-		}
-		forwardOptions, err := resolveForwardPorts(network.Forward, fwdTunnelExec, i)
+		device, err := resolveNetworkDevice(network, fwdTunnelExec, host, transport, cpus, i)
 		if err != nil {
 			return nil, err
 		}
-		devices = append(devices, QEMUNetDevice{
-			ID:            id,
-			Backend:       backend,
-			MacAddress:    mac,
-			Transport:     transport,
-			DisableROM:    disableROM,
-			NetdevOptions: forwardOptions,
-			MQVectors:     mqVectors,
-		})
+		devices = append(devices, device)
 	}
 	return devices, nil
+}
+
+func resolveNetworkDevice(network NetworkInput, fwdTunnelExec []string, host HostInput, transport string, cpus CPUCount, index int) (QEMUNetDevice, error) {
+	id := network.ID
+	if id == "" {
+		id = defaultNetworkID
+	}
+	backend := network.Type
+	if backend == "" {
+		backend = defaultNetworkType
+	}
+	mac := network.MAC
+	if mac == "" {
+		mac = defaultNetworkMAC
+	}
+	disableROM := false
+	if transport == "pci" || (host.System != "x86_64-linux") {
+		disableROM = true
+	}
+	mqVectors := 0
+	if cpus.Set && cpus.Value > 1 && transport == "pci" {
+		mqVectors = 2*cpus.Value + 2
+	}
+	forwardOptions, err := resolveForwardPorts(network.Forward, fwdTunnelExec, index)
+	if err != nil {
+		return QEMUNetDevice{}, err
+	}
+	return QEMUNetDevice{
+		ID:            id,
+		Backend:       backend,
+		MacAddress:    mac,
+		Transport:     transport,
+		DisableROM:    disableROM,
+		NetdevOptions: forwardOptions,
+		MQVectors:     mqVectors,
+	}, nil
 }
 
 func parsePortEndpoint(value string) (PortEndpoint, error) {

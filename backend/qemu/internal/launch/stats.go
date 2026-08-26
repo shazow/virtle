@@ -74,36 +74,18 @@ func (s *Stats) String() string {
 	completed := snapshot.time(TimerCompleted)
 	sshReady := snapshot.sshReady()
 
-	if !started.IsZero() && !bootStarted.IsZero() {
-		fields = append(fields, formatStatDuration("started_to_boot", bootStarted.Sub(started)))
+	fields = appendStatDuration(fields, "started_to_boot", started, bootStarted)
+	fields = appendStatDuration(fields, "boot_to_qmp", bootStarted, qmpReady)
+	fields = appendStatDuration(fields, "qmp_to_guest_agent", qmpReady, guestAgentReady)
+	fields = appendStatDuration(fields, "guest_agent_to_files", guestAgentReady, filesReady)
+	fields = appendStatDuration(fields, "files_to_first_ssh", filesReady, firstSSHAttempt)
+	fields = appendStatDuration(fields, "files_to_ssh", filesReady, sshReady)
+	fields = appendStatDuration(fields, "boot_to_ssh", bootStarted, sshReady)
+	fields = appendStatDuration(fields, "ssh_to_completed", sshStarted, completed)
+	if sshStarted.IsZero() {
+		fields = appendStatDuration(fields, "boot_to_completed", bootStarted, completed)
 	}
-	if !bootStarted.IsZero() && !qmpReady.IsZero() {
-		fields = append(fields, formatStatDuration("boot_to_qmp", qmpReady.Sub(bootStarted)))
-	}
-	if !qmpReady.IsZero() && !guestAgentReady.IsZero() {
-		fields = append(fields, formatStatDuration("qmp_to_guest_agent", guestAgentReady.Sub(qmpReady)))
-	}
-	if !guestAgentReady.IsZero() && !filesReady.IsZero() {
-		fields = append(fields, formatStatDuration("guest_agent_to_files", filesReady.Sub(guestAgentReady)))
-	}
-	if !filesReady.IsZero() && !firstSSHAttempt.IsZero() {
-		fields = append(fields, formatStatDuration("files_to_first_ssh", firstSSHAttempt.Sub(filesReady)))
-	}
-	if !filesReady.IsZero() && !sshReady.IsZero() {
-		fields = append(fields, formatStatDuration("files_to_ssh", sshReady.Sub(filesReady)))
-	}
-	if !bootStarted.IsZero() && !sshReady.IsZero() {
-		fields = append(fields, formatStatDuration("boot_to_ssh", sshReady.Sub(bootStarted)))
-	}
-	if !sshStarted.IsZero() && !completed.IsZero() {
-		fields = append(fields, formatStatDuration("ssh_to_completed", completed.Sub(sshStarted)))
-	}
-	if sshStarted.IsZero() && !bootStarted.IsZero() && !completed.IsZero() {
-		fields = append(fields, formatStatDuration("boot_to_completed", completed.Sub(bootStarted)))
-	}
-	if !started.IsZero() && !completed.IsZero() {
-		fields = append(fields, formatStatDuration("total", completed.Sub(started)))
-	}
+	fields = appendStatDuration(fields, "total", started, completed)
 	if attempts := snapshot.count(TimerSSHAttempt); attempts > 0 {
 		fields = append(fields, fmt.Sprintf("ssh_attempts=%d", attempts))
 	}
@@ -133,24 +115,14 @@ func ControlStats(stats *Stats) control.RuntimeStats {
 		CompletedAt:   completed,
 		SSHAttempts:   snapshot.count(TimerSSHAttempt),
 	}
-	if !started.IsZero() && !bootStarted.IsZero() {
-		resp.StartedToBoot = bootStarted.Sub(started).String()
-	}
-	if !bootStarted.IsZero() && !qmpReady.IsZero() {
-		resp.BootToQMP = qmpReady.Sub(bootStarted).String()
-	}
+	resp.StartedToBoot = statDurationString(started, bootStarted)
+	resp.BootToQMP = statDurationString(bootStarted, qmpReady)
 	if sshReady.IsZero() {
 		sshReady = sshStarted
 	}
-	if !filesReady.IsZero() && !sshReady.IsZero() {
-		resp.FilesToSSH = sshReady.Sub(filesReady).String()
-	}
-	if !bootStarted.IsZero() && !completed.IsZero() {
-		resp.BootToCompleted = completed.Sub(bootStarted).String()
-	}
-	if !started.IsZero() && !completed.IsZero() {
-		resp.Total = completed.Sub(started).String()
-	}
+	resp.FilesToSSH = statDurationString(filesReady, sshReady)
+	resp.BootToCompleted = statDurationString(bootStarted, completed)
+	resp.Total = statDurationString(started, completed)
 	return resp
 }
 
@@ -208,6 +180,20 @@ func copyCounts(src map[TimerEvent]int) map[TimerEvent]int {
 		dst[event] = count
 	}
 	return dst
+}
+
+func appendStatDuration(fields []string, name string, from, to time.Time) []string {
+	if from.IsZero() || to.IsZero() {
+		return fields
+	}
+	return append(fields, formatStatDuration(name, to.Sub(from)))
+}
+
+func statDurationString(from, to time.Time) string {
+	if from.IsZero() || to.IsZero() {
+		return ""
+	}
+	return to.Sub(from).String()
 }
 
 func formatStatDuration(name string, duration time.Duration) string {

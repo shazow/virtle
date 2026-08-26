@@ -36,22 +36,7 @@ func (g *qgaGuest) Run(ctx context.Context, cmd *vm.GuestCmd) (*vm.GuestResult, 
 	if cmd.Stdin != nil {
 		return nil, fmt.Errorf("guest command stdin over QGA: %w", errors.ErrUnsupported)
 	}
-	path, args := cmd.Path, cmd.Args
-	if cmd.Dir != "" || len(cmd.Env) > 0 {
-		// QGA's guest-exec has no working directory, and its env parameter
-		// replaces rather than augments the inherited environment. Lower both
-		// operations onto a shell wrapper to preserve GuestCmd's semantics.
-		script := ""
-		if cmd.Dir != "" {
-			script += "cd " + shellquote.Join(cmd.Dir) + " && "
-		}
-		script += "exec " + shellquote.Join(append([]string{cmd.Path}, cmd.Args...)...)
-		wrapped := []string{"-c", script}
-		if len(cmd.Env) > 0 {
-			wrapped = []string{"-c", "export " + shellquote.Join(cmd.Env...) + " && " + script}
-		}
-		path, args = "/bin/sh", wrapped
-	}
+	path, args := guestExecArgv(cmd)
 
 	client, err := g.vm.DialGuestAgent(ctx)
 	if err != nil {
@@ -78,6 +63,26 @@ func (g *qgaGuest) Run(ctx context.Context, cmd *vm.GuestCmd) (*vm.GuestResult, 
 		return nil, fmt.Errorf("decode guest stderr: %w", err)
 	}
 	return &vm.GuestResult{ExitCode: status.ExitCode, Stdout: stdout, Stderr: stderr}, nil
+}
+
+// guestExecArgv returns the argv to hand guest-exec for cmd. QGA's guest-exec
+// has no working directory, and its env parameter replaces rather than
+// augments the inherited environment, so a Dir or Env is lowered onto a shell
+// wrapper to preserve GuestCmd's semantics.
+func guestExecArgv(cmd *vm.GuestCmd) (string, []string) {
+	if cmd.Dir == "" && len(cmd.Env) == 0 {
+		return cmd.Path, cmd.Args
+	}
+	script := ""
+	if cmd.Dir != "" {
+		script += "cd " + shellquote.Join(cmd.Dir) + " && "
+	}
+	script += "exec " + shellquote.Join(append([]string{cmd.Path}, cmd.Args...)...)
+	wrapped := []string{"-c", script}
+	if len(cmd.Env) > 0 {
+		wrapped = []string{"-c", "export " + shellquote.Join(cmd.Env...) + " && " + script}
+	}
+	return "/bin/sh", wrapped
 }
 
 func (g *qgaGuest) Open(ctx context.Context, name string) (io.ReadCloser, error) {

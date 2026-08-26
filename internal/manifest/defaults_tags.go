@@ -32,31 +32,35 @@ func applyDefaultTagsValue(v reflect.Value) {
 		if !fv.IsZero() {
 			continue
 		}
-		if field.Type == durationType {
-			value, err := units.ParseDuration(tag)
-			if err != nil {
-				panic(fmt.Sprintf("manifest: field %s has invalid default tag %q: %v", field.Name, tag, err))
-			}
-			fv.SetInt(int64(value))
-			continue
+		setDefaultTagValue(field, fv, tag)
+	}
+}
+
+func setDefaultTagValue(field reflect.StructField, fv reflect.Value, tag string) {
+	if field.Type == durationType {
+		value, err := units.ParseDuration(tag)
+		if err != nil {
+			panic(fmt.Sprintf("manifest: field %s has invalid default tag %q: %v", field.Name, tag, err))
 		}
-		switch fv.Kind() {
-		case reflect.Float64:
-			value, err := strconv.ParseFloat(tag, 64)
-			if err != nil {
-				panic(fmt.Sprintf("manifest: field %s has invalid default tag %q: %v", field.Name, tag, err))
-			}
-			fv.SetFloat(value)
-		case reflect.String:
-			fv.SetString(tag)
-		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-			value, err := strconv.ParseInt(tag, 10, 64)
-			if err != nil {
-				panic(fmt.Sprintf("manifest: field %s has invalid default tag %q: %v", field.Name, tag, err))
-			}
-			fv.SetInt(value)
-		default:
-			panic(fmt.Sprintf("manifest: field %s has default tag on unsupported kind %s", field.Name, fv.Kind()))
+		fv.SetInt(int64(value))
+		return
+	}
+	switch fv.Kind() {
+	case reflect.Float64:
+		value, err := strconv.ParseFloat(tag, 64)
+		if err != nil {
+			panic(fmt.Sprintf("manifest: field %s has invalid default tag %q: %v", field.Name, tag, err))
 		}
+		fv.SetFloat(value)
+	case reflect.String:
+		fv.SetString(tag)
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		value, err := strconv.ParseInt(tag, 10, 64)
+		if err != nil {
+			panic(fmt.Sprintf("manifest: field %s has invalid default tag %q: %v", field.Name, tag, err))
+		}
+		fv.SetInt(value)
+	default:
+		panic(fmt.Sprintf("manifest: field %s has default tag on unsupported kind %s", field.Name, fv.Kind()))
 	}
 }

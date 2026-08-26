@@ -311,16 +311,32 @@ func environMap(environ []string) map[string]string {
 // EnvName converts template context keys into stable environment names.
 // For example, vmStatePath becomes VM_STATE_PATH.
 func EnvName(key string) (string, error) {
+	if err := validateEnvNameKey(key); err != nil {
+		return "", err
+	}
+	envKey := envNameFromKey(key)
+	if envKey == "" {
+		return "", fmt.Errorf("exec template context key %q does not produce an environment name", key)
+	}
+	return envKey, nil
+}
+
+func validateEnvNameKey(key string) error {
 	if key == "" {
-		return "", fmt.Errorf("exec template context key must not be empty")
+		return fmt.Errorf("exec template context key must not be empty")
 	}
 	if key == "Env" {
-		return "", fmt.Errorf("exec template context key %q is reserved", key)
+		return fmt.Errorf("exec template context key %q is reserved", key)
 	}
 	if strings.ContainsRune(key, '=') {
-		return "", fmt.Errorf("exec template context key %q must not contain '='", key)
+		return fmt.Errorf("exec template context key %q must not contain '='", key)
 	}
+	return nil
+}
 
+// envNameFromKey upper-snake-cases key, splitting on case changes and folding
+// runs of non-alphanumeric runes into single underscores.
+func envNameFromKey(key string) string {
 	var builder strings.Builder
 	var previousUnderscore bool
 	var previousLowerOrDigit bool
@@ -340,9 +356,5 @@ func EnvName(key string) (string, error) {
 		previousUnderscore = true
 		previousLowerOrDigit = false
 	}
-	envKey := strings.Trim(builder.String(), "_")
-	if envKey == "" {
-		return "", fmt.Errorf("exec template context key %q does not produce an environment name", key)
-	}
-	return envKey, nil
+	return strings.Trim(builder.String(), "_")
 }

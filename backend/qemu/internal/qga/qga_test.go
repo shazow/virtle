@@ -1,6 +1,7 @@
 package qga
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -75,6 +76,36 @@ func TestClientFileAndExecCommands(t *testing.T) {
 		t.Fatalf("guest-exec env: got %#v", got)
 	}
 	assertCommand(t, commands, "guest-exec-status")
+}
+
+func TestClientSynchronizeDiscardsStaleReplies(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+
+	go func() {
+		defer serverConn.Close()
+		buf := make([]byte, 1024)
+		n, err := serverConn.Read(buf)
+		if err != nil {
+			return
+		}
+		if n == 0 || buf[0] != 0xff {
+			return
+		}
+		encoder := json.NewEncoder(serverConn)
+		_ = encoder.Encode(map[string]any{"return": map[string]any{}})
+		_, _ = serverConn.Write([]byte{0xff})
+		_ = encoder.Encode(map[string]any{"return": int64(123)})
+		_, _ = serverConn.Write([]byte{0xff})
+		_ = encoder.Encode(map[string]any{"return": int64(0x564952544c45)})
+	}()
+
+	client := newSocketClient(clientConn, time.Second)
+	defer client.Disconnect()
+	reader := bufio.NewReader(clientConn)
+	if err := client.synchronize(context.Background(), reader); err != nil {
+		t.Fatalf("synchronize: %v", err)
+	}
 }
 
 func TestClientSkipsEvents(t *testing.T) {

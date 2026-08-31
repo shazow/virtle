@@ -5,6 +5,12 @@ substantial internal changes get a line. Include diffs or before/after examples
 when illustrative of the change. Focus on capabilities instead of implementation
 details.
 
+## 2026-08-31
+
+- QEMU guest-agent connections now synchronize the command stream before use,
+  preventing stale replies from being mistaken for results such as a
+  `guest-exec` PID after reconnecting.
+
 ## 2026-08-21
 
 - `workspace.mount_cwd` and other internal guest commands now search standard

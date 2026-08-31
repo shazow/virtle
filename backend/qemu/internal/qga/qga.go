@@ -1,6 +1,7 @@
 package qga
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -100,11 +101,57 @@ func (d *SocketDialer) Dial(ctx context.Context, socketPath string, timeout time
 	if rpcTimeout <= 0 {
 		rpcTimeout = DefaultRPCTimeout
 	}
-	return &socketClient{
+	reader := bufio.NewReader(conn)
+	client := &socketClient{
 		conn:    conn,
-		decoder: json.NewDecoder(conn),
 		session: &qmpwire.Session{Conn: conn, RPCTimeout: rpcTimeout},
-	}, nil
+	}
+	if err := client.synchronize(ctx, reader); err != nil {
+		return nil, errors.Join(fmt.Errorf("synchronize guest agent: %w", err), conn.Close())
+	}
+	client.decoder = json.NewDecoder(reader)
+	return client, nil
+}
+
+// synchronize discards replies left in QGA's virtio-serial stream by an
+// earlier host connection. Without guest-sync-delimited, a fresh client can
+// mistake a stale empty reply for guest-exec's PID response.
+func (c *socketClient) synchronize(ctx context.Context, reader *bufio.Reader) error {
+	const syncID int64 = 0x564952544c45 // "VIRTLE"
+	payload, err := json.Marshal(map[string]any{
+		"execute":   "guest-sync-delimited",
+		"arguments": map[string]any{"id": syncID},
+	})
+	if err != nil {
+		return err
+	}
+
+	return c.session.Do(ctx, func() error {
+		command := append([]byte{0xff}, qmpwire.AppendDelimiter(payload)...)
+		if _, err := c.conn.Write(command); err != nil {
+			return &qmpwire.WireError{Err: err}
+		}
+		for {
+			// QGA prefixes every guest-sync-delimited response with 0xff. Scan
+			// for that sentinel before parsing JSON so stale or partial data
+			// cannot poison the decoder.
+			if _, err := reader.ReadBytes(0xff); err != nil {
+				return &qmpwire.WireError{Err: err}
+			}
+			line, err := reader.ReadBytes('\n')
+			if err != nil {
+				return &qmpwire.WireError{Err: err}
+			}
+			var envelope qmpwire.Envelope
+			if json.Unmarshal(line, &envelope) != nil {
+				continue
+			}
+			var returned int64
+			if json.Unmarshal(envelope.Return, &returned) == nil && returned == syncID {
+				return nil
+			}
+		}
+	})
 }
 
 func (c *socketClient) Ping(ctx context.Context) error {

@@ -79,8 +79,8 @@ becomes public with it. `virtle manifest resolve` output may change shape
 
 The largest remaining piece: a `guest` package with `Serve` (in-guest,
 over vsock/unix; the `virtle guest` CLI subcommand wraps it) and `Dial`
-(host-side client implementing `vm.Guest`), replacing QGA. Requirements
-settled in #67 review:
+(host-side client implementing `vm.Guest`), replacing QGA. Detailed
+design: [guest.md](guest.md). Requirements settled in #67 review:
 
 - **Protocol**: binary-safe (no base64 — the QGA limitation this
   replaces), concurrent (multiple in-flight requests per connection),

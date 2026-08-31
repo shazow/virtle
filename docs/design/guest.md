@@ -16,7 +16,7 @@ network — the same shape as ours with vsock in place of the tailnet.
 
 ```
 guest/                 Serve (in-guest), Dial + Client (host side)
-guest/internal/sshd/   the embedded SSH server: channels, incubator, sftp
+guest/internal/sshd/   the embedded SSH server: channels, session spawning, sftp
 guest/internal/wire/   the virtle subsystem protocol: hello, frames, streams
 main.go                `virtle guest [--listen vsock://:PORT|unix://PATH]`
 ```
@@ -27,11 +27,12 @@ main.go                `virtle guest [--listen vsock://:PORT|unix://PATH]`
 - `guest.Dial(ctx, addr) (*Client, error)` — `Client` implements
   `vm.Guest` and `vm.GuestWithCopy` (its first implementation), and grows
   `vm.GuestWithX` extensions later.
-- Dependency budget: stdlib + `golang.org/x/sys` (vsock, termios ioctls) +
-  `golang.org/x/crypto/ssh` (+ `github.com/pkg/sftp` if D-g3 is accepted).
-  All pure Go; static builds already CI-enforced. The daemon ships inside
-  the regular `virtle` binary; a minimal `cmd/virtle-guest` main stays
-  available later without build tags.
+- Dependency budget: stdlib + `golang.org/x/sys` (vsock, termios ioctls,
+  landlock) + `golang.org/x/crypto/ssh`, plus `gliderlabs/ssh` and
+  `pkg/sftp` per D-g2/D-g3. All pure Go; static builds already
+  CI-enforced. The daemon ships inside the regular `virtle` binary; a
+  minimal `cmd/virtle-guest` main stays available later without build
+  tags.
 
 ## Architecture: one listener, one mux — SSH is the transport
 
@@ -95,36 +96,64 @@ its state dir, known_hosts-style. On vsock the hypervisor mediates the
 path so MITM isn't in the threat model — pinning is belt-and-suspenders
 and makes `ssh` clients quiet.
 
-## The sshd, Tailscale-inspired
+## The sshd
 
-What `tailssh` does, and what we take:
+**Server layer (D-g2)**: build on **`gliderlabs/ssh`** — the small,
+widely-proven convenience layer over `x/crypto/ssh` (Gitea and soft-serve
+run on it) that provides exactly the plumbing we'd otherwise hand-roll:
+session channels, pty request handling, the subsystem handler map, one
+extra pure-Go dependency. `charmbracelet/wish` sits a level above it as a
+middleware/app framework for building SSH *apps* (with the Charm
+ecosystem attached) — more framework than a guest daemon wants. Building
+directly on `x/crypto/ssh` remains the fallback if the dependency budget
+is contested; the plumbing is bounded.
 
-- **Layering.** Tailscale builds on its own maintained fork of
-  gliderlabs/ssh (`github.com/tailscale/gliderssh`) over `x/crypto/ssh`.
-  For virtle (D-g2): build **directly on `x/crypto/ssh`** — our server is
-  one subsystem plus session channels with one auth mode; the
-  gliderlabs convenience layer isn't worth a fork-maintenance obligation
-  at this scope (Tailscale's own fork existing is the cautionary tale).
-- **The incubator pattern** — the core steal. `tailscaled` re-execs
-  itself (`tailscaled be-child ssh`) per session rather than fiddling the
-  daemon's own credentials: the child registers a new OS session, applies
-  `setgroups`/`setgid`/`setuid` in that order, **defensively asserts the
-  drop is irreversible** (attempts to restore the original uid/gid must
-  fail or the process exits), then execs the command. virtle guest does
-  the same via a hidden `virtle guest --be-child` re-exec: per-session
-  privilege isolation, sensitive parameters passed via fds rather than
-  argv/env.
-- **The login ladder, inverted for our images.** tailssh tries `login(1)`
-  (full PAM, needs a TTY), falls back to `su -w -l -c` (PAM without TTY),
-  and only then direct in-process exec after the privilege drop (also its
-  SELinux path). virtle guests are typically minimal sandbox images —
-  often root-only, no PAM, sometimes no `login`/`su` at all — so
-  Tailscale's *last resort is our common case*: probe for `login`/`su`
-  and use them when present, otherwise direct exec (D-g5). Same ladder,
-  honest default.
+**Process model — no re-exec needed for the core.** Sessions run as a
+requested user via plain `exec.Cmd` with
+`SysProcAttr{Credential, Setsid, Setctty}`: Go's fork/exec path applies
+`setgroups`/`setgid`/`setuid`, creates the new session, and assigns the
+controlling TTY *in the child, between fork and exec* — per-child
+credentials without the daemon ever touching its own, and without
+re-exec. (Tailscale's incubator re-exec earns its keep for what lies
+beyond that fixed syscall menu — PAM via `login(1)`/`su`, utmp
+registration, SELinux contexts on full multi-user systems. Those are
+exactly the semantics minimal sandbox images don't have, so we defer
+them; see D-g5 for the path back.)
+
 - **PTY allocation**: `/dev/ptmx` + termios ioctls via `x/sys` (the
   creack/pty mechanics without the dependency); window-change maps to
-  `TIOCSWINSZ`.
+  `TIOCSWINSZ`; the slave becomes the child's controlling TTY via
+  `Setctty`.
+- **Session teardown**: `Setsid` gives every session its own process
+  group; closing the session channel kills the group and a pidfd wait
+  reaps it, so background pipelines don't outlive their session.
+- **Environment**: `HOME`/`SHELL`/`USER` resolved via pure-Go `os/user`
+  (static builds read `/etc/passwd` directly), `PATH` from a sane
+  baseline — the lesson already paid for in v0.3.x, where internal guest
+  commands inherited QGA's restricted `PATH`.
+
+### Landlock, and what it does not replace
+
+Landlock is an *additive restriction* LSM (filesystem, plus TCP
+bind/connect on newer kernels; 5.13+; syscalls available in
+`x/sys/unix`, within budget). It cannot switch identity: a
+landlocked-but-root session is still uid 0 for file ownership, signals,
+and everything else. So Landlock is not an alternative to the incubator —
+but that's because *credentials* were the requirement, and
+`SysProcAttr.Credential` already covers them without re-exec. The two
+mechanisms are orthogonal: credentials say *who* the session is, Landlock
+says *what it may touch*.
+
+Where Landlock does fit: opt-in **confined sessions and operations**
+(e.g., restricting a session or a `CopyFromGuest` to a subtree) as a
+future extension. One wrinkle to record now: Landlock self-restriction is
+one-way and applies to the calling thread/process, and `SysProcAttr` has
+no hook for it — applying it per-child without poisoning the daemon (or a
+pooled runtime thread) requires a tiny `virtle guest --be-child` shim
+that restricts itself and then execs the payload. That is the one place a
+re-exec comes back: for restriction, not identity. Relatedly,
+`no_new_privs` is tempting hardening for non-root sessions but breaks
+`sudo` inside them — off by default.
 
 ### scp, rsync, and the sftp question (D-g3)
 
@@ -139,21 +168,21 @@ So the earlier "no sftp initially" scoping note inverts: to make `scp`
 subsystem**, via the pure-Go `github.com/pkg/sftp` server (the standard
 implementation; Tailscale's sshd likewise serves sftp as a subsystem).
 One pure-Go dependency added to the budget; sftp sessions run inside the
-same incubator privilege drop as exec sessions. Recommended in; the
+same credentialed spawn path as exec sessions. Recommended in; the
 fallback position is documenting `scp -O`'s guest-binary requirement.
 
 ## The virtle subsystem: implementing `vm.Guest`
 
 | Operation | Mechanism |
 |---|---|
-| `Run` | incubator exec, buffered output + exit status in the response frame |
+| `Run` | credentialed exec (SysProcAttr), buffered output + exit status in the response frame |
 | `Open` / `Create` | stream channel per file, plain bytes |
 | `CopyToGuest` / `CopyFromGuest` | stream channel carrying tar; extraction enforces the zip-slip guard as an invariant (daemon extracts as root) and applies `CopyOptions` overwrite/ownership semantics |
 | `Shutdown` | clean daemon stop + system shutdown |
 | Ping/readiness | the hello itself |
 
 Every operation runs with an explicit uid/gid (from the request, default
-root), through the same incubator path — the RPC gets no ambient
+root), through the same spawn path — the RPC gets no ambient
 authority the SSH sessions don't.
 
 ## Host-side wiring
@@ -178,7 +207,7 @@ subreaper and reaps, but that's tolerance, not a feature.
 
 Per AGENTS.md: `Serve` over injected listeners (`net.Pipe`) with
 `x/crypto/ssh` as the in-process client; the wire protocol tested without
-sockets; incubator privilege operations behind a small interface with a
+sockets; privilege/spawn operations behind a small interface with a
 fake for unit tests, plus root-only integration coverage in the existing
 `nix flake check` integration suite; copy semantics against
 `fstest.MapFS` archives.
@@ -188,9 +217,12 @@ fake for unit tests, plus root-only integration coverage in the existing
 - **D-g1 — key bootstrap**: (a) *recommended:* kernel cmdline param, file
   fallback; (b) file-in-share only; (c) peer-CID-only, no key (rejected:
   daemon runs as root, CID checks shouldn't be load-bearing alone).
-- **D-g2 — server layer**: (a) *recommended:* hand-rolled on
-  `x/crypto/ssh`; (b) gliderlabs/ssh (or a fork) — convenience now,
-  maintenance obligation later.
+- **D-g2 — server layer**: (a) *recommended:* `gliderlabs/ssh` (small,
+  pure Go, proven in Gitea/soft-serve; provides session/pty/subsystem
+  plumbing); (b) hand-rolled on `x/crypto/ssh` (tightest dependency
+  budget, most code to own); (c) `charmbracelet/wish` (rejected: an SSH
+  *app* framework with the Charm ecosystem attached — aimed at a
+  different problem).
 - **D-g3 — sftp subsystem**: (a) *recommended:* include (pkg/sftp;
   makes default `scp` work against bare images); (b) defer and document
   `scp -O`.
@@ -198,6 +230,10 @@ fake for unit tests, plus root-only integration coverage in the existing
   operation; (b) interleaved frames inside the subsystem channel (fewer
   channels, hand-rolled flow control — rejected as re-implementing what
   SSH gives us).
-- **D-g5 — session privilege ladder**: (a) *recommended:* probe
-  `login`/`su`, fall back to direct exec after drop (auto); (b) always
-  direct exec (simplest, loses PAM on full-featured images).
+- **D-g5 — login semantics**: (a) *recommended:* direct exec with
+  `SysProcAttr` credentials only — no `login(1)`/`su` ladder, no PAM,
+  no utmp; the semantics minimal sandbox images don't have anyway.
+  (b) add a probe-`login`/`su` ladder for full multi-user images — the
+  point at which a `--be-child` re-exec becomes worthwhile, since PAM-era
+  setup needs a program in the child, not a syscall menu. Deferred until
+  an image actually needs it.

@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -25,6 +27,8 @@ func TestSuspendStateRoundTrip(t *testing.T) {
 	if err := WriteSuspendStateData(cfg, state); err != nil {
 		t.Fatalf("write suspend state: %v", err)
 	}
+	assertPathMode(t, cfg.ResolvedPersistenceStateDir(), privateDirectoryMode)
+	assertPathMode(t, SuspendStatePath(cfg), privateFileMode)
 	readState, err := ReadSuspendState(cfg)
 	if err != nil {
 		t.Fatalf("read suspend state: %v", err)
@@ -44,6 +48,56 @@ func TestSuspendStateRoundTrip(t *testing.T) {
 	}
 	if _, err := os.Stat(SuspendStatePath(cfg)); !os.IsNotExist(err) {
 		t.Fatalf("expected suspend state removal, got %v", err)
+	}
+}
+
+func TestPrepareVMStateFileForPrivilegeDroppedQEMU(t *testing.T) {
+	account, err := user.Current()
+	if err != nil {
+		t.Fatalf("current user: %v", err)
+	}
+	uid, err := strconv.Atoi(account.Uid)
+	if err != nil {
+		t.Fatalf("parse current uid: %v", err)
+	}
+	gid, err := strconv.Atoi(account.Gid)
+	if err != nil {
+		t.Fatalf("parse current gid: %v", err)
+	}
+	cfg := testManifest(t)
+	cfg.QEMU.RunAsUser = account.Username
+	path := VMStatePath(cfg)
+
+	prepared, err := PrepareVMStateFile(cfg)
+	if err != nil {
+		t.Fatalf("prepare vm state: %v", err)
+	}
+	if prepared != path {
+		t.Fatalf("prepared path: got %q want %q", prepared, path)
+	}
+	for _, expected := range []struct {
+		path string
+		mode os.FileMode
+		uid  int
+		gid  int
+	}{
+		{path: filepath.Dir(path), mode: searchableDirectoryMode, uid: os.Getuid(), gid: gid},
+		{path: path, mode: privateFileMode, uid: uid, gid: gid},
+	} {
+		info, err := os.Stat(expected.path)
+		if err != nil {
+			t.Fatalf("stat %q: %v", expected.path, err)
+		}
+		if got := info.Mode().Perm(); got != expected.mode {
+			t.Fatalf("mode of %q: got %o want %o", expected.path, got, expected.mode)
+		}
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		if !ok {
+			t.Fatalf("stat %q has type %T", expected.path, info.Sys())
+		}
+		if int(stat.Uid) != expected.uid || int(stat.Gid) != expected.gid {
+			t.Fatalf("ownership of %q: got %d:%d want %d:%d", expected.path, stat.Uid, stat.Gid, expected.uid, expected.gid)
+		}
 	}
 }
 
@@ -77,6 +131,7 @@ func TestLaunchPIDRoundTripAndLockValidation(t *testing.T) {
 	if err := WriteLaunchPID(cfg, 12345); err != nil {
 		t.Fatalf("write launch pid: %v", err)
 	}
+	assertPathMode(t, LaunchPIDPath(cfg), privateFileMode)
 	pid, err := ReadLaunchPID(cfg)
 	if err != nil {
 		t.Fatalf("read launch pid: %v", err)
@@ -101,6 +156,17 @@ func TestLaunchPIDRoundTripAndLockValidation(t *testing.T) {
 	}
 	if _, err := os.Stat(LaunchPIDPath(cfg)); !os.IsNotExist(err) {
 		t.Fatalf("expected launch pid removal, got %v", err)
+	}
+}
+
+func assertPathMode(t *testing.T, path string, want os.FileMode) {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %q: %v", path, err)
+	}
+	if got := info.Mode().Perm(); got != want {
+		t.Fatalf("mode of %q: got %o want %o", path, got, want)
 	}
 }
 

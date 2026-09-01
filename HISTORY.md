@@ -7,6 +7,11 @@ details.
 
 ## 2026-09-01
 
+- Fresh VM state, hotplug metadata, and auto-created volume images are private
+  by default (`0700` directories and `0600` files). Existing path permissions
+  are preserved. When `qemu.user` drops privileges, newly created QEMU-owned
+  disks and suspend streams are assigned to that account through group-
+  searchable, non-listable managed directories.
 - Guest and control-plane inputs now have explicit memory and concurrency
   bounds. QMP/QGA frames, captured guest-command output, buffered guest-file
   reads, and control requests fail with recognizable limit errors; control

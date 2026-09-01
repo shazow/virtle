@@ -163,6 +163,7 @@ func (d Document) resolveQEMU(host HostInput, hostName string, workingDir string
 	imageMounts := d.Mounts.Image()
 	qemu := QEMU{
 		BinaryPath: binaryPath,
+		RunAsUser:  d.QEMU.User,
 		Name:       hostName,
 		Machine: QEMUMachine{
 			Type:    machineType,

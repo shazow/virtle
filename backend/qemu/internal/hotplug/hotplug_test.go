@@ -110,6 +110,18 @@ func TestVirtioFSAttachSuccessWritesState(t *testing.T) {
 	if state.ID != "cache" || state.Kind != manifest.HotplugKindVirtioFS || state.Bus != "pcie.hotplug.0" || state.PID != 100 {
 		t.Fatalf("unexpected state: %#v", state)
 	}
+	for path, want := range map[string]os.FileMode{
+		filepath.Join(tmpDir, "state", "hotplug"):               privateDirectoryMode,
+		filepath.Join(tmpDir, "state", "hotplug", "cache.json"): privateFileMode,
+	} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("stat %q: %v", path, err)
+		}
+		if got := info.Mode().Perm(); got != want {
+			t.Fatalf("mode of %q: got %o want %o", path, got, want)
+		}
+	}
 }
 
 func TestVirtioFSAttachQMPFailureRollsBackHost(t *testing.T) {

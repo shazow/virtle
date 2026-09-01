@@ -945,6 +945,22 @@ func TestDocumentQEMUExecRendersTemplates(t *testing.T) {
 	}
 }
 
+func TestDocumentQEMUUserIsRetainedForPersistenceAccess(t *testing.T) {
+	document := validDocument()
+	document.QEMU.User = "qemu-runtime"
+
+	resolved, err := document.Manifest()
+	if err != nil {
+		t.Fatalf("resolve manifest: %v", err)
+	}
+	if got, want := resolved.QEMU.RunAsUser, document.QEMU.User; got != want {
+		t.Fatalf("qemu run-as user: got %q want %q", got, want)
+	}
+	if got := resolved.QEMU.PassthroughArgs; !reflect.DeepEqual(got[:2], []string{"-user", "qemu-runtime"}) {
+		t.Fatalf("qemu user arguments: got %#v", got)
+	}
+}
+
 func TestDocumentQEMUExecRejectsMissingTemplateKey(t *testing.T) {
 	document := validDocument()
 	document.QEMU.Exec = []string{"qemu-system-{{.Missing}}"}

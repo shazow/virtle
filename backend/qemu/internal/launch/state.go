@@ -25,6 +25,26 @@ func VMStatePath(manifest *manifest.Manifest) string {
 	return filepath.Join(manifest.ResolvedPersistenceStateDir(), manifest.Identity.HostName+".vmstate")
 }
 
+// PrepareVMStateFile replaces the saved-state stream with a private empty file
+// that privilege-dropped QEMU can reopen for migration.
+func PrepareVMStateFile(manifest *manifest.Manifest) (string, error) {
+	path := VMStatePath(manifest)
+	if err := EnsurePersistenceDirectory(filepath.Dir(path), manifest.QEMU.RunAsUser); err != nil {
+		return "", fmt.Errorf("create vm state directory: %w", err)
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("remove stale vm state %q: %w", path, err)
+	}
+	file, err := createPrivateFile(path, manifest.QEMU.RunAsUser)
+	if err != nil {
+		return "", fmt.Errorf("prepare vm state %q: %w", path, err)
+	}
+	if err := file.Close(); err != nil {
+		return "", fmt.Errorf("close vm state %q: %w", path, err)
+	}
+	return path, nil
+}
+
 func LaunchPIDPath(manifest *manifest.Manifest) string {
 	return filepath.Join(manifest.ResolvedPersistenceStateDir(), manifest.Identity.HostName+".pid")
 }
@@ -37,7 +57,7 @@ func WriteSuspendStateData(manifest *manifest.Manifest, state SuspendState) erro
 		state.Timestamp = time.Now().UTC()
 	}
 	path := SuspendStatePath(manifest)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := EnsurePersistenceDirectory(filepath.Dir(path), manifest.QEMU.RunAsUser); err != nil {
 		return fmt.Errorf("create suspend state directory: %w", err)
 	}
 
@@ -47,7 +67,7 @@ func WriteSuspendStateData(manifest *manifest.Manifest, state SuspendState) erro
 	}
 	data = append(data, '\n')
 
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := os.WriteFile(path, data, privateFileMode); err != nil {
 		return fmt.Errorf("write suspend state %q: %w", path, err)
 	}
 	return nil
@@ -95,10 +115,10 @@ func RemoveRestoredSuspendState(plan *Plan) error {
 
 func WriteLaunchPID(manifest *manifest.Manifest, pid int) error {
 	path := LaunchPIDPath(manifest)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := EnsurePersistenceDirectory(filepath.Dir(path), manifest.QEMU.RunAsUser); err != nil {
 		return fmt.Errorf("create launch pid directory: %w", err)
 	}
-	if err := os.WriteFile(path, []byte(strconv.Itoa(pid)+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(strconv.Itoa(pid)+"\n"), privateFileMode); err != nil {
 		return fmt.Errorf("write launch pid %q: %w", path, err)
 	}
 	return nil

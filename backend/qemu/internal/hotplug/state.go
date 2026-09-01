@@ -11,6 +11,11 @@ import (
 	"github.com/shazow/virtle/internal/manifest"
 )
 
+const (
+	privateDirectoryMode os.FileMode = 0o700
+	privateFileMode      os.FileMode = 0o600
+)
+
 type State struct {
 	ID   string               `json:"id"`
 	Kind manifest.HotplugKind `json:"kind"`
@@ -26,7 +31,7 @@ func StatePath(stateDir string, id string) (string, error) {
 }
 
 func WriteState(path string, state State) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), privateDirectoryMode); err != nil {
 		return fmt.Errorf("create hotplug state directory: %w", err)
 	}
 	data, err := json.MarshalIndent(state, "", "  ")
@@ -34,7 +39,7 @@ func WriteState(path string, state State) error {
 		return fmt.Errorf("encode hotplug state: %w", err)
 	}
 	data = append(data, '\n')
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := os.WriteFile(path, data, privateFileMode); err != nil {
 		return fmt.Errorf("write hotplug state %q: %w", path, err)
 	}
 	return nil

@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -787,20 +788,29 @@ func TestRemoveStaleSocketsIgnoresMissing(t *testing.T) {
 }
 
 func TestCreateVolumeImageCreatesNativeExt4(t *testing.T) {
+	account, err := user.Current()
+	if err != nil {
+		t.Fatalf("current user: %v", err)
+	}
 	label := "persist"
 	for _, tt := range []struct {
 		name      string
 		sizeMiB   units.MiB
 		label     string
 		wantLabel string
+		qemuOwned bool
 	}{
-		{name: "minimum-size-without-label", sizeMiB: 256},
+		{name: "minimum-size-without-label", sizeMiB: 256, qemuOwned: true},
 		{name: "minimum-size-with-label", sizeMiB: 256, label: label, wantLabel: label},
 		{name: "default-home-size", sizeMiB: 4096, label: label, wantLabel: label},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			tmpDir := t.TempDir()
 			imagePath := filepath.Join(tmpDir, "volume.img")
+			runAsUser := ""
+			if tt.qemuOwned {
+				runAsUser = account.Username
+			}
 
 			err := launch.CreateVolumeImage(manifest.Volume{
 				ImagePath:  imagePath,
@@ -808,15 +818,29 @@ func TestCreateVolumeImageCreatesNativeExt4(t *testing.T) {
 				FSType:     "ext4",
 				AutoCreate: true,
 				Label:      tt.label,
-			})
+			}, runAsUser)
 			if err != nil {
 				t.Fatalf("create volume image: %v", err)
 			}
 
-			if info, err := os.Stat(imagePath); err != nil {
+			info, err := os.Stat(imagePath)
+			if err != nil {
 				t.Fatalf("expected volume image to exist: %v", err)
-			} else if got, want := info.Size(), tt.sizeMiB.Bytes(); got != want {
+			}
+			if got, want := info.Size(), tt.sizeMiB.Bytes(); got != want {
 				t.Fatalf("unexpected volume size: got %d want %d", got, want)
+			}
+			if got, want := info.Mode().Perm(), os.FileMode(0o600); got != want {
+				t.Fatalf("unexpected volume mode: got %o want %o", got, want)
+			}
+			if tt.qemuOwned {
+				stat, ok := info.Sys().(*syscall.Stat_t)
+				if !ok {
+					t.Fatalf("volume stat has type %T", info.Sys())
+				}
+				if int(stat.Uid) != os.Getuid() || int(stat.Gid) != os.Getgid() {
+					t.Fatalf("volume ownership: got %d:%d want %d:%d", stat.Uid, stat.Gid, os.Getuid(), os.Getgid())
+				}
 			}
 
 			image, err := diskfs.Open(imagePath, diskfs.WithOpenMode(diskfs.ReadOnly))
@@ -859,7 +883,7 @@ func TestCreateVolumeImageRunsChattrBeforeSizingImage(t *testing.T) {
 		Size:       256,
 		FSType:     "ext4",
 		AutoCreate: true,
-	}); err != nil {
+	}, ""); err != nil {
 		t.Fatalf("create volume image: %v", err)
 	}
 
@@ -2912,6 +2936,11 @@ func TestSaveSuspendStateConnectedStopsMigratesAndWritesSavedState(t *testing.T)
 	}
 	if migratePath != launch.VMStatePath(cfg) {
 		t.Fatalf("unexpected migrate path: got %q want %q", migratePath, launch.VMStatePath(cfg))
+	}
+	if info, err := os.Stat(migratePath); err != nil {
+		t.Fatalf("stat vm state: %v", err)
+	} else if got, want := info.Mode().Perm(), os.FileMode(0o600); got != want {
+		t.Fatalf("vm state mode: got %o want %o", got, want)
 	}
 	if status != "paused" {
 		t.Fatalf("expected paused status, got %q", status)

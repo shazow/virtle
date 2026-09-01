@@ -106,7 +106,7 @@ func specFromDocument(doc imanifest.Document) (*vm.Spec, error) {
 			spec.Ports = append(spec.Ports, vm.Forward{
 				HostAddr:  forward.Host,
 				GuestAddr: forward.Guest,
-				Proto:     forward.Proto,
+				Proto:     vm.Proto(forward.Proto),
 			})
 		}
 	}

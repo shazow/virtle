@@ -40,6 +40,15 @@ import (
 // DefaultMemory is the guest memory size used when vm.Spec.Memory is zero.
 const DefaultMemory = 2048 * units.Mebibyte
 
+// Accel selects the QEMU accelerator.
+type Accel string
+
+const (
+	AccelAuto Accel = ""    // KVM when available, else TCG (default)
+	AccelKVM  Accel = "kvm" // require KVM
+	AccelTCG  Accel = "tcg" // software emulation, even when KVM is available
+)
+
 // Console selects how the guest serial console is wired.
 type Console string
 
@@ -57,7 +66,7 @@ type Backend struct {
 	Machine        string            // QEMU machine type; default: microvm
 	MachineOptions map[string]string // extra machine options
 	CPUModel       string            // QEMU CPU model; default derived per host
-	KVM            *bool             // enable KVM acceleration; default derived per host
+	Accel          Accel             // accelerator; default: AccelAuto
 	ExtraArgs      []string          // passthrough QEMU arguments
 	Console        Console
 	Seccomp        bool   // enable QEMU seccomp sandboxing
@@ -311,20 +320,12 @@ func hotplugDevice(resolver hotplugResolver, dev vm.Device) (imanifest.HotplugDe
 			Image:      imanifest.ImageInput{Format: d.Format, Serial: &id},
 		})
 	case vm.Forward:
-		proto := d.Proto
-		if proto == "" {
-			proto = "tcp"
-		}
-		identity := proto + "\x00" + d.HostAddr + "\x00" + d.GuestAddr
+		forward := specForward(d)
+		identity := forward.Proto + "\x00" + d.HostAddr + "\x00" + d.GuestAddr
 		return resolver.ResolveHotplugNetwork(imanifest.NetworkInput{
-			ID:  deviceID("fwd", identity),
-			MAC: deviceMAC(identity),
-			Forward: []imanifest.ForwardPort{{
-				Proto: d.Proto,
-				From:  "host",
-				Host:  d.HostAddr,
-				Guest: d.GuestAddr,
-			}},
+			ID:      deviceID("fwd", identity),
+			MAC:     deviceMAC(identity),
+			Forward: []imanifest.ForwardPort{forward},
 		})
 	default:
 		return imanifest.HotplugDevice{}, fmt.Errorf("unsupported device type %T", dev)

@@ -41,6 +41,13 @@ user-visible outcomes.
   encoders (`ParseBytes`, `MarshalText`, `UnmarshalText`), so `"2GiB"` works in
   TOML and JSON.
 
+- **Library API (breaking).** Mechanical type tightening: `qemu.Backend.Accel`
+  (`AccelAuto`, `AccelKVM`, `AccelTCG`) replaces the `KVM *bool` tri-state;
+  `vm.Forward.Proto` is a typed `vm.Proto` (`vm.TCP`, `vm.UDP`; zero value
+  TCP) and the endpoint grammar is documented; `vm.TermOptions.TERM` is
+  `TermType`; `vm.CopyOptions` takes `Chown bool` with plain `UID`/`GID`
+  instead of pointers.
+
 - Newly created VM state directories and volume images are private by default
   (`0700` and `0600`).
 - Guest and control requests now have bounded memory use and concurrency.

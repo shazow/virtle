@@ -131,6 +131,32 @@ func TestSpecDocumentHotplugPorts(t *testing.T) {
 	}
 }
 
+func TestSpecDocumentAccel(t *testing.T) {
+	on, off := true, false
+	for _, tt := range []struct {
+		accel Accel
+		want  *bool
+	}{
+		{AccelAuto, nil},
+		{AccelKVM, &on},
+		{AccelTCG, &off},
+	} {
+		doc, err := specDocument(testSpec(), &Backend{Accel: tt.accel}, nil)
+		if err != nil {
+			t.Fatalf("specDocument(%q): %v", tt.accel, err)
+		}
+		switch {
+		case tt.want == nil && doc.Machine.KVM != nil:
+			t.Errorf("Accel %q: KVM = %v, want unset", tt.accel, *doc.Machine.KVM)
+		case tt.want != nil && (doc.Machine.KVM == nil || *doc.Machine.KVM != *tt.want):
+			t.Errorf("Accel %q: KVM = %v, want %v", tt.accel, doc.Machine.KVM, *tt.want)
+		}
+	}
+	if _, err := specDocument(testSpec(), &Backend{Accel: "hvf"}, nil); err == nil {
+		t.Fatal("expected an unsupported accelerator to be rejected")
+	}
+}
+
 func TestSpecDocumentResolves(t *testing.T) {
 	doc, err := specDocument(testSpec(), &Backend{}, nil)
 	if err != nil {
@@ -236,7 +262,7 @@ func TestSpecDocumentOverlaysBase(t *testing.T) {
 		Kernel: vm.Kernel{Path: "vmlinuz", Initrd: "initrd.img"},
 		Shares: []vm.Share{{Tag: "src", HostPath: "/host/new", GuestPath: "/workspace", ReadOnly: true}},
 		Disks:  []vm.Disk{{Path: "new.qcow2", Format: "qcow2", Size: 256 * units.Mebibyte}},
-		Ports:  []vm.Forward{{Proto: "udp", HostAddr: "127.0.0.1:8080", GuestAddr: "10.0.2.15:80"}},
+		Ports:  []vm.Forward{{Proto: vm.UDP, HostAddr: "127.0.0.1:8080", GuestAddr: "10.0.2.15:80"}},
 		Files:  []vm.File{{GuestPath: "/etc/new", Content: strings.NewReader("new content"), Mode: 0o640}},
 	}
 	doc, err := specDocument(spec, &Backend{}, &base)

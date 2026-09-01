@@ -26,9 +26,9 @@ type Term interface {
 // TermOptions configures a new Term session. The zero value requests the
 // source's default shell with its default size.
 type TermOptions struct {
-	Argv []string // command to run; default: a login shell
-	Env  []string
-	TERM string // terminal type advertised to the guest, e.g. "xterm-256color"
-	Cols int
-	Rows int
+	Argv     []string // command to run; default: a login shell
+	Env      []string
+	TermType string // terminal type advertised to the guest, e.g. "xterm-256color"
+	Cols     int
+	Rows     int
 }

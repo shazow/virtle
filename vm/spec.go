@@ -48,11 +48,22 @@ type Disk struct {
 	Size      units.Bytes // created at this size if the image is absent
 }
 
-// Forward is a host<->guest port forward.
+// Proto is the transport protocol of a port Forward.
+type Proto string
+
+const (
+	TCP Proto = "tcp" // the zero value of Forward.Proto means TCP
+	UDP Proto = "udp"
+)
+
+// Forward is a host<->guest port forward. Endpoints are "host:port"
+// strings in the net.Dial grammar: the host part may be a hostname or an
+// IP address, and an empty host (":8080") binds every interface. They are
+// never parsed as IP addresses by virtle.
 type Forward struct {
-	HostAddr  string
-	GuestAddr string
-	Proto     string // defaults to "tcp"
+	HostAddr  string // "host:port" or ":port" on the host side
+	GuestAddr string // "host:port" or ":port" on the guest side
+	Proto     Proto  // zero value: TCP
 }
 
 // File is a small file placed in the guest before the workload starts;

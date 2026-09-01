@@ -109,9 +109,13 @@ func specDocument(spec *vm.Spec, cfg *Backend, base *imanifest.Document) (imanif
 	if cfg.CPUModel != "" {
 		doc.Machine.CPU = cfg.CPUModel
 	}
-	if cfg.KVM != nil {
-		kvm := *cfg.KVM
+	switch cfg.Accel {
+	case AccelAuto:
+	case AccelKVM, AccelTCG:
+		kvm := cfg.Accel == AccelKVM
 		doc.Machine.KVM = &kvm
+	default:
+		return imanifest.Document{}, fmt.Errorf("unsupported accelerator %q", cfg.Accel)
 	}
 	if cfg.Console != "" {
 		doc.Kernel.Serial = string(cfg.Console)
@@ -258,11 +262,15 @@ func overlaySpecPorts(doc *imanifest.Document, ports []vm.Forward) error {
 }
 
 func specForward(forward vm.Forward) imanifest.ForwardPort {
-	proto := forward.Proto
-	if proto == "" {
-		proto = "tcp"
+	return imanifest.ForwardPort{Proto: string(forwardProto(forward)), From: "host", Host: forward.HostAddr, Guest: forward.GuestAddr}
+}
+
+// forwardProto applies Forward.Proto's zero-value rule.
+func forwardProto(forward vm.Forward) vm.Proto {
+	if forward.Proto == "" {
+		return vm.TCP
 	}
-	return imanifest.ForwardPort{Proto: proto, From: "host", Host: forward.HostAddr, Guest: forward.GuestAddr}
+	return forward.Proto
 }
 
 func overlaySpecFiles(inputs []imanifest.WriteFileInput, files []vm.File) ([]imanifest.WriteFileInput, error) {

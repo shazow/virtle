@@ -106,11 +106,11 @@ type CopyOptions struct {
 	// satisfying errors.Is(err, fs.ErrExist) — the os.CopyFS default.
 	Overwrite bool
 
-	// UID/GID override ownership of created entries; nil keeps whatever
-	// the archive recorded (ArchiveFS records none, since host uids are
-	// meaningless in-guest). Pointers are load-bearing: 0 (root) is a
-	// valid value, so nil must be distinguishable from it.
-	UID, GID *int
+	// Chown sets the ownership of created entries to UID and GID, the
+	// os.Chown shape; false keeps whatever the archive recorded (ArchiveFS
+	// records none, since host uids are meaningless in-guest).
+	Chown    bool
+	UID, GID int
 }
 
 // ArchiveFS adapts the common host case — "copy this directory" — to the

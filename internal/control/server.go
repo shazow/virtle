@@ -102,7 +102,9 @@ func (s *Server) Serve(l net.Listener) error {
 				s.handleConn(conn)
 			}()
 		default:
-			s.rejectConn(conn, &limits.Error{
+			// Reject asynchronously so a peer that never reads its response
+			// cannot stall the accept loop for the write deadline.
+			go s.rejectConn(conn, &limits.Error{
 				Resource: "concurrent control requests",
 				Limit:    int64(maxHandlers),
 				Unit:     "handlers",
@@ -183,7 +185,15 @@ func decodeRequest(reader io.Reader, maxSize int64, req *requestEnvelope) error 
 	limited := &io.LimitedReader{R: reader, N: maxSize + 1}
 	decoder := json.NewDecoder(limited)
 	err := decoder.Decode(req)
-	if limited.N == 0 || decoder.InputOffset() > maxSize {
+	if err == nil {
+		if decoder.InputOffset() > maxSize {
+			return &limits.Error{Resource: "control request", Limit: maxSize}
+		}
+		return nil
+	}
+	// The value did not complete within the limit; the decoder's own error
+	// only reflects the truncation.
+	if limited.N == 0 {
 		return &limits.Error{Resource: "control request", Limit: maxSize}
 	}
 	return err

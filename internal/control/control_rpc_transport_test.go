@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/shazow/virtle/backend/qemu/limits"
 )
 
 type fakeControlCore struct {
@@ -536,5 +538,31 @@ func TestServerCancelsHandlerWhenPeerDisconnects(t *testing.T) {
 	case <-handler.canceled:
 	case <-time.After(time.Second):
 		t.Fatal("handler was not canceled after the peer disconnected")
+	}
+}
+
+func TestDecodeRequestSizeBoundary(t *testing.T) {
+	body, err := json.Marshal(requestEnvelope{ID: 1, Method: rpcStatus})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	limit := int64(len(body))
+
+	var req requestEnvelope
+	if err := decodeRequest(strings.NewReader(string(body)+"\n"), limit, &req); err != nil {
+		t.Fatalf("request exactly at the limit with trailing newline should decode, got %v", err)
+	}
+	if req.Method != rpcStatus {
+		t.Fatalf("unexpected method %q", req.Method)
+	}
+
+	err = decodeRequest(strings.NewReader(string(body)+"\n"), limit-1, &req)
+	if !errors.Is(err, limits.ErrExceeded) {
+		t.Fatalf("request one byte over the limit should be rejected, got %v", err)
+	}
+
+	err = decodeRequest(strings.NewReader(`{"id":`), limit, &req)
+	if err == nil || errors.Is(err, limits.ErrExceeded) {
+		t.Fatalf("truncated request within the limit should report a decode error, got %v", err)
 	}
 }

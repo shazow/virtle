@@ -330,6 +330,38 @@ func TestRunRPCStatusPrintsControlSocketResponse(t *testing.T) {
 	}
 }
 
+func TestRunStatusUsesMachineStatus(t *testing.T) {
+	tmpDir := t.TempDir()
+	manifestPath := filepath.Join(tmpDir, "manifest.json")
+	if err := os.WriteFile(manifestPath, []byte(testManifestJSON(tmpDir)), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	cfg, err := loadManifest(manifestPath)
+	if err != nil {
+		t.Fatalf("load manifest: %v", err)
+	}
+	path, err := cfg.ResolvedControlSocketPath()
+	if err != nil {
+		t.Fatalf("resolve control socket: %v", err)
+	}
+	startMainTestControlServerAt(t, path, &mainTestControlCore{status: control.StatusResponse{
+		State: control.RuntimeReady, CID: 8, PID: 99,
+	}})
+
+	output := captureStdout(t, func() {
+		if err := run([]string{"--manifest=" + manifestPath, "status"}); err != nil {
+			t.Fatalf("status: %v", err)
+		}
+	})
+	var got control.StatusResponse
+	if err := json.Unmarshal([]byte(output), &got); err != nil {
+		t.Fatalf("decode status: %v", err)
+	}
+	if got.CID != 8 || got.PID != 99 || got.State != control.RuntimeReady {
+		t.Fatalf("status = %#v", got)
+	}
+}
+
 func TestRunRPCUsesJSONParams(t *testing.T) {
 	tmpDir := t.TempDir()
 	manifestPath := filepath.Join(tmpDir, "manifest.json")

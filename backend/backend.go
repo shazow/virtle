@@ -12,9 +12,10 @@ package backend
 
 import (
 	"context"
+	"time"
+
 	"github.com/shazow/virtle/units"
 	"github.com/shazow/virtle/vm"
-	"time"
 )
 
 // Backend starts virtual machines. Implementations live under backend/
@@ -38,7 +39,7 @@ type Machine interface {
 	// expires. Implementations must make repeated calls safe.
 	Shutdown(ctx context.Context) error
 
-	// RemoteControl returns guest control for this instance, wired up by
+	// RemoteControl returns guest control for this machine, wired up by
 	// the backend, or an error wrapping errors.ErrUnsupported when the VM
 	// has no reachable guest agent. Most virtle functionality is built on
 	// the expectation that this succeeds. Whether the backend wires guest
@@ -130,14 +131,14 @@ type DeviceAttacher interface {
 	Detach(ctx context.Context, dev vm.Device) error
 }
 
-// ConsoleProvider is implemented by instances whose backend exposes a
+// ConsoleProvider is implemented by machines whose backend exposes a
 // serial/chardev console — the no-daemon debug path. The returned Term
 // may lack resize and exit semantics (see vm.Term).
 type ConsoleProvider interface {
 	Console(ctx context.Context) (vm.Term, error)
 }
 
-// Shutdown stops an instance gracefully. The graceful guest shutdown is
+// Shutdown stops a machine gracefully. The graceful guest shutdown is
 // attempted only when remote control is available (RemoteControl
 // succeeds); instances without it — and instances whose guest is
 // unreachable or whose context expires — are stopped with Kill.

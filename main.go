@@ -17,10 +17,12 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/jessevdk/go-flags"
 	"github.com/shazow/virtle/backend"
+	"github.com/shazow/virtle/backend/qemu"
 	"github.com/shazow/virtle/backend/qemu/session"
 	"github.com/shazow/virtle/internal/control"
 	"github.com/shazow/virtle/internal/manifest"
 	manifestschema "github.com/shazow/virtle/internal/manifest/schema"
+	manifestapi "github.com/shazow/virtle/manifest"
 )
 
 type Options struct {
@@ -79,15 +81,28 @@ func runLaunch(options *Options) error {
 	}
 
 	rootLogger.With("package", "main").Info("loading launch manifest", "path", options.Manifest)
+	resolvedPath, err := resolveManifestPath(options.Manifest)
+	if err != nil {
+		return err
+	}
+	data, err := readManifestFile(resolvedPath)
+	if err != nil {
+		return fmt.Errorf("open manifest %q: %w", resolvedPath, err)
+	}
+	spec, b, err := manifestapi.Load(bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("load manifest %q: %w", resolvedPath, err)
+	}
+	if qemuBackend, ok := b.(*qemu.Backend); ok {
+		qemuBackend.Logger = rootLogger
+		qemuBackend.ConsoleOutput = os.Stderr
+	}
 	loaded, err := loadLaunchManifest(options.Manifest, rootLogger.With("package", "manifest"))
 	if err != nil {
 		return err
 	}
 
-	// The session layer owns the whole foreground lifecycle; backend
-	// details (suspend-state versioning, readiness, guest control) live
-	// inside the machinery it wraps.
-	return session.Run(context.Background(), loaded, session.Options{
+	return session.Run(context.Background(), b, spec, loaded, session.Options{
 		Resume:        options.Launch.Resume,
 		SSH:           options.Launch.SSH,
 		RemoteCommand: options.Launch.Args.RemoteCommand,

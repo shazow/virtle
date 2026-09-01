@@ -16,6 +16,8 @@ user-visible outcomes.
   protocols now use typed enums.
 - The control socket now implements `backend.Machine`, including selectable
   exit completion and typed status reporting; `virtle status` exposes it.
+- `virtle launch` now loads its machine through the public `manifest.Load`
+  path and runs its foreground lifecycle against `backend.Machine`.
 - Newly created VM state directories and volume images are private by default
   (`0700` and `0600`).
 - Guest and control requests now have bounded memory use and concurrency.
@@ -44,9 +46,9 @@ user-visible outcomes.
 
   ```go
   spec, b, err := manifest.Load(r)
-  inst, err := b.Start(ctx, spec)
-  guest, err := inst.RemoteControl()
-  result, err := guest.Run(ctx, &vm.GuestCmd{Path: "make"})
+  m, err := b.Start(ctx, spec)
+  guest, err := m.RemoteControl()
+  err = guest.Run(ctx, &vm.GuestCmd{Path: "make", Stdout: os.Stdout})
   ```
 
 - Logging was overhauled: normal runs show warnings, `-v` adds useful lifecycle

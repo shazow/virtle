@@ -67,6 +67,8 @@ func (r *Core) QMP() qmpclient.Client {
 
 func (r *Core) StartControl(ctx context.Context, handlers control.Handlers) (*control.Server, error) {
 	handlers.Core = r
+	handlers.Kill = r
+	handlers.Shutdown = r
 	handlers.Suspend = r
 	handlers.Balloon = r
 	router, err := control.NewRouter(handlers)
@@ -80,8 +82,27 @@ func (r *Core) StartControl(ctx context.Context, handlers control.Handlers) (*co
 	return controlServer, err
 }
 
+func (r *Core) Kill(ctx context.Context, req control.KillRequest) (control.KillResponse, error) {
+	_ = ctx
+	_ = req
+	var err error
+	if r.processes != nil && r.processes.QEMU() != nil {
+		err = r.processes.QEMU().KillAndWait()
+	}
+	return control.KillResponse{}, errors.Join(err, r.Close())
+}
+
+func (r *Core) ShutdownRPC(ctx context.Context, req control.ShutdownRequest) (control.ShutdownResponse, error) {
+	_ = req
+	return control.ShutdownResponse{}, r.Shutdown(ctx)
+}
+
 func (r *Core) Close() error {
-	return r.closer.Close(closeActions{
+	return r.Shutdown(context.Background())
+}
+
+func (r *Core) Shutdown(ctx context.Context) error {
+	return r.closer.CloseContext(ctx, closeActions{
 		shutdownResources: shutdownResources{
 			Processes: r.processes,
 			QMP:       r.qmp,
@@ -94,13 +115,22 @@ func (r *Core) Close() error {
 	})
 }
 
+func (r *Core) Wait(ctx context.Context, req control.WaitRequest) (control.WaitResponse, error) {
+	_ = req
+	return control.WaitResponse{}, r.state.Wait(ctx)
+}
+
 func (r *Core) Status(ctx context.Context, req control.StatusRequest) (control.StatusResponse, error) {
 	_ = ctx
-	return status(r.state, r.cid, control.StatusPaths{
-		ControlSocket:    r.paths.ControlSocket,
-		QMPSocket:        r.paths.QMPSocket,
-		GuestAgentSocket: r.paths.GuestAgentSocket,
-		SSHReadySocket:   r.paths.SSHReadySocket,
+	pid := 0
+	if r.processes != nil && r.processes.QEMU() != nil {
+		pid = r.processes.QEMU().PID()
+	}
+	return status(r.state, r.cid, pid, control.StatusPaths{
+		ControlSocket:      r.paths.ControlSocket,
+		MonitorSocket:      r.paths.QMPSocket,
+		GuestControlSocket: r.paths.GuestAgentSocket,
+		ReadySocket:        r.paths.SSHReadySocket,
 	}, r.stats), nil
 }
 

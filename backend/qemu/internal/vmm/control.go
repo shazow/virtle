@@ -7,6 +7,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/shazow/virtle/backend"
 	"github.com/shazow/virtle/backend/qemu/internal/launch"
 	controlpkg "github.com/shazow/virtle/internal/control"
 	"github.com/shazow/virtle/internal/manifest"
@@ -25,18 +26,18 @@ func (m *manager) suspend(ctx context.Context) error {
 	manifest := m.launchManifest
 	controlSocketPath, err := manifest.ResolvedControlSocketPath()
 	if err == nil && controlSocketPath != "" {
-		resp, err := controlpkg.Dial(controlSocketPath).Suspend(ctx, controlpkg.SuspendRequest{})
+		machine, err := controlpkg.Dial(ctx, controlSocketPath)
 		if err == nil {
-			if resp.Saved {
-				timeout := m.effectiveSuspendSignalTimeout()
-				waitCtx, cancel := context.WithTimeout(ctx, timeout)
-				defer cancel()
-				if err := launch.WaitForLaunchExited(waitCtx, manifest, timeout); err != nil {
-					return err
-				}
-				return nil
+			err = machine.(backend.Suspender).Suspend(ctx)
+		}
+		if err == nil {
+			timeout := m.effectiveSuspendSignalTimeout()
+			waitCtx, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+			if err := launch.WaitForLaunchExited(waitCtx, manifest, timeout); err != nil {
+				return err
 			}
-			return &launch.StageError{Stage: "qmp suspend", Err: fmt.Errorf("launch process did not save VM state")}
+			return nil
 		}
 		if !controlpkg.IsSocketUnavailable(err) {
 			return &launch.StageError{Stage: "control suspend", Err: err}

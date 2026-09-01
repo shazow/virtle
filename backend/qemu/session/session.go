@@ -68,17 +68,5 @@ func Run(ctx context.Context, mf *manifest.Manifest, opts Options) error {
 	return err
 }
 
-// Suspend suspends a running session out-of-process: over the control
-// socket, falling back to signalling the launch process.
-func Suspend(ctx context.Context, mf *manifest.Manifest) error {
-	return vmm.Suspend(ctx, mf)
-}
-
-// Hotplug attaches or detaches a manifest-declared hotplug device on a
-// running session, over the control socket.
-func Hotplug(ctx context.Context, mf *manifest.Manifest, id string, detach bool) error {
-	return vmm.Hotplug(ctx, mf, id, detach)
-}
-
 // ExitCode maps session errors onto CLI exit codes.
 func ExitCode(err error) int { return vmm.ExitCode(err) }

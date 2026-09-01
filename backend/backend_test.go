@@ -13,6 +13,12 @@ type fakeMachine struct {
 	err       error
 }
 
+func (*fakeMachine) Done() <-chan struct{} {
+	done := make(chan struct{})
+	close(done)
+	return done
+}
+func (*fakeMachine) Err() error                       { return nil }
 func (*fakeMachine) Wait(context.Context) error       { return nil }
 func (*fakeMachine) Kill() error                      { return nil }
 func (*fakeMachine) RemoteControl() (vm.Guest, error) { return nil, errors.ErrUnsupported }

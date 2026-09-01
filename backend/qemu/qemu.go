@@ -190,6 +190,10 @@ type Machine struct {
 
 func (m *Machine) Wait(ctx context.Context) error { return m.vm.Wait(ctx) }
 
+func (m *Machine) Done() <-chan struct{} { return m.vm.Done() }
+
+func (m *Machine) Err() error { return m.vm.Err() }
+
 func (m *Machine) Kill() error { return m.vm.Kill() }
 
 func (m *Machine) RemoteControl() (vm.Guest, error) {
@@ -209,7 +213,12 @@ func (m *Machine) Shutdown(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return errors.Join(err, m.Kill())
 	}
-	return m.vm.Close()
+	return m.vm.Shutdown(ctx)
+}
+
+// Status reports the machine's runtime state and connection details.
+func (m *Machine) Status(ctx context.Context) (backend.Status, error) {
+	return m.vm.Status(ctx)
 }
 
 // Suspend implements backend.Suspender: it saves the running machine's state
@@ -258,6 +267,7 @@ var (
 	_ backend.Suspender      = (*Machine)(nil)
 	_ backend.MemoryResizer  = (*Machine)(nil)
 	_ backend.DeviceAttacher = (*Machine)(nil)
+	_ backend.StatusReporter = (*Machine)(nil)
 )
 
 type hotplugResolver interface {

@@ -26,6 +26,7 @@ import (
 	rawQMP "github.com/digitalocean/go-qemu/qmp/raw"
 	diskfs "github.com/diskfs/go-diskfs"
 	"github.com/diskfs/go-diskfs/filesystem"
+	"github.com/shazow/virtle/backend"
 	"github.com/shazow/virtle/backend/qemu/internal/launch"
 	"github.com/shazow/virtle/backend/qemu/internal/qga"
 	"github.com/shazow/virtle/backend/qemu/internal/qmpclient"
@@ -36,6 +37,7 @@ import (
 	"github.com/shazow/virtle/internal/executor/executortest"
 	"github.com/shazow/virtle/internal/manifest"
 	"github.com/shazow/virtle/units"
+	"github.com/shazow/virtle/vm"
 )
 
 const (
@@ -2573,9 +2575,9 @@ func TestManagerLaunchControlSuspendWaitsForGuestProvisioning(t *testing.T) {
 	defer cancelRPC()
 	rpcDone := make(chan error, 1)
 	go func() {
-		resp, err := control.Dial(controlSocketPath).Suspend(rpcCtx, control.SuspendRequest{})
-		if err == nil && !resp.Saved {
-			err = errors.New("suspend response was not saved")
+		machine, err := control.Dial(rpcCtx, controlSocketPath)
+		if err == nil {
+			err = machine.(backend.Suspender).Suspend(rpcCtx)
 		}
 		rpcDone <- err
 	}()
@@ -3732,7 +3734,7 @@ type testHotplugControlHandler struct {
 
 func (h *testHotplugControlHandler) Hotplug(ctx context.Context, req control.HotplugRequest) (control.HotplugResponse, error) {
 	h.requests = append(h.requests, req)
-	return control.HotplugResponse(req), nil
+	return control.HotplugResponse{ID: req.ID, Detach: req.Detach}, nil
 }
 
 func TestManagerHotplugUsesControlSocket(t *testing.T) {
@@ -3793,7 +3795,10 @@ func TestLaunchRuntimeRegistersHotplugAtControlPeriphery(t *testing.T) {
 	}
 	defer running.Close()
 
-	_, err = control.Dial(plan.Paths.ControlSocket).Hotplug(context.Background(), control.HotplugRequest{ID: "vpn"})
+	params, err := json.Marshal(control.HotplugRequest{ID: "vpn"})
+	if err == nil {
+		_, err = control.Raw(context.Background(), plan.Paths.ControlSocket, "hotplug", params)
+	}
 	if err != nil {
 		t.Fatalf("control hotplug: %v", err)
 	}
@@ -3832,9 +3837,6 @@ func TestLaunchRuntimeRegistersGuestRPCsAtControlPeriphery(t *testing.T) {
 
 	guestAgent := &fakeGuestAgentClient{
 		execStatuses: []qga.ExecStatus{{
-			Exited:  true,
-			OutData: "cm9vdCBpbml0CmFnZW50IHZpcnRsZQo=",
-		}, {
 			Exited:   true,
 			ExitCode: 3,
 			OutData:  "ZXhlYy1vdXQK",
@@ -3867,38 +3869,32 @@ func TestLaunchRuntimeRegistersGuestRPCsAtControlPeriphery(t *testing.T) {
 	}
 	defer running.Close()
 
-	client := control.Dial(plan.Paths.ControlSocket)
-	psResp, err := client.GuestPS(context.Background(), control.GuestPSRequest{})
+	machine, err := control.Dial(context.Background(), plan.Paths.ControlSocket)
 	if err != nil {
-		t.Fatalf("control guest ps: %v", err)
+		t.Fatalf("control dial: %v", err)
 	}
-	if psResp.ProcessList != "USER COMMAND\nagent virtle\nroot init" {
-		t.Fatalf("unexpected process list: %q", psResp.ProcessList)
-	}
-	if got, want := len(guestAgent.execs), 1; got != want {
-		t.Fatalf("guest exec count: got %d want %d", got, want)
-	}
-	exec := guestAgent.execs[0]
-	if exec.path != guestPSPath || !reflect.DeepEqual(exec.args, []string{"-eo", "user=,comm="}) || !exec.captureOutput {
-		t.Fatalf("unexpected ps exec: %#v", exec)
+	guest, err := machine.RemoteControl()
+	if err != nil {
+		t.Fatalf("remote control: %v", err)
 	}
 
-	execResp, err := client.GuestExec(context.Background(), control.GuestExecRequest{
-		Path:          "/bin/sh",
-		Args:          []string{"-c", "echo hi"},
-		CaptureOutput: true,
-		Timeout:       units.Duration(300 * time.Second),
+	var stdout, stderr bytes.Buffer
+	execCtx, cancelExec := context.WithTimeout(context.Background(), 300*time.Second)
+	defer cancelExec()
+	err = guest.Run(execCtx, &vm.GuestCmd{
+		Path: "/bin/sh", Args: []string{"-c", "echo hi"}, Stdout: &stdout, Stderr: &stderr,
 	})
-	if err != nil {
-		t.Fatalf("control guest exec: %v", err)
+	var exitErr *vm.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 3 {
+		t.Fatalf("control guest exec error: %v", err)
 	}
-	if !execResp.Exited || execResp.ExitCode != 3 || execResp.OutData != "ZXhlYy1vdXQK" || execResp.ErrData != "ZXhlYy1lcnIK" {
-		t.Fatalf("unexpected guest exec response: %#v", execResp)
+	if stdout.String() != "exec-out\n" || stderr.String() != "exec-err\n" {
+		t.Fatalf("unexpected guest exec output: stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
-	if got, want := len(guestAgent.execs), 2; got != want {
+	if got, want := len(guestAgent.execs), 1; got != want {
 		t.Fatalf("guest exec count after guest-exec: got %d want %d", got, want)
 	}
-	exec = guestAgent.execs[1]
+	exec := guestAgent.execs[0]
 	if exec.path != "/bin/sh" || !reflect.DeepEqual(exec.args, []string{"-c", "echo hi"}) || !exec.captureOutput {
 		t.Fatalf("unexpected guest-exec call: %#v", exec)
 	}
@@ -3906,20 +3902,24 @@ func TestLaunchRuntimeRegistersGuestRPCsAtControlPeriphery(t *testing.T) {
 		t.Fatalf("guest-exec deadline: got %s want ~300s", exec.timeout)
 	}
 
-	readResp, err := client.GuestRead(context.Background(), control.GuestReadRequest{Path: "/tmp/message"})
+	reader, err := guest.Open(context.Background(), "/tmp/message")
 	if err != nil {
 		t.Fatalf("control guest read: %v", err)
 	}
-	if readResp.Path != "/tmp/message" || readResp.DataBase64 != "aGVsbG8=" {
-		t.Fatalf("unexpected guest read response: %#v", readResp)
+	readData, err := io.ReadAll(reader)
+	if err != nil || string(readData) != "hello" {
+		t.Fatalf("unexpected guest read: %q, %v", readData, err)
 	}
 
-	writeResp, err := client.GuestWrite(context.Background(), control.GuestWriteRequest{Path: "/tmp/message", DataBase64: "dXBkYXRlZA=="})
+	writer, err := guest.Create(context.Background(), "/tmp/message", 0)
 	if err != nil {
+		t.Fatalf("control guest create: %v", err)
+	}
+	if _, err := io.WriteString(writer, "updated"); err != nil {
 		t.Fatalf("control guest write: %v", err)
 	}
-	if writeResp.Path != "/tmp/message" {
-		t.Fatalf("unexpected guest write response: %#v", writeResp)
+	if err := writer.Close(); err != nil {
+		t.Fatalf("control guest close: %v", err)
 	}
 	if got := guestAgent.writes["/tmp/message"]; got != "dXBkYXRlZA==" {
 		t.Fatalf("unexpected guest write payload: %q", got)
@@ -3959,7 +3959,15 @@ func TestLaunchRuntimeGuestPSMapsFailureToFailedPrecondition(t *testing.T) {
 	}
 	defer running.Close()
 
-	_, err = control.Dial(plan.Paths.ControlSocket).GuestPS(context.Background(), control.GuestPSRequest{})
+	machine, err := control.Dial(context.Background(), plan.Paths.ControlSocket)
+	if err != nil {
+		t.Fatalf("control dial: %v", err)
+	}
+	guest, err := machine.RemoteControl()
+	if err != nil {
+		t.Fatalf("remote control: %v", err)
+	}
+	err = guest.Run(context.Background(), &vm.GuestCmd{Path: "/bin/true"})
 	var rpcErr *control.RPCError
 	if !errors.As(err, &rpcErr) {
 		t.Fatalf("error type: got %T", err)

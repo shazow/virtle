@@ -69,7 +69,7 @@ func TestStatsTimerSSHAttemptKeepsFirstAttemptAndCountsAllAttempts(t *testing.T)
 			t.Fatalf("stats string %q missing %q", got, want)
 		}
 	}
-	if got := ControlStats(stats).SSHAttempts; got != 2 {
+	if got := ControlStats(stats).SessionAttempts; got != 2 {
 		t.Fatalf("ssh attempts: got %d want 2", got)
 	}
 }
@@ -138,23 +138,23 @@ func TestControlStatsFromTimerEvents(t *testing.T) {
 	got := ControlStats(stats)
 	if got.StartedAt != started ||
 		got.BootStartedAt != started.Add(time.Second) ||
-		got.QMPReadyAt != started.Add(2*time.Second) ||
+		got.MonitorReadyAt != started.Add(2*time.Second) ||
 		got.FilesReadyAt != started.Add(3*time.Second) ||
-		got.SSHStartedAt != started.Add(5*time.Second) ||
+		got.SessionStartedAt != started.Add(5*time.Second) ||
 		got.CompletedAt != started.Add(8*time.Second) {
 		t.Fatalf("unexpected timestamps: %#v", got)
 	}
-	if !got.SSHReadyAt.IsZero() {
+	if !got.ReadyAt.IsZero() {
 		t.Fatalf("expected zero ssh ready timestamp when only ssh started was recorded: %#v", got)
 	}
 	if got.StartedToBoot != "1s" ||
-		got.BootToQMP != "1s" ||
-		got.FilesToSSH != "2s" ||
+		got.BootToMonitor != "1s" ||
+		got.FilesToReady != "2s" ||
 		got.BootToCompleted != "7s" ||
 		got.Total != "8s" {
 		t.Fatalf("unexpected durations: %#v", got)
 	}
-	if got.SSHAttempts != 1 {
-		t.Fatalf("unexpected ssh attempts: got %d want 1", got.SSHAttempts)
+	if got.SessionAttempts != 1 {
+		t.Fatalf("unexpected ssh attempts: got %d want 1", got.SessionAttempts)
 	}
 }

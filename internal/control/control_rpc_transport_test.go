@@ -19,8 +19,49 @@ type fakeControlCore struct {
 	status StatusResponse
 }
 
+type wireClient struct{ client *client }
+
+func dialWire(path string) *wireClient {
+	return &wireClient{client: &client{dial: func(ctx context.Context) (net.Conn, error) {
+		var d net.Dialer
+		return d.DialContext(ctx, "unix", path)
+	}}}
+}
+
+func (c *wireClient) Status(ctx context.Context, req StatusRequest) (StatusResponse, error) {
+	return callTyped[StatusRequest, StatusResponse](c.client, ctx, rpcStatus, req)
+}
+func (c *wireClient) Methods(ctx context.Context, req MethodsRequest) (MethodsResponse, error) {
+	return callTyped[MethodsRequest, MethodsResponse](c.client, ctx, rpcMethods, req)
+}
+func (c *wireClient) Suspend(ctx context.Context, req SuspendRequest) (SuspendResponse, error) {
+	return callTyped[SuspendRequest, SuspendResponse](c.client, ctx, rpcSuspend, req)
+}
+func (c *wireClient) Hotplug(ctx context.Context, req HotplugRequest) (HotplugResponse, error) {
+	return callTyped[HotplugRequest, HotplugResponse](c.client, ctx, rpcHotplug, req)
+}
+func (c *wireClient) Balloon(ctx context.Context, req BalloonRequest) (BalloonResponse, error) {
+	return callTyped[BalloonRequest, BalloonResponse](c.client, ctx, rpcBalloon, req)
+}
+func (c *wireClient) GuestPS(ctx context.Context, req GuestPSRequest) (GuestPSResponse, error) {
+	return callTyped[GuestPSRequest, GuestPSResponse](c.client, ctx, rpcGuestPS, req)
+}
+func (c *wireClient) GuestExec(ctx context.Context, req GuestExecRequest) (GuestExecResponse, error) {
+	return callTyped[GuestExecRequest, GuestExecResponse](c.client, ctx, rpcGuestExec, req)
+}
+func (c *wireClient) GuestRead(ctx context.Context, req GuestReadRequest) (GuestReadResponse, error) {
+	return callTyped[GuestReadRequest, GuestReadResponse](c.client, ctx, rpcGuestRead, req)
+}
+func (c *wireClient) GuestWrite(ctx context.Context, req GuestWriteRequest) (GuestWriteResponse, error) {
+	return callTyped[GuestWriteRequest, GuestWriteResponse](c.client, ctx, rpcGuestWrite, req)
+}
+
 func (h *fakeControlCore) Status(context.Context, StatusRequest) (StatusResponse, error) {
 	return h.status, nil
+}
+
+func (h *fakeControlCore) Wait(context.Context, WaitRequest) (WaitResponse, error) {
+	return WaitResponse{}, nil
 }
 
 type fakeControlGuest struct {
@@ -51,6 +92,10 @@ func (h *fakeControlGuest) GuestWrite(ctx context.Context, req GuestWriteRequest
 	return h.writeResp, nil
 }
 
+func (h *fakeControlGuest) GuestShutdown(context.Context, GuestShutdownRequest) (GuestShutdownResponse, error) {
+	return GuestShutdownResponse{}, nil
+}
+
 type fakeControlHandler struct {
 	fakeControlCore
 	fakeControlGuest
@@ -66,7 +111,7 @@ func (h *fakeControlHandler) Suspend(context.Context, SuspendRequest) (SuspendRe
 
 func (h *fakeControlHandler) Hotplug(ctx context.Context, req HotplugRequest) (HotplugResponse, error) {
 	h.hotplugReq = req
-	return HotplugResponse(req), nil
+	return HotplugResponse{ID: req.ID, Detach: req.Detach}, nil
 }
 
 func (h *fakeControlHandler) Balloon(ctx context.Context, req BalloonRequest) (BalloonResponse, error) {
@@ -86,7 +131,7 @@ func TestControlClientServerTypedCalls(t *testing.T) {
 		},
 	}
 	path := startTestControlServer(t, handler)
-	client := Dial(path)
+	client := dialWire(path)
 
 	status, err := client.Status(context.Background(), StatusRequest{})
 	if err != nil {
@@ -169,7 +214,7 @@ func TestControlClientServerTypedCalls(t *testing.T) {
 	if err != nil {
 		t.Fatalf("methods: %v", err)
 	}
-	wantMethods := []string{"status", "methods", "guest-ps", "guest-exec", "guest-read", "guest-write", "suspend", "hotplug", "balloon"}
+	wantMethods := []string{"status", "methods", "wait", "guest-ps", "guest-exec", "guest-read", "guest-write", "guest-shutdown", "suspend", "hotplug", "balloon"}
 	if !reflect.DeepEqual(methods.Methods, wantMethods) {
 		t.Fatalf("unexpected methods: got %#v want %#v", methods.Methods, wantMethods)
 	}
@@ -188,7 +233,7 @@ func TestControlSocketPermissions(t *testing.T) {
 
 func TestControlRouterUnsupportedCapability(t *testing.T) {
 	path := startTestControlServer(t, &fakeControlCore{})
-	_, err := Dial(path).Hotplug(context.Background(), HotplugRequest{ID: "disk0"})
+	_, err := dialWire(path).Hotplug(context.Background(), HotplugRequest{ID: "disk0"})
 	var rpcErr *RPCError
 	if err == nil || !errors.As(err, &rpcErr) || rpcErr.Code != ErrUnsupported {
 		t.Fatalf("expected unsupported rpc error, got %v", err)
@@ -204,7 +249,7 @@ func TestControlRouterRequiresExplicitHotplugRegistration(t *testing.T) {
 	serverPath := filepath.Join(t.TempDir(), "virtle.sock")
 	startTestControlRouterAt(t, serverPath, router)
 
-	_, err = Dial(serverPath).Hotplug(context.Background(), HotplugRequest{ID: "disk0"})
+	_, err = dialWire(serverPath).Hotplug(context.Background(), HotplugRequest{ID: "disk0"})
 	var rpcErr *RPCError
 	if err == nil || !errors.As(err, &rpcErr) || rpcErr.Code != ErrUnsupported {
 		t.Fatalf("expected unregistered hotplug to be unsupported, got %v", err)
@@ -217,7 +262,7 @@ func TestControlRouterRequiresExplicitHotplugRegistration(t *testing.T) {
 	registeredPath := filepath.Join(t.TempDir(), "virtle.sock")
 	startTestControlRouterAt(t, registeredPath, router)
 
-	resp, err := Dial(registeredPath).Hotplug(context.Background(), HotplugRequest{ID: "disk0", Detach: true})
+	resp, err := dialWire(registeredPath).Hotplug(context.Background(), HotplugRequest{ID: "disk0", Detach: true})
 	if err != nil {
 		t.Fatalf("registered hotplug: %v", err)
 	}
@@ -235,7 +280,7 @@ func TestControlRouterRequiresExplicitGuestRegistration(t *testing.T) {
 	serverPath := filepath.Join(t.TempDir(), "virtle.sock")
 	startTestControlRouterAt(t, serverPath, router)
 
-	_, err = Dial(serverPath).GuestPS(context.Background(), GuestPSRequest{})
+	_, err = dialWire(serverPath).GuestPS(context.Background(), GuestPSRequest{})
 	var rpcErr *RPCError
 	if err == nil || !errors.As(err, &rpcErr) || rpcErr.Code != ErrUnsupported {
 		t.Fatalf("expected unregistered guest ps to be unsupported, got %v", err)
@@ -248,7 +293,7 @@ func TestControlRouterRequiresExplicitGuestRegistration(t *testing.T) {
 	registeredPath := filepath.Join(t.TempDir(), "virtle.sock")
 	startTestControlRouterAt(t, registeredPath, router)
 
-	resp, err := Dial(registeredPath).GuestPS(context.Background(), GuestPSRequest{})
+	resp, err := dialWire(registeredPath).GuestPS(context.Background(), GuestPSRequest{})
 	if err != nil {
 		t.Fatalf("registered guest ps: %v", err)
 	}
@@ -409,7 +454,7 @@ func TestServerBoundsConcurrentHandlers(t *testing.T) {
 	}
 	<-handler.entered
 
-	_, err = Dial(path).Status(context.Background(), StatusRequest{})
+	_, err = dialWire(path).Status(context.Background(), StatusRequest{})
 	var rpcErr *RPCError
 	if !errors.As(err, &rpcErr) || rpcErr.Code != ErrResourceLimit {
 		t.Fatalf("expected concurrent-handler limit, got %v", err)
@@ -440,6 +485,12 @@ func startTestControlServer(t *testing.T, runtime any) string {
 	}
 	if balloon, ok := runtime.(RuntimeBalloon); ok {
 		handlers.Balloon = balloon
+	}
+	if killer, ok := runtime.(RuntimeKill); ok {
+		handlers.Kill = killer
+	}
+	if shutdown, ok := runtime.(RuntimeShutdown); ok {
+		handlers.Shutdown = shutdown
 	}
 	router, err := NewRouter(handlers)
 	if err != nil {
@@ -503,6 +554,10 @@ func (h *blockingGuestHandler) GuestRead(context.Context, GuestReadRequest) (Gue
 
 func (h *blockingGuestHandler) GuestWrite(context.Context, GuestWriteRequest) (GuestWriteResponse, error) {
 	return GuestWriteResponse{}, nil
+}
+
+func (h *blockingGuestHandler) GuestShutdown(context.Context, GuestShutdownRequest) (GuestShutdownResponse, error) {
+	return GuestShutdownResponse{}, nil
 }
 
 func TestServerCancelsHandlerWhenPeerDisconnects(t *testing.T) {

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shazow/virtle/backend"
 	"github.com/shazow/virtle/backend/qemu/internal/launch"
 	runtimepkg "github.com/shazow/virtle/backend/qemu/internal/runtime"
 	control "github.com/shazow/virtle/internal/control"
@@ -41,7 +42,7 @@ func TestRuntimeStatusAndBalloonUseOwnedQMP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("status: %v", err)
 	}
-	if status.State != control.RuntimeReady || status.CID != 9 || status.Paths.ControlSocket == "" || status.Stats.BootToQMP == "" {
+	if status.State != control.RuntimeReady || status.CID != 9 || status.Paths.ControlSocket == "" || status.Stats.BootToMonitor == "" {
 		t.Fatalf("unexpected status: %#v", status)
 	}
 
@@ -194,7 +195,11 @@ func TestRuntimeStartControlServesStatus(t *testing.T) {
 		}
 	})
 
-	status, err := control.Dial(controlPath).Status(context.Background(), control.StatusRequest{})
+	machine, err := control.Dial(context.Background(), controlPath)
+	if err != nil {
+		t.Fatalf("dial control socket: %v", err)
+	}
+	status, err := machine.(backend.StatusReporter).Status(context.Background())
 	if err != nil {
 		t.Fatalf("status over control socket: %v", err)
 	}

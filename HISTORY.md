@@ -14,6 +14,8 @@ user-visible outcomes.
 - Unit codecs now live in the public `units` package; byte sizes support
   unit-suffixed text, JSON, and TOML round trips. QEMU acceleration and port
   protocols now use typed enums.
+- The control socket now implements `backend.Machine`, including selectable
+  exit completion and typed status reporting; `virtle status` exposes it.
 - Newly created VM state directories and volume images are private by default
   (`0700` and `0600`).
 - Guest and control requests now have bounded memory use and concurrency.

@@ -14,6 +14,7 @@ import (
 	"context"
 	"github.com/shazow/virtle/units"
 	"github.com/shazow/virtle/vm"
+	"time"
 )
 
 // Backend starts virtual machines. Implementations live under backend/
@@ -27,6 +28,10 @@ type Backend interface {
 // nothing about processes, sockets, or protocols, so exec'd (QEMU) and
 // in-process (libkrun) backends satisfy it equally.
 type Machine interface {
+	// Done closes after the machine exits and its runtime state is released.
+	Done() <-chan struct{}
+	// Err reports the exit result after Done closes.
+	Err() error
 	Wait(ctx context.Context) error // blocks until the VM exits
 	Kill() error                    // hard stop, always available
 	// Shutdown gracefully stops the machine, falling back to Kill when ctx
@@ -40,6 +45,58 @@ type Machine interface {
 	// control eagerly at Start or lazily on first call is an implementation
 	// detail behind the backend's constructor.
 	RemoteControl() (vm.Guest, error)
+}
+
+// State is a machine lifecycle state.
+type State string
+
+const (
+	StateStarting   State = "starting"
+	StateReady      State = "ready"
+	StateSuspending State = "suspending"
+	StateSuspended  State = "suspended"
+	StateStopping   State = "stopping"
+	StateStopped    State = "stopped"
+)
+
+// Status reports machine lifecycle state and host-side connection details.
+// JSON field names are the stable control-socket wire names.
+type Status struct {
+	State State        `json:"state"`
+	CID   int          `json:"cid"`
+	PID   int          `json:"pid,omitempty"`
+	Paths StatusPaths  `json:"paths"`
+	Stats RuntimeStats `json:"stats"`
+}
+
+// StatusPaths are host-side sockets associated with a machine.
+type StatusPaths struct {
+	ControlSocket      string `json:"controlSocket"`
+	MonitorSocket      string `json:"qmpSocket"`
+	GuestControlSocket string `json:"guestAgentSocket,omitempty"`
+	ReadySocket        string `json:"sshReadySocket,omitempty"`
+}
+
+// RuntimeStats reports lifecycle timing captured during launch and teardown.
+type RuntimeStats struct {
+	StartedAt        time.Time `json:"startedAt,omitempty"`
+	BootStartedAt    time.Time `json:"bootStartedAt,omitempty"`
+	MonitorReadyAt   time.Time `json:"qmpReadyAt,omitempty"`
+	FilesReadyAt     time.Time `json:"filesReadyAt,omitempty"`
+	ReadyAt          time.Time `json:"sshReadyAt,omitempty"`
+	SessionStartedAt time.Time `json:"sshStartedAt,omitempty"`
+	CompletedAt      time.Time `json:"completedAt,omitempty"`
+	SessionAttempts  int       `json:"sshAttempts,omitempty"`
+	StartedToBoot    string    `json:"startedToBoot,omitempty"`
+	BootToMonitor    string    `json:"bootToQMP,omitempty"`
+	FilesToReady     string    `json:"filesToSSH,omitempty"`
+	BootToCompleted  string    `json:"bootToCompleted,omitempty"`
+	Total            string    `json:"total,omitempty"`
+}
+
+// StatusReporter is implemented by machines that report runtime status.
+type StatusReporter interface {
+	Status(ctx context.Context) (Status, error)
 }
 
 // Suspender is implemented by machines that can save their running state to

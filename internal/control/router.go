@@ -55,6 +55,24 @@ func init() {
 			}), true
 		},
 	})
+	registerDefaultMethod(rpcWait, typedRegistration(func(handlers Handlers) func(context.Context, WaitRequest) (WaitResponse, error) {
+		if handlers.Core == nil {
+			return nil
+		}
+		return handlers.Core.Wait
+	}))
+	registerDefaultMethod(rpcKill, typedRegistration(func(handlers Handlers) func(context.Context, KillRequest) (KillResponse, error) {
+		if handlers.Kill == nil {
+			return nil
+		}
+		return handlers.Kill.Kill
+	}))
+	registerDefaultMethod(rpcShutdown, typedRegistration(func(handlers Handlers) func(context.Context, ShutdownRequest) (ShutdownResponse, error) {
+		if handlers.Shutdown == nil {
+			return nil
+		}
+		return handlers.Shutdown.ShutdownRPC
+	}))
 	registerDefaultMethod(rpcGuestPS, typedRegistration(func(handlers Handlers) func(context.Context, GuestPSRequest) (GuestPSResponse, error) {
 		if handlers.Guest == nil {
 			return nil
@@ -78,6 +96,12 @@ func init() {
 			return nil
 		}
 		return handlers.Guest.GuestWrite
+	}))
+	registerDefaultMethod(rpcGuestShutdown, typedRegistration(func(handlers Handlers) func(context.Context, GuestShutdownRequest) (GuestShutdownResponse, error) {
+		if handlers.Guest == nil {
+			return nil
+		}
+		return handlers.Guest.GuestShutdown
 	}))
 	registerDefaultMethod(rpcSuspend, typedRegistration(func(handlers Handlers) func(context.Context, SuspendRequest) (SuspendResponse, error) {
 		if handlers.Suspend == nil {

@@ -45,6 +45,7 @@ Launch a VM:
 
 Other advanced features:
 - `virtle suspend`
+- `virtle status`
 - `virtle rpc METHOD [JSON_ARGS]`
 - `virtle hotplug ID` (experimental)
 - `virtle hotplug --detach ID` (experimental)

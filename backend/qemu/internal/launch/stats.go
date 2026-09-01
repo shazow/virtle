@@ -124,26 +124,26 @@ func ControlStats(stats *Stats) control.RuntimeStats {
 	completed := snapshot.time(TimerCompleted)
 
 	resp := control.RuntimeStats{
-		StartedAt:     started,
-		BootStartedAt: bootStarted,
-		QMPReadyAt:    qmpReady,
-		FilesReadyAt:  filesReady,
-		SSHReadyAt:    sshReady,
-		SSHStartedAt:  sshStarted,
-		CompletedAt:   completed,
-		SSHAttempts:   snapshot.count(TimerSSHAttempt),
+		StartedAt:        started,
+		BootStartedAt:    bootStarted,
+		MonitorReadyAt:   qmpReady,
+		FilesReadyAt:     filesReady,
+		ReadyAt:          sshReady,
+		SessionStartedAt: sshStarted,
+		CompletedAt:      completed,
+		SessionAttempts:  snapshot.count(TimerSSHAttempt),
 	}
 	if !started.IsZero() && !bootStarted.IsZero() {
 		resp.StartedToBoot = bootStarted.Sub(started).String()
 	}
 	if !bootStarted.IsZero() && !qmpReady.IsZero() {
-		resp.BootToQMP = qmpReady.Sub(bootStarted).String()
+		resp.BootToMonitor = qmpReady.Sub(bootStarted).String()
 	}
 	if sshReady.IsZero() {
 		sshReady = sshStarted
 	}
 	if !filesReady.IsZero() && !sshReady.IsZero() {
-		resp.FilesToSSH = sshReady.Sub(filesReady).String()
+		resp.FilesToReady = sshReady.Sub(filesReady).String()
 	}
 	if !bootStarted.IsZero() && !completed.IsZero() {
 		resp.BootToCompleted = completed.Sub(bootStarted).String()

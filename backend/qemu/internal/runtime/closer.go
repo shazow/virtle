@@ -39,22 +39,31 @@ func newCloser(state *state) *closer {
 }
 
 func (c *closer) Close(actions closeActions) error {
+	return c.CloseContext(context.Background(), actions)
+}
+
+func (c *closer) CloseContext(ctx context.Context, actions closeActions) error {
 	c.once.Do(func() {
 		if c.state != nil {
 			c.state.Set(control.RuntimeStopping)
 		}
-		c.err = actions.Run()
+		c.err = actions.RunContext(ctx)
 		if c.state != nil {
 			c.state.Set(control.RuntimeStopped)
+			c.state.Finish(c.err)
 		}
 	})
 	return c.err
 }
 
 func (a closeActions) Run() error {
+	return a.RunContext(context.Background())
+}
+
+func (a closeActions) RunContext(ctx context.Context) error {
 	var err error
 	if a.WriteBack != nil && !a.SkipWriteBack {
-		writeBackCtx, cancelWriteBack := context.WithTimeout(context.Background(), a.WriteBackTimeout)
+		writeBackCtx, cancelWriteBack := context.WithTimeout(ctx, a.WriteBackTimeout)
 		err = errors.Join(err, a.WriteBack(writeBackCtx))
 		cancelWriteBack()
 	}
@@ -64,7 +73,7 @@ func (a closeActions) Run() error {
 	if a.Processes != nil {
 		// Teardown is never canceled from above; each process escalates on
 		// its own grace period.
-		err = errors.Join(err, a.Processes.Close(context.Background()))
+		err = errors.Join(err, a.Processes.Close(ctx))
 	}
 	if a.QMP != nil {
 		err = errors.Join(err, a.QMP.Disconnect())

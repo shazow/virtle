@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/shazow/virtle/backend"
 	"github.com/shazow/virtle/internal/control"
 )
 
@@ -21,7 +22,11 @@ func TestStartControlServesRuntimeHandler(t *testing.T) {
 	}
 	defer server.Close()
 
-	resp, err := control.Dial(socketPath).Status(context.Background(), control.StatusRequest{})
+	machine, err := control.Dial(context.Background(), socketPath)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	resp, err := machine.(backend.StatusReporter).Status(context.Background())
 	if err != nil {
 		t.Fatalf("status: %v", err)
 	}
@@ -45,6 +50,10 @@ func TestStartControlEmptySocketPath(t *testing.T) {
 }
 
 type fakeRuntimeHandler struct{}
+
+func (fakeRuntimeHandler) Wait(context.Context, control.WaitRequest) (control.WaitResponse, error) {
+	return control.WaitResponse{}, nil
+}
 
 func (fakeRuntimeHandler) Status(context.Context, control.StatusRequest) (control.StatusResponse, error) {
 	return control.StatusResponse{State: control.RuntimeReady, CID: 7}, nil

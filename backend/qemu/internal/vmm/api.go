@@ -12,6 +12,7 @@ import (
 	"github.com/shazow/virtle/backend/qemu/internal/balloon"
 	"github.com/shazow/virtle/backend/qemu/internal/launch"
 	"github.com/shazow/virtle/backend/qemu/internal/qga"
+	"github.com/shazow/virtle/internal/control"
 	"github.com/shazow/virtle/internal/manifest"
 )
 
@@ -76,7 +77,7 @@ func (m *manager) startVM(ctx context.Context, spec launch.Spec) (*VM, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &VM{m: m, running: running}, nil
+	return newVM(m, running), nil
 }
 
 // StartSessionVM starts a VM with CLI session semantics: the session
@@ -152,25 +153,44 @@ type VM struct {
 
 	closeOnce sync.Once
 	closeErr  error
+	done      chan struct{}
+	exitErr   error
 }
+
+func newVM(m *manager, running *runningLaunch) *VM {
+	v := &VM{m: m, running: running, done: make(chan struct{})}
+	go v.reap()
+	return v
+}
+
+func (v *VM) reap() {
+	qemu := v.running.processes.QEMU()
+	if qemu == nil {
+		v.exitErr = errors.New("vm process is not running")
+	} else {
+		v.exitErr = qemu.Wait()
+	}
+	v.exitErr = errors.Join(v.exitErr, v.close())
+	close(v.done)
+}
+
+// Done closes after the VM has exited and runtime state has been released.
+func (v *VM) Done() <-chan struct{} { return v.done }
+
+// Err returns the VM exit result after Done closes.
+func (v *VM) Err() error { return v.exitErr }
 
 // Wait blocks until the VM exits (or ctx is done), then releases runtime
 // state. A VM that exited by itself still needs its sockets, lock, and
 // helper processes cleaned up, so Wait performs the teardown before
 // returning.
 func (v *VM) Wait(ctx context.Context) error {
-	qemu := v.running.processes.QEMU()
-	if qemu == nil {
-		return errors.New("vm process is not running")
+	select {
+	case <-v.done:
+		return v.exitErr
+	case <-ctx.Done():
+		return context.Cause(ctx)
 	}
-	if err := qemu.WaitContext(ctx); err != nil {
-		if ctx.Err() != nil {
-			return err
-		}
-		// The VM exited with an error status; still tear down.
-		return errors.Join(err, v.close())
-	}
-	return v.close()
 }
 
 // Kill hard-stops the VM immediately and releases runtime state, skipping
@@ -191,9 +211,19 @@ func (v *VM) Close() error {
 	return v.close()
 }
 
+// Shutdown gracefully tears the VM down within ctx, escalating process
+// shutdown to a hard kill when the context expires.
+func (v *VM) Shutdown(ctx context.Context) error {
+	return v.closeContext(ctx)
+}
+
 func (v *VM) close() error {
+	return v.closeContext(context.Background())
+}
+
+func (v *VM) closeContext(ctx context.Context) error {
 	v.closeOnce.Do(func() {
-		v.closeErr = v.running.Close()
+		v.closeErr = v.running.runtime.Shutdown(ctx)
 		v.m.writeLaunchStats(v.running.stats)
 	})
 	return v.closeErr
@@ -201,6 +231,11 @@ func (v *VM) close() error {
 
 // StateDir returns the resolved persistence state directory.
 func (v *VM) StateDir() string { return v.running.plan.Paths.StateDir }
+
+// Status reports the in-process runtime status using the control-socket shape.
+func (v *VM) Status(ctx context.Context) (control.StatusResponse, error) {
+	return v.running.runtime.Status(ctx, control.StatusRequest{})
+}
 
 // DialGuestAgent waits for guest agent readiness and returns a connected
 // client. The caller owns the client and must Disconnect it.

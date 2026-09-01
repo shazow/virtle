@@ -17,6 +17,10 @@ func (fakeControlCore) Status(context.Context, control.StatusRequest) (control.S
 	return control.StatusResponse{State: control.RuntimeReady}, nil
 }
 
+func (fakeControlCore) Wait(context.Context, control.WaitRequest) (control.WaitResponse, error) {
+	return control.WaitResponse{}, nil
+}
+
 func startTestControlServerAt(t *testing.T, path string, runtime any) {
 	t.Helper()
 	core, ok := runtime.(control.RuntimeCore)

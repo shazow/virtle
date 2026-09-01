@@ -393,7 +393,7 @@ func TestRunRPCMethodsPrintsAvailableControlSocketMethods(t *testing.T) {
 	if err := json.Unmarshal([]byte(output), &got); err != nil {
 		t.Fatalf("decode rpc output %q: %v", output, err)
 	}
-	want := []string{"status", "methods", "guest-ps", "guest-exec", "guest-read", "guest-write", "hotplug"}
+	want := []string{"status", "methods", "wait", "guest-ps", "guest-exec", "guest-read", "guest-write", "guest-shutdown", "hotplug"}
 	if !reflect.DeepEqual(got.Methods, want) {
 		t.Fatalf("unexpected rpc methods output: got %#v want %#v", got.Methods, want)
 	}
@@ -588,6 +588,10 @@ func (h *mainTestControlCore) Status(context.Context, control.StatusRequest) (co
 	return h.status, nil
 }
 
+func (h *mainTestControlCore) Wait(context.Context, control.WaitRequest) (control.WaitResponse, error) {
+	return control.WaitResponse{}, nil
+}
+
 type mainTestControlHandler struct {
 	mainTestControlCore
 	hotplugReq control.HotplugRequest
@@ -609,9 +613,13 @@ func (h *mainTestControlHandler) GuestWrite(ctx context.Context, req control.Gue
 	return control.GuestWriteResponse{Path: req.Path}, nil
 }
 
+func (h *mainTestControlHandler) GuestShutdown(context.Context, control.GuestShutdownRequest) (control.GuestShutdownResponse, error) {
+	return control.GuestShutdownResponse{}, nil
+}
+
 func (h *mainTestControlHandler) Hotplug(ctx context.Context, req control.HotplugRequest) (control.HotplugResponse, error) {
 	h.hotplugReq = req
-	return control.HotplugResponse(req), nil
+	return control.HotplugResponse{ID: req.ID, Detach: req.Detach}, nil
 }
 
 func startMainTestControlServerAt(t *testing.T, path string, runtime control.RuntimeCore) {

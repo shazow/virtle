@@ -10,6 +10,9 @@ code is the reference — `vm`, `backend`, `backend/qemu`, `manifest`,
 what remains, written against the API *as built* — which deviated from the
 original design docs in a few places that shape the remaining work. The
 full design rationale lives in #67's review threads and git history.
+Planned changes to the *shipped* surface are tracked separately in
+[improvements.md](improvements.md); the guest daemon's design is in
+[guest.md](guest.md).
 
 ## As-built context that the remaining work builds on
 

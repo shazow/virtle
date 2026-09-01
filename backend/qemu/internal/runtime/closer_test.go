@@ -48,8 +48,8 @@ func TestCloserReturnsFirstCloseError(t *testing.T) {
 	if err := closer.Close(closeActions{Cleanup: func() error { return wantErr }}); !errors.Is(err, wantErr) {
 		t.Fatalf("close error: got %v want %v", err, wantErr)
 	}
-	if err := closer.Close(closeActions{Cleanup: func() error { return nil }}); err != nil {
-		t.Fatalf("second close: %v", err)
+	if err := closer.Close(closeActions{Cleanup: func() error { return nil }}); !errors.Is(err, wantErr) {
+		t.Fatalf("second close error: got %v want %v", err, wantErr)
 	}
 }
 

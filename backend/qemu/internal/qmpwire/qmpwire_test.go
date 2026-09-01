@@ -3,9 +3,13 @@ package qmpwire
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/shazow/virtle/backend/qemu/limits"
 )
 
 func TestAppendDelimiter(t *testing.T) {
@@ -15,6 +19,43 @@ func TestAppendDelimiter(t *testing.T) {
 	if got := string(AppendDelimiter([]byte("{}\n"))); got != "{}\n" {
 		t.Fatalf("expected already-delimited command unchanged, got %q", got)
 	}
+}
+
+func TestDecoderAcceptsFramesAtLimit(t *testing.T) {
+	frame := `{"return":"ok"}`
+	decoder := NewDecoder(strings.NewReader(frame+"\n"+frame+"\n"), int64(len(frame)))
+	for i := 0; i < 2; i++ {
+		envelope, err := DecodeEnvelope(decoder)
+		if err != nil {
+			t.Fatalf("decode frame %d: %v", i, err)
+		}
+		if got := string(envelope.Return); got != `"ok"` {
+			t.Fatalf("unexpected return: %s", got)
+		}
+	}
+}
+
+func TestDecoderRejectsOversizedFrameWithoutReadingPastLimit(t *testing.T) {
+	const maxFrameSize = 32
+	input := &countingReader{Reader: strings.NewReader(`{"return":"` + strings.Repeat("x", 1024) + `"}` + "\n")}
+	_, err := DecodeEnvelope(NewDecoder(input, maxFrameSize))
+	if !errors.Is(err, limits.ErrExceeded) || !IsWireError(err) {
+		t.Fatalf("expected wire-level limit error, got %v", err)
+	}
+	if input.bytesRead > maxFrameSize+1 {
+		t.Fatalf("oversized decode read %d bytes past %d-byte limit", input.bytesRead, maxFrameSize)
+	}
+}
+
+type countingReader struct {
+	io.Reader
+	bytesRead int64
+}
+
+func (r *countingReader) Read(p []byte) (int, error) {
+	n, err := r.Reader.Read(p)
+	r.bytesRead += int64(n)
+	return n, err
 }
 
 func TestDialWithRetryProbesAndCloses(t *testing.T) {

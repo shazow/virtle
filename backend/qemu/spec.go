@@ -18,8 +18,8 @@ import (
 // internal manifest document, which then flows through the same defaults,
 // validation, and resolution pipeline as a TOML manifest. When base is
 // non-nil (a manifest.Load-configured backend), the spec overlays it:
-// scalar fields override, and Shares/Disks/Ports/Files entries not already
-// present are appended.
+// scalar fields override, and Shares/Disks/Ports/Files replace the neutral
+// entries represented by the loaded Spec.
 func specDocument(spec *vm.Spec, cfg Config, base *imanifest.Document) (imanifest.Document, error) {
 	if spec == nil {
 		spec = &vm.Spec{}
@@ -136,114 +136,182 @@ func specDocument(spec *vm.Spec, cfg Config, base *imanifest.Document) (imanifes
 	return doc, nil
 }
 
-// applySpecDevices appends Shares, Disks, Ports, and Files from the spec
-// that the document does not already carry (matched by tag/path), so a
-// spec produced by manifest.Load overlays cleanly instead of duplicating.
+// applySpecDevices replaces the document entries represented by the neutral
+// Spec, in slice order. Backend-only entries remain in place; extra Spec
+// entries append, and omitted Spec entries are removed.
 func applySpecDevices(doc *imanifest.Document, spec *vm.Spec) error {
-	haveShare := map[string]bool{}
-	for _, m := range doc.Mounts.VirtioFS() {
-		haveShare[m.Tag] = true
+	mounts, err := overlaySpecMounts(doc.Mounts, spec.Shares, spec.Disks)
+	if err != nil {
+		return err
 	}
-	for _, share := range spec.Shares {
-		if share.Tag == "" {
-			return fmt.Errorf("share for %q: Tag is required", share.HostPath)
-		}
-		if haveShare[share.Tag] {
-			continue
-		}
-		doc.Mounts = append(doc.Mounts, imanifest.VirtioFSMountInput{
-			Type: imanifest.MountTypeVirtioFS,
-			MountInput: imanifest.MountInput{
-				Tag:        share.Tag,
-				SourcePath: share.HostPath,
-				ReadOnly:   share.ReadOnly,
-			},
-			Target: share.GuestPath,
-			// The socket lives under the state dir; the backend launches
-			// virtiofsd for it, matching hotplug's <tag>.sock convention.
-			VirtioFS: imanifest.VirtioFSInput{Socket: share.Tag + ".sock"},
-		})
+	doc.Mounts = mounts
+	if err := overlaySpecPorts(doc, spec.Ports); err != nil {
+		return err
 	}
+	files, err := overlaySpecFiles(doc.WriteFiles, spec.Files)
+	if err != nil {
+		return err
+	}
+	doc.WriteFiles = files
+	return nil
+}
 
-	haveDisk := map[string]bool{}
-	for _, m := range doc.Mounts.Image() {
-		haveDisk[m.SourcePath] = true
+func overlaySpecMounts(mounts imanifest.MountsInput, shares []vm.Share, disks []vm.Disk) (imanifest.MountsInput, error) {
+	result := make(imanifest.MountsInput, 0, len(mounts)+len(shares)+len(disks))
+	shareIndex, diskIndex := 0, 0
+	for _, mount := range mounts {
+		switch input := mount.(type) {
+		case imanifest.VirtioFSMountInput:
+			if shareIndex < len(shares) {
+				overlaid, err := overlayShare(input, shares[shareIndex])
+				if err != nil {
+					return nil, err
+				}
+				result = append(result, overlaid)
+			}
+			shareIndex++
+		case imanifest.ImageMountInput:
+			if diskIndex < len(disks) {
+				overlaid, err := overlayDisk(input, disks[diskIndex])
+				if err != nil {
+					return nil, err
+				}
+				result = append(result, overlaid)
+			}
+			diskIndex++
+		default:
+			result = append(result, mount)
+		}
 	}
-	for _, disk := range spec.Disks {
-		if disk.Path == "" {
-			return fmt.Errorf("disk: Path is required")
+	for ; shareIndex < len(shares); shareIndex++ {
+		overlaid, err := overlayShare(imanifest.VirtioFSMountInput{}, shares[shareIndex])
+		if err != nil {
+			return nil, err
 		}
-		if haveDisk[disk.Path] {
-			continue
-		}
-		if disk.Size != 0 && disk.Size%units.Mebibyte != 0 {
-			return fmt.Errorf("disk %q: size %s is not MiB-aligned", disk.Path, disk.Size)
-		}
-		doc.Mounts = append(doc.Mounts, imanifest.ImageMountInput{
-			Type:       imanifest.MountTypeImage,
-			SourcePath: disk.Path,
-			Image: imanifest.ImageInput{
-				Size:       iunits.MiB(disk.Size.Mebibytes()),
-				Format:     disk.Format,
-				AutoCreate: disk.Size != 0,
-			},
-		})
+		result = append(result, overlaid)
 	}
+	for ; diskIndex < len(disks); diskIndex++ {
+		overlaid, err := overlayDisk(imanifest.ImageMountInput{}, disks[diskIndex])
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, overlaid)
+	}
+	return result, nil
+}
 
-	if len(spec.Ports) > 0 {
+func overlayShare(input imanifest.VirtioFSMountInput, share vm.Share) (imanifest.VirtioFSMountInput, error) {
+	if share.Tag == "" {
+		return imanifest.VirtioFSMountInput{}, fmt.Errorf("share for %q: Tag is required", share.HostPath)
+	}
+	input.Type = imanifest.MountTypeVirtioFS
+	input.Tag = share.Tag
+	input.SourcePath = share.HostPath
+	input.ReadOnly = share.ReadOnly
+	input.Target = share.GuestPath
+	if input.VirtioFS.Socket == "" {
+		input.VirtioFS.Socket = share.Tag + ".sock"
+		input.VirtioFS.Bin = "virtiofsd"
+	}
+	return input, nil
+}
+
+func overlayDisk(input imanifest.ImageMountInput, disk vm.Disk) (imanifest.ImageMountInput, error) {
+	if disk.Path == "" {
+		return imanifest.ImageMountInput{}, fmt.Errorf("disk: Path is required")
+	}
+	if disk.Size != 0 && disk.Size%units.Mebibyte != 0 {
+		return imanifest.ImageMountInput{}, fmt.Errorf("disk %q: size %s is not MiB-aligned", disk.Path, disk.Size)
+	}
+	input.Type = imanifest.MountTypeImage
+	input.SourcePath = disk.Path
+	input.Image.Size = iunits.MiB(disk.Size.Mebibytes())
+	input.Image.Format = disk.Format
+	input.Image.AutoCreate = disk.Size != 0
+	return input, nil
+}
+
+func overlaySpecPorts(doc *imanifest.Document, ports []vm.Forward) error {
+	portIndex := 0
+	for i := range doc.Networks {
+		forwards := make([]imanifest.ForwardPort, 0, len(doc.Networks[i].Forward))
+		for _, forward := range doc.Networks[i].Forward {
+			if forward.From != "" && forward.From != "host" {
+				forwards = append(forwards, forward)
+				continue
+			}
+			if portIndex < len(ports) {
+				forwards = append(forwards, specForward(ports[portIndex]))
+			}
+			portIndex++
+		}
+		doc.Networks[i].Forward = forwards
+	}
+	if portIndex < len(ports) {
 		if len(doc.Networks) == 0 {
 			return fmt.Errorf("port forwards require a network device")
 		}
-		net := &doc.Networks[0]
-		havePort := map[string]bool{}
-		for _, f := range net.Forward {
-			havePort[f.Proto+"|"+f.Host+"|"+f.Guest] = true
+		for ; portIndex < len(ports); portIndex++ {
+			doc.Networks[0].Forward = append(doc.Networks[0].Forward, specForward(ports[portIndex]))
 		}
-		for _, fwd := range spec.Ports {
-			proto := fwd.Proto
-			if proto == "" {
-				proto = "tcp"
-			}
-			if havePort[proto+"|"+fwd.HostAddr+"|"+fwd.GuestAddr] {
-				continue
-			}
-			net.Forward = append(net.Forward, imanifest.ForwardPort{
-				Proto: proto,
-				From:  "host",
-				Host:  fwd.HostAddr,
-				Guest: fwd.GuestAddr,
-			})
-		}
-	}
-
-	haveFile := map[string]bool{}
-	for _, f := range doc.WriteFiles {
-		haveFile[f.GuestPath] = true
-	}
-	for _, file := range spec.Files {
-		if file.GuestPath == "" {
-			return fmt.Errorf("file: GuestPath is required")
-		}
-		if haveFile[file.GuestPath] {
-			continue
-		}
-		if file.Content == nil {
-			return fmt.Errorf("file %q: Content is required", file.GuestPath)
-		}
-		data, err := io.ReadAll(file.Content)
-		if err != nil {
-			return fmt.Errorf("read content for guest file %q: %w", file.GuestPath, err)
-		}
-		text := string(data)
-		input := imanifest.WriteFileInput{
-			GuestPath: file.GuestPath,
-			Text:      &text,
-		}
-		if file.Mode != 0 {
-			mode := fmt.Sprintf("%03o", file.Mode.Perm())
-			input.Mode = &mode
-		}
-		doc.WriteFiles = append(doc.WriteFiles, input)
 	}
 	return nil
+}
+
+func specForward(forward vm.Forward) imanifest.ForwardPort {
+	proto := forward.Proto
+	if proto == "" {
+		proto = "tcp"
+	}
+	return imanifest.ForwardPort{Proto: proto, From: "host", Host: forward.HostAddr, Guest: forward.GuestAddr}
+}
+
+func overlaySpecFiles(inputs []imanifest.WriteFileInput, files []vm.File) ([]imanifest.WriteFileInput, error) {
+	result := make([]imanifest.WriteFileInput, 0, len(inputs)+len(files))
+	fileIndex := 0
+	for _, input := range inputs {
+		if input.Text == nil {
+			result = append(result, input)
+			continue
+		}
+		if fileIndex < len(files) {
+			overlaid, err := overlayFile(input, files[fileIndex])
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, overlaid)
+		}
+		fileIndex++
+	}
+	for ; fileIndex < len(files); fileIndex++ {
+		overlaid, err := overlayFile(imanifest.WriteFileInput{}, files[fileIndex])
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, overlaid)
+	}
+	return result, nil
+}
+
+func overlayFile(input imanifest.WriteFileInput, file vm.File) (imanifest.WriteFileInput, error) {
+	if file.GuestPath == "" {
+		return imanifest.WriteFileInput{}, fmt.Errorf("file: GuestPath is required")
+	}
+	if file.Content == nil {
+		return imanifest.WriteFileInput{}, fmt.Errorf("file %q: Content is required", file.GuestPath)
+	}
+	data, err := io.ReadAll(file.Content)
+	if err != nil {
+		return imanifest.WriteFileInput{}, fmt.Errorf("read content for guest file %q: %w", file.GuestPath, err)
+	}
+	text := string(data)
+	input.GuestPath = file.GuestPath
+	input.Text = &text
+	input.Path = nil
+	input.Mode = nil
+	if file.Mode != 0 {
+		mode := fmt.Sprintf("%03o", file.Mode.Perm())
+		input.Mode = &mode
+	}
+	return input, nil
 }

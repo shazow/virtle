@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -29,11 +30,11 @@ import (
 	"github.com/shazow/virtle/backend/qemu/internal/qga"
 	"github.com/shazow/virtle/backend/qemu/internal/qmpclient"
 	runtimepkg "github.com/shazow/virtle/backend/qemu/internal/runtime"
+	"github.com/shazow/virtle/backend/qemu/limits"
 	control "github.com/shazow/virtle/internal/control"
 	"github.com/shazow/virtle/internal/executor"
 	"github.com/shazow/virtle/internal/executor/executortest"
 	"github.com/shazow/virtle/internal/manifest"
-	imanifest "github.com/shazow/virtle/internal/manifest"
 	"github.com/shazow/virtle/internal/units"
 )
 
@@ -45,13 +46,6 @@ const (
 func manifestWriteText(text string) manifest.WriteFile {
 	return manifest.WriteFile{
 		Content:     manifest.WriteFileContent{Kind: manifest.WriteFileContentText, Text: text},
-		FollowLinks: true,
-	}
-}
-
-func manifestWritePath(path string) manifest.WriteFile {
-	return manifest.WriteFile{
-		Content:     manifest.WriteFileContent{Kind: manifest.WriteFileContentPath, Path: path},
 		FollowLinks: true,
 	}
 }
@@ -786,20 +780,29 @@ func TestRemoveStaleSocketsIgnoresMissing(t *testing.T) {
 }
 
 func TestCreateVolumeImageCreatesNativeExt4(t *testing.T) {
+	account, err := user.Current()
+	if err != nil {
+		t.Fatalf("current user: %v", err)
+	}
 	label := "persist"
 	for _, tt := range []struct {
 		name      string
 		sizeMiB   units.MiB
 		label     string
 		wantLabel string
+		qemuOwned bool
 	}{
-		{name: "minimum-size-without-label", sizeMiB: 256},
+		{name: "minimum-size-without-label", sizeMiB: 256, qemuOwned: true},
 		{name: "minimum-size-with-label", sizeMiB: 256, label: label, wantLabel: label},
 		{name: "default-home-size", sizeMiB: 4096, label: label, wantLabel: label},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			tmpDir := t.TempDir()
 			imagePath := filepath.Join(tmpDir, "volume.img")
+			runAsUser := ""
+			if tt.qemuOwned {
+				runAsUser = account.Username
+			}
 
 			err := launch.CreateVolumeImage(manifest.Volume{
 				ImagePath:  imagePath,
@@ -807,15 +810,29 @@ func TestCreateVolumeImageCreatesNativeExt4(t *testing.T) {
 				FSType:     "ext4",
 				AutoCreate: true,
 				Label:      tt.label,
-			})
+			}, runAsUser)
 			if err != nil {
 				t.Fatalf("create volume image: %v", err)
 			}
 
-			if info, err := os.Stat(imagePath); err != nil {
+			info, err := os.Stat(imagePath)
+			if err != nil {
 				t.Fatalf("expected volume image to exist: %v", err)
-			} else if got, want := info.Size(), tt.sizeMiB.Bytes(); got != want {
+			}
+			if got, want := info.Size(), tt.sizeMiB.Bytes(); got != want {
 				t.Fatalf("unexpected volume size: got %d want %d", got, want)
+			}
+			if got, want := info.Mode().Perm(), os.FileMode(0o600); got != want {
+				t.Fatalf("unexpected volume mode: got %o want %o", got, want)
+			}
+			if tt.qemuOwned {
+				stat, ok := info.Sys().(*syscall.Stat_t)
+				if !ok {
+					t.Fatalf("volume stat has type %T", info.Sys())
+				}
+				if int(stat.Uid) != os.Getuid() || int(stat.Gid) != os.Getgid() {
+					t.Fatalf("volume ownership: got %d:%d want %d:%d", stat.Uid, stat.Gid, os.Getuid(), os.Getgid())
+				}
 			}
 
 			image, err := diskfs.Open(imagePath, diskfs.WithOpenMode(diskfs.ReadOnly))
@@ -858,7 +875,7 @@ func TestCreateVolumeImageRunsChattrBeforeSizingImage(t *testing.T) {
 		Size:       256,
 		FSType:     "ext4",
 		AutoCreate: true,
-	}); err != nil {
+	}, ""); err != nil {
 		t.Fatalf("create volume image: %v", err)
 	}
 
@@ -1493,13 +1510,13 @@ func TestManagerMountsWorkspaceCWD(t *testing.T) {
 		{
 			path:          "install",
 			args:          []string{"-d", "/home/agent/workspace", "/home/agent/workspace/agentspace"},
-			env:           []string{guestInternalCommandPathEnv},
+			env:           []string{qga.InternalCommandPathEnv},
 			captureOutput: true,
 		},
 		{
 			path:          "mount",
 			args:          []string{"--bind", "/mnt/cwd", "/home/agent/workspace/agentspace"},
-			env:           []string{guestInternalCommandPathEnv},
+			env:           []string{qga.InternalCommandPathEnv},
 			captureOutput: true,
 		},
 	}
@@ -1587,13 +1604,13 @@ func TestManagerLaunchWritesGuestFilesBeforeSSHSession(t *testing.T) {
 		{
 			path:          guestChownPath,
 			args:          []string{"agent:users", "/etc/virtle/inline"},
-			env:           []string{guestInternalCommandPathEnv},
+			env:           []string{qga.InternalCommandPathEnv},
 			captureOutput: true,
 		},
 		{
 			path:          guestChmodPath,
 			args:          []string{"0640", "/etc/virtle/inline"},
-			env:           []string{guestInternalCommandPathEnv},
+			env:           []string{qga.InternalCommandPathEnv},
 			captureOutput: true,
 		},
 		guestDirInstallCall(t, "/var/lib/virtle", "", ""),
@@ -1965,7 +1982,7 @@ func TestManagerLaunchRunsGuestDirectoryInstallScript(t *testing.T) {
 		{
 			path:          guestChownPath,
 			args:          []string{"agent:users", "/etc/virtle/inline"},
-			env:           []string{guestInternalCommandPathEnv},
+			env:           []string{qga.InternalCommandPathEnv},
 			captureOutput: true,
 		},
 	}; !reflect.DeepEqual(got, want) {
@@ -2023,7 +2040,7 @@ func TestManagerLaunchSkipsGuestFileWhenOverwriteFalseAndPathExists(t *testing.T
 		{
 			path:          guestTestPath,
 			args:          []string{"-e", "/etc/virtle/existing"},
-			env:           []string{guestInternalCommandPathEnv},
+			env:           []string{qga.InternalCommandPathEnv},
 			captureOutput: true,
 		},
 	}; !reflect.DeepEqual(got, want) {
@@ -2088,13 +2105,13 @@ func TestManagerLaunchCreatesAllMissingGuestParentDirectoriesWithOwnerAndMode(t 
 		{
 			path:          guestChownPath,
 			args:          []string{"agent:users", "/etc/virtle/nested/new"},
-			env:           []string{guestInternalCommandPathEnv},
+			env:           []string{qga.InternalCommandPathEnv},
 			captureOutput: true,
 		},
 		{
 			path:          guestChmodPath,
 			args:          []string{"0640", "/etc/virtle/nested/new"},
-			env:           []string{guestInternalCommandPathEnv},
+			env:           []string{qga.InternalCommandPathEnv},
 			captureOutput: true,
 		},
 	}; !reflect.DeepEqual(got, want) {
@@ -2152,7 +2169,7 @@ func TestManagerLaunchWritesGuestFileWhenOverwriteFalseAndPathMissing(t *testing
 		{
 			path:          guestTestPath,
 			args:          []string{"-e", "/etc/virtle/new"},
-			env:           []string{guestInternalCommandPathEnv},
+			env:           []string{qga.InternalCommandPathEnv},
 			captureOutput: true,
 		},
 		guestDirInstallCall(t, "/etc/virtle", "", ""),
@@ -2219,7 +2236,7 @@ func TestManagerLaunchFailsOnGuestFileChownFailure(t *testing.T) {
 		{
 			path:          guestChownPath,
 			args:          []string{"agent:users", "/etc/inline"},
-			env:           []string{guestInternalCommandPathEnv},
+			env:           []string{qga.InternalCommandPathEnv},
 			captureOutput: true,
 		},
 	}; !reflect.DeepEqual(got, want) {
@@ -2911,6 +2928,11 @@ func TestSaveSuspendStateConnectedStopsMigratesAndWritesSavedState(t *testing.T)
 	}
 	if migratePath != launch.VMStatePath(cfg) {
 		t.Fatalf("unexpected migrate path: got %q want %q", migratePath, launch.VMStatePath(cfg))
+	}
+	if info, err := os.Stat(migratePath); err != nil {
+		t.Fatalf("stat vm state: %v", err)
+	} else if got, want := info.Mode().Perm(), os.FileMode(0o600); got != want {
+		t.Fatalf("vm state mode: got %o want %o", got, want)
 	}
 	if status != "paused" {
 		t.Fatalf("expected paused status, got %q", status)
@@ -3710,7 +3732,7 @@ type testHotplugControlHandler struct {
 
 func (h *testHotplugControlHandler) Hotplug(ctx context.Context, req control.HotplugRequest) (control.HotplugResponse, error) {
 	h.requests = append(h.requests, req)
-	return control.HotplugResponse{ID: req.ID, Detach: req.Detach}, nil
+	return control.HotplugResponse(req), nil
 }
 
 func TestManagerHotplugUsesControlSocket(t *testing.T) {
@@ -3740,11 +3762,11 @@ func TestLaunchRuntimeRegistersHotplugAtControlPeriphery(t *testing.T) {
 	cfg.Persistence.StateDir = ".virtle"
 	cfg.Paths.RuntimeDir = manifest.RuntimeDir{Mode: manifest.RuntimeDirPath, Path: ".virtle"}
 	cfg.QEMU.Hotplug.PCIEPorts = 1
-	cfg.Hotplug = []imanifest.HotplugDevice{
+	cfg.Hotplug = []manifest.HotplugDevice{
 		{
-			Kind: imanifest.HotplugKindNet,
+			Kind: manifest.HotplugKindNet,
 			ID:   "vpn",
-			Net:  imanifest.HotplugNet{Backend: "user", MAC: "02:02:00:00:00:10"},
+			Net:  manifest.HotplugNet{Backend: "user", MAC: "02:02:00:00:00:10"},
 		},
 	}
 
@@ -3786,6 +3808,14 @@ func TestGuestExecRejectsNegativeTimeout(t *testing.T) {
 	var rpcErr *control.RPCError
 	if !errors.As(err, &rpcErr) || rpcErr.Code != control.ErrInvalidParams {
 		t.Fatalf("expected invalid params error, got %v", err)
+	}
+}
+
+func TestGuestFeatureMapsResourceLimit(t *testing.T) {
+	err := guestFeatureError(&limits.Error{Resource: "guest command output", Limit: 42})
+	var rpcErr *control.RPCError
+	if !errors.As(err, &rpcErr) || rpcErr.Code != control.ErrResourceLimit {
+		t.Fatalf("expected resource limit error, got %v", err)
 	}
 }
 
@@ -4422,12 +4452,12 @@ func validManifest(workingDir string) *manifest.Manifest {
 }
 
 func validManifestWithBalloon(workingDir string) *manifest.Manifest {
-	manifest := validManifest(workingDir)
-	manifest.QEMU.Devices.Balloon = &imanifest.BalloonDevice{
+	mf := validManifest(workingDir)
+	mf.QEMU.Devices.Balloon = &manifest.BalloonDevice{
 		ID:        "balloon0",
 		Transport: "pci",
 	}
-	return manifest
+	return mf
 }
 
 type launchRunner struct {
@@ -4641,19 +4671,6 @@ func commandArgs(cmd *exec.Cmd) []string {
 	return cmd.Args[1:]
 }
 
-func commandEnvAdditions(env []string) []string {
-	environ := os.Environ()
-	if len(env) < len(environ) {
-		return env
-	}
-	for i, entry := range environ {
-		if env[i] != entry {
-			return env
-		}
-	}
-	return env[len(environ):]
-}
-
 func commandProcessGroup(cmd *exec.Cmd) bool {
 	return cmd != nil && cmd.SysProcAttr != nil && cmd.SysProcAttr.Setpgid
 }
@@ -4848,7 +4865,7 @@ func guestDirInstallCall(t *testing.T, guestDir string, owner string, mode strin
 		call = guestExecCall{
 			path:          path,
 			args:          args,
-			env:           []string{guestInternalCommandPathEnv},
+			env:           []string{qga.InternalCommandPathEnv},
 			captureOutput: true,
 		}
 		captured = true
@@ -5556,18 +5573,6 @@ func indexStringContaining(values []string, needle string) int {
 		}
 	}
 	return -1
-}
-
-func stringPtr(value string) *string {
-	return &value
-}
-
-func intPtr(value int) *int {
-	return &value
-}
-
-func boolPtr(value bool) *bool {
-	return &value
 }
 
 func setXDGTestRuntimeDir(t *testing.T, runtimeDir string) {

@@ -20,11 +20,11 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/shazow/virtle/backend/qemu/internal/hotplug"
 	"github.com/shazow/virtle/backend/qemu/internal/launch"
 	"github.com/shazow/virtle/backend/qemu/internal/qga"
 	"github.com/shazow/virtle/backend/qemu/internal/qmpclient"
@@ -49,6 +49,7 @@ type manager struct {
 	// for launches, the Suspend and Hotplug wrappers otherwise); one manager
 	// serves exactly one manifest.
 	launchManifest *manifest.Manifest
+	hotplugRuntime *hotplug.Runtime
 
 	locker              launch.Locker
 	vsockCIDChecker     launch.VSockCIDChecker
@@ -450,12 +451,9 @@ func (m *manager) saveSuspendStateConnected(ctx context.Context, qmpSocketPath s
 		return launch.WrapFixedStage("qmp suspend")(fmt.Errorf("suspend manifest is not configured"))
 	}
 
-	statePath := launch.VMStatePath(manifest)
-	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
-		return launch.WrapFixedStage("qmp suspend")(fmt.Errorf("create directory %q: %w", filepath.Dir(statePath), err))
-	}
-	if err := os.Remove(statePath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return launch.WrapFixedStage("qmp suspend")(fmt.Errorf("remove stale vm state %q: %w", statePath, err))
+	statePath, err := launch.PrepareVMStateFile(manifest)
+	if err != nil {
+		return launch.WrapFixedStage("qmp suspend")(err)
 	}
 	migrateCtx, cancel := m.migrationContext(ctx)
 	defer cancel()

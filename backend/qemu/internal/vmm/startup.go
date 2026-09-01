@@ -11,6 +11,7 @@ import (
 
 	shellquote "github.com/kballard/go-shellquote"
 	"github.com/shazow/virtle/backend/qemu/internal/balloon"
+	"github.com/shazow/virtle/backend/qemu/internal/hotplug"
 	"github.com/shazow/virtle/backend/qemu/internal/launch"
 	"github.com/shazow/virtle/backend/qemu/internal/qmpclient"
 	"github.com/shazow/virtle/backend/qemu/internal/qmpwire"
@@ -28,6 +29,10 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 	stats := launch.NewStats(time.Now())
 	launchCtx, cancelLaunch := context.WithCancel(ctx)
 	lifecycle := launch.NewSignalLifecycle(m.signals, cancelLaunch)
+	if err := launch.EnsurePersistenceDirectory(filepath.Dir(plan.Manifest.ResolvedLockPath()), plan.Manifest.QEMU.RunAsUser); err != nil {
+		stopLaunchLifecycle(lifecycle, cancelLaunch)
+		return nil, &launch.StageError{Stage: "preflight", Err: fmt.Errorf("create lock directory: %w", err)}
+	}
 	runtimeLock, err := launch.AcquireRuntimeLock(launch.RuntimeLockSpec{
 		Manifest:    plan.Manifest,
 		ResumeState: plan.ResumeState,
@@ -45,6 +50,7 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 	}
 
 	processes := launch.NewProcessSet()
+	m.hotplugRuntime = hotplug.NewRuntime(processes)
 	var qmp qmpclient.Client
 	writeBackOnExit := false
 	socketCleanupReached := false
@@ -262,13 +268,13 @@ func (m *manager) prepareRuntimeState(plan *launch.Plan) error {
 	}
 
 	for _, dir := range plan.Manifest.ResolvedPersistenceDirectories() {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := launch.EnsurePersistenceDirectory(dir, plan.Manifest.QEMU.RunAsUser); err != nil {
 			return fmt.Errorf("create directory %q: %w", dir, err)
 		}
 	}
 	for _, path := range plan.RuntimeSocketCleanupFiles() {
 		dir := filepath.Dir(path)
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := launch.EnsurePersistenceDirectory(dir, plan.Manifest.QEMU.RunAsUser); err != nil {
 			return fmt.Errorf("create directory %q: %w", dir, err)
 		}
 	}
@@ -286,7 +292,7 @@ func (m *manager) prepareRuntimeState(plan *launch.Plan) error {
 	}
 	for _, path := range plan.VolumeImagePaths {
 		dir := filepath.Dir(path)
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := launch.EnsurePersistenceDirectory(dir, plan.Manifest.QEMU.RunAsUser); err != nil {
 			return fmt.Errorf("create directory %q: %w", dir, err)
 		}
 	}
@@ -310,7 +316,7 @@ func (m *manager) prepareRuntimeState(plan *launch.Plan) error {
 		if m.logger != nil {
 			m.logger.Info("creating volume image", "path", volume.ImagePath, "size_mib", volume.Size, "fs_type", volume.FSType)
 		}
-		if err := launch.CreateVolumeImage(volume); err != nil {
+		if err := launch.CreateVolumeImage(volume, plan.Manifest.QEMU.RunAsUser); err != nil {
 			return err
 		}
 	}

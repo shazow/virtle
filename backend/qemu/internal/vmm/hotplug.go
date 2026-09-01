@@ -6,7 +6,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 
 	"github.com/shazow/virtle/backend/qemu/internal/launch"
 	"github.com/shazow/virtle/backend/qemu/internal/qga"
@@ -59,10 +58,6 @@ func (s managedProcessStarter) Stop(process *executor.Process) error {
 	// Cleanup of a failed attach must run to completion even when the attach
 	// ctx is already canceled.
 	return process.Stop(context.Background())
-}
-
-func (s managedProcessStarter) SignalPIDGroup(pid int, signal syscall.Signal) error {
-	return executor.SignalProcessGroup(pid, signal)
 }
 
 type socketReadinessWaiter struct {

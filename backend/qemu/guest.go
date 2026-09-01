@@ -101,7 +101,7 @@ func (g *qgaGuest) Create(ctx context.Context, name string, mode fs.FileMode) (i
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("create guest file %q: %w", name, err), client.Disconnect())
 	}
-	return &guestFileWriter{ctx: ctx, guest: g, client: client, handle: handle, name: name, mode: mode}, nil
+	return &guestFileWriter{ctx: ctx, client: client, handle: handle, name: name, mode: mode}, nil
 }
 
 func (g *qgaGuest) Shutdown(ctx context.Context) error {
@@ -150,7 +150,6 @@ func (r *guestFileReader) Close() error {
 // applies the requested mode on Close.
 type guestFileWriter struct {
 	ctx    context.Context
-	guest  *qgaGuest
 	client qga.Client
 	handle int
 	name   string
@@ -168,12 +167,20 @@ func (w *guestFileWriter) Write(p []byte) (int, error) {
 }
 
 func (w *guestFileWriter) Close() error {
-	err := errors.Join(w.client.CloseFile(w.ctx, w.handle), w.client.Disconnect())
+	err := w.client.CloseFile(w.ctx, w.handle)
 	if err == nil && w.mode != 0 {
-		_, err = w.guest.Run(w.ctx, &vm.GuestCmd{
-			Path: "chmod",
-			Args: []string{fmt.Sprintf("%03o", w.mode.Perm()), w.name},
+		status, chmodErr := qga.RunCommandStatus(w.ctx, w.client, qga.ExecWait{
+			Name:          "chmod",
+			Path:          "chmod",
+			Args:          []string{fmt.Sprintf("%03o", w.mode.Perm()), w.name},
+			Env:           []string{qga.InternalCommandPathEnv},
+			Subject:       w.name,
+			CaptureOutput: true,
 		})
+		err = chmodErr
+		if err == nil && status.ExitCode != 0 {
+			err = fmt.Errorf("chmod %q exited with status %d%s", w.name, status.ExitCode, qga.ExecOutputSuffix(status))
+		}
 	}
-	return err
+	return errors.Join(err, w.client.Disconnect())
 }

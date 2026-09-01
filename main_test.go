@@ -611,7 +611,7 @@ func (h *mainTestControlHandler) GuestWrite(ctx context.Context, req control.Gue
 
 func (h *mainTestControlHandler) Hotplug(ctx context.Context, req control.HotplugRequest) (control.HotplugResponse, error) {
 	h.hotplugReq = req
-	return control.HotplugResponse{ID: req.ID, Detach: req.Detach}, nil
+	return control.HotplugResponse(req), nil
 }
 
 func startMainTestControlServerAt(t *testing.T, path string, runtime control.RuntimeCore) {

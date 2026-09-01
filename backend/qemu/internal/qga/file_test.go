@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/shazow/virtle/backend/qemu/limits"
 )
 
 func TestWriteFileClosesHandleAfterWrite(t *testing.T) {
@@ -62,6 +64,23 @@ func TestReadFileClosesHandleOnDecodeError(t *testing.T) {
 	_, err := ReadFile(context.Background(), client, "/tmp/file", 1024)
 	if err == nil {
 		t.Fatalf("expected decode error")
+	}
+	if client.closedHandle != 7 {
+		t.Fatalf("expected handle close, got %d", client.closedHandle)
+	}
+}
+
+func TestReadFileLimitRejectsOversizedFileAndClosesHandle(t *testing.T) {
+	client := &fileClient{
+		openHandle: 7,
+		readChunks: []readChunk{
+			{payload: "aGVs", eof: false},
+			{payload: "bG8=", eof: true},
+		},
+	}
+	_, err := ReadFileLimit(context.Background(), client, "/tmp/file", 2, 4)
+	if !errors.Is(err, limits.ErrExceeded) {
+		t.Fatalf("expected file limit error, got %v", err)
 	}
 	if client.closedHandle != 7 {
 		t.Fatalf("expected handle close, got %d", client.closedHandle)

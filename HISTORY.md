@@ -1,9 +1,17 @@
 # History
 
-Brief changes grouped by day, newest first. Consumer-facing changes lead;
-substantial internal changes get a line. Include diffs or before/after examples
-when illustrative of the change. Focus on capabilities instead of implementation
-details.
+This is a curated history of breaking changes and important consumer-facing
+capabilities, grouped by day, newest first. Keep entries terse and focused on
+user-visible outcomes.
+
+## 2026-09-01
+
+- Newly created VM state directories and volume images are private by default
+  (`0700` and `0600`).
+- Guest and control requests now have bounded memory use and concurrency.
+  Oversized control requests return the new `resource_limit` RPC error.
+- QEMU hotplug now supports complete ad-hoc share, disk, and port-forward
+  configurations using the same validation and defaults as manifests.
 
 ## 2026-08-31
 

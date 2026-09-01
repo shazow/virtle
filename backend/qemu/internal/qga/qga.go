@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/shazow/virtle/backend/qemu/internal/qmpwire"
+	"github.com/shazow/virtle/backend/qemu/limits"
 )
 
 // DefaultRPCTimeout bounds a single guest-agent round trip when the dialer
@@ -75,12 +76,20 @@ type SocketDialer struct {
 	// ctx deadline, so a wedged agent fails fast even when the command itself
 	// has no time limit. Zero uses DefaultRPCTimeout.
 	RPCTimeout time.Duration
+	// MaxFrameSize bounds one guest-agent response. Zero uses
+	// limits.DefaultMaxFrameSize.
+	MaxFrameSize int64
+	// MaxCommandOutputSize bounds the combined encoded stdout and stderr in a
+	// guest-exec-status response. Zero uses
+	// limits.DefaultMaxCommandOutputSize.
+	MaxCommandOutputSize int64
 }
 
 type socketClient struct {
-	conn    net.Conn
-	decoder *json.Decoder
-	session *qmpwire.Session
+	conn                 net.Conn
+	decoder              *json.Decoder
+	session              *qmpwire.Session
+	maxCommandOutputSize int64
 }
 
 // ExecStatus is the guest-agent status response for an executed process.
@@ -102,21 +111,30 @@ func (d *SocketDialer) Dial(ctx context.Context, socketPath string, timeout time
 		rpcTimeout = DefaultRPCTimeout
 	}
 	reader := bufio.NewReader(conn)
-	client := &socketClient{
-		conn:    conn,
-		session: &qmpwire.Session{Conn: conn, RPCTimeout: rpcTimeout},
+	maxFrameSize := d.MaxFrameSize
+	if maxFrameSize <= 0 {
+		maxFrameSize = limits.DefaultMaxFrameSize
 	}
-	if err := client.synchronize(ctx, reader); err != nil {
+	maxCommandOutputSize := d.MaxCommandOutputSize
+	if maxCommandOutputSize <= 0 {
+		maxCommandOutputSize = limits.DefaultMaxCommandOutputSize
+	}
+	client := &socketClient{
+		conn:                 conn,
+		session:              &qmpwire.Session{Conn: conn, RPCTimeout: rpcTimeout},
+		maxCommandOutputSize: maxCommandOutputSize,
+	}
+	if err := client.synchronize(ctx, reader, maxFrameSize); err != nil {
 		return nil, errors.Join(fmt.Errorf("synchronize guest agent: %w", err), conn.Close())
 	}
-	client.decoder = json.NewDecoder(reader)
+	client.decoder = qmpwire.NewDecoder(reader, maxFrameSize)
 	return client, nil
 }
 
 // synchronize discards replies left in QGA's virtio-serial stream by an
 // earlier host connection. Without guest-sync-delimited, a fresh client can
 // mistake a stale empty reply for guest-exec's PID response.
-func (c *socketClient) synchronize(ctx context.Context, reader *bufio.Reader) error {
+func (c *socketClient) synchronize(ctx context.Context, reader *bufio.Reader, maxFrameSize int64) error {
 	const syncID int64 = 0x564952544c45 // "VIRTLE"
 	payload, err := json.Marshal(map[string]any{
 		"execute":   "guest-sync-delimited",
@@ -135,10 +153,10 @@ func (c *socketClient) synchronize(ctx context.Context, reader *bufio.Reader) er
 			// QGA prefixes every guest-sync-delimited response with 0xff. Scan
 			// for that sentinel before parsing JSON so stale or partial data
 			// cannot poison the decoder.
-			if _, err := reader.ReadBytes(0xff); err != nil {
+			if _, err := readDelimited(reader, 0xff, maxFrameSize, false); err != nil {
 				return &qmpwire.WireError{Err: err}
 			}
-			line, err := reader.ReadBytes('\n')
+			line, err := readDelimited(reader, '\n', maxFrameSize, true)
 			if err != nil {
 				return &qmpwire.WireError{Err: err}
 			}
@@ -152,6 +170,27 @@ func (c *socketClient) synchronize(ctx context.Context, reader *bufio.Reader) er
 			}
 		}
 	})
+}
+
+// readDelimited consumes one bounded segment without letting bufio allocate in
+// proportion to an untrusted peer's input. The delimiter is not returned.
+func readDelimited(reader *bufio.Reader, delimiter byte, limit int64, retain bool) ([]byte, error) {
+	var result []byte
+	for size := int64(0); ; size++ {
+		b, err := reader.ReadByte()
+		if err != nil {
+			return nil, err
+		}
+		if b == delimiter {
+			return result, nil
+		}
+		if size >= limit {
+			return nil, &limits.Error{Resource: "QEMU control frame", Limit: limit}
+		}
+		if retain {
+			result = append(result, b)
+		}
+	}
 }
 
 func (c *socketClient) Ping(ctx context.Context) error {
@@ -269,6 +308,9 @@ func (c *socketClient) ExecStatus(ctx context.Context, pid int) (ExecStatus, err
 	}
 	if err := json.Unmarshal(response, &result); err != nil {
 		return ExecStatus{}, fmt.Errorf("guest agent exec-status pid %d returned invalid status: %w", pid, err)
+	}
+	if int64(len(result.OutData))+int64(len(result.ErrData)) > c.maxCommandOutputSize {
+		return ExecStatus{}, &limits.Error{Resource: "guest command output", Limit: c.maxCommandOutputSize}
 	}
 	status := ExecStatus{
 		Exited:  result.Exited,

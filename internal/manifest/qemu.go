@@ -8,6 +8,7 @@ import (
 
 type QEMU struct {
 	BinaryPath      string         `json:"binaryPath"`
+	RunAsUser       string         `json:"runAsUser,omitempty"`
 	Name            string         `json:"name"`
 	Machine         QEMUMachine    `json:"machine"`
 	CPU             QEMUCPU        `json:"cpu"`

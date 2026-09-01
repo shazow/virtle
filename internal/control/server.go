@@ -5,13 +5,27 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"sync"
+	"time"
+
+	"github.com/shazow/virtle/backend/qemu/limits"
 )
 
 // Server serves control socket requests for a router.
 type Server struct {
+	// MaxRequestSize bounds one request envelope. Zero uses
+	// limits.DefaultMaxRequestSize.
+	MaxRequestSize int64
+	// MaxHandlers bounds concurrent request handlers. Zero uses
+	// limits.DefaultMaxHandlers.
+	MaxHandlers int
+	// RequestReadTimeout bounds receipt of one request. Zero uses
+	// limits.DefaultRequestReadTimeout.
+	RequestReadTimeout time.Duration
+
 	handler  *Router
 	mu       sync.Mutex
 	listener net.Listener
@@ -68,6 +82,11 @@ func (s *Server) Serve(l net.Listener) error {
 		s.mu.Unlock()
 		close(done)
 	}()
+	maxHandlers := s.MaxHandlers
+	if maxHandlers <= 0 {
+		maxHandlers = limits.DefaultMaxHandlers
+	}
+	handlerSlots := make(chan struct{}, maxHandlers)
 	for {
 		conn, err := l.Accept()
 		if err != nil {
@@ -76,7 +95,21 @@ func (s *Server) Serve(l net.Listener) error {
 			}
 			return err
 		}
-		go s.handleConn(conn)
+		select {
+		case handlerSlots <- struct{}{}:
+			go func() {
+				defer func() { <-handlerSlots }()
+				s.handleConn(conn)
+			}()
+		default:
+			// Reject asynchronously so a peer that never reads its response
+			// cannot stall the accept loop for the write deadline.
+			go s.rejectConn(conn, &limits.Error{
+				Resource: "concurrent control requests",
+				Limit:    int64(maxHandlers),
+				Unit:     "handlers",
+			})
+		}
 	}
 }
 
@@ -97,9 +130,22 @@ func (s *Server) Close() error {
 
 func (s *Server) handleConn(conn net.Conn) {
 	defer conn.Close()
+	readTimeout := s.effectiveRequestReadTimeout()
+	if err := conn.SetReadDeadline(time.Now().Add(readTimeout)); err != nil {
+		writeResponse(conn, responseEnvelope{Error: &RPCError{Code: ErrInternal, Message: err.Error()}})
+		return
+	}
 	var req requestEnvelope
-	if err := json.NewDecoder(conn).Decode(&req); err != nil {
-		writeResponse(conn, responseEnvelope{Error: &RPCError{Code: ErrInvalidRequest, Message: err.Error()}})
+	if err := decodeRequest(conn, s.effectiveMaxRequestSize(), &req); err != nil {
+		code := ErrInvalidRequest
+		if errors.Is(err, limits.ErrExceeded) {
+			code = ErrResourceLimit
+		}
+		writeResponse(conn, responseEnvelope{Error: &RPCError{Code: code, Message: err.Error()}})
+		return
+	}
+	if err := conn.SetReadDeadline(time.Time{}); err != nil {
+		writeResponse(conn, responseEnvelope{Error: &RPCError{Code: ErrInternal, Message: err.Error()}})
 		return
 	}
 	// Cancel the handler when the peer goes away so an abandoned request does
@@ -113,6 +159,44 @@ func (s *Server) handleConn(conn net.Conn) {
 		_, _ = conn.Read(buf[:])
 	}()
 	writeResponse(conn, s.handler.handle(ctx, req))
+}
+
+func (s *Server) effectiveMaxRequestSize() int64 {
+	if s.MaxRequestSize > 0 {
+		return s.MaxRequestSize
+	}
+	return limits.DefaultMaxRequestSize
+}
+
+func (s *Server) effectiveRequestReadTimeout() time.Duration {
+	if s.RequestReadTimeout > 0 {
+		return s.RequestReadTimeout
+	}
+	return limits.DefaultRequestReadTimeout
+}
+
+func (s *Server) rejectConn(conn net.Conn, err error) {
+	defer conn.Close()
+	_ = conn.SetWriteDeadline(time.Now().Add(s.effectiveRequestReadTimeout()))
+	writeResponse(conn, responseEnvelope{Error: &RPCError{Code: ErrResourceLimit, Message: err.Error()}})
+}
+
+func decodeRequest(reader io.Reader, maxSize int64, req *requestEnvelope) error {
+	limited := &io.LimitedReader{R: reader, N: maxSize + 1}
+	decoder := json.NewDecoder(limited)
+	err := decoder.Decode(req)
+	if err == nil {
+		if decoder.InputOffset() > maxSize {
+			return &limits.Error{Resource: "control request", Limit: maxSize}
+		}
+		return nil
+	}
+	// The value did not complete within the limit; the decoder's own error
+	// only reflects the truncation.
+	if limited.N == 0 {
+		return &limits.Error{Resource: "control request", Limit: maxSize}
+	}
+	return err
 }
 
 func writeResponse(conn net.Conn, resp responseEnvelope) {

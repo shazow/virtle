@@ -1,6 +1,6 @@
 module github.com/shazow/virtle
 
-go 1.25.7
+go 1.25.13
 
 require (
 	github.com/BurntSushi/toml v1.6.0
@@ -11,7 +11,7 @@ require (
 	github.com/jessevdk/go-flags v1.6.1
 	github.com/kata-containers/govmm v0.0.0-20220119175834-88960a15dacd
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51
-	golang.org/x/crypto v0.51.0
+	golang.org/x/crypto v0.52.0
 )
 
 require (
@@ -26,5 +26,5 @@ require (
 	github.com/sirupsen/logrus v1.9.4 // indirect
 	github.com/stretchr/testify v1.11.1 // indirect
 	github.com/ulikunitz/xz v0.5.15 // indirect
-	golang.org/x/sys v0.44.0 // indirect
+	golang.org/x/sys v0.45.0 // indirect
 )

@@ -3,8 +3,10 @@ package qemu
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -31,6 +33,8 @@ func (h *fakeGuestHost) ShutdownGuest(ctx context.Context) error {
 type fakeQGAClient struct {
 	execPath string
 	execArgs []string
+	execEnv  []string
+	execErr  error
 	status   qga.ExecStatus
 
 	files       map[string]string // by handle key
@@ -96,7 +100,8 @@ func (c *fakeQGAClient) CloseFile(ctx context.Context, handle int) error {
 func (c *fakeQGAClient) Exec(ctx context.Context, path string, args []string, env []string, captureOutput bool) (int, error) {
 	c.execPath = path
 	c.execArgs = args
-	return 42, nil
+	c.execEnv = env
+	return 42, c.execErr
 }
 
 func (c *fakeQGAClient) ExecStatus(ctx context.Context, pid int) (qga.ExecStatus, error) {
@@ -185,6 +190,56 @@ func TestQGAGuestCreateThenOpen(t *testing.T) {
 	}
 	if string(data) != "hello guest" {
 		t.Errorf("read back %q, want %q", data, "hello guest")
+	}
+}
+
+func TestQGAGuestCreateAppliesMode(t *testing.T) {
+	transportErr := errors.New("guest agent disconnected")
+	tests := []struct {
+		name      string
+		client    *fakeQGAClient
+		wantError error
+		wantText  string
+	}{
+		{name: "success", client: newFakeQGAClient()},
+		{name: "transport failure", client: func() *fakeQGAClient {
+			client := newFakeQGAClient()
+			client.execErr = transportErr
+			return client
+		}(), wantError: transportErr},
+		{name: "nonzero exit", client: func() *fakeQGAClient {
+			client := newFakeQGAClient()
+			client.status = qga.ExecStatus{ExitCode: 1, ErrData: base64.StdEncoding.EncodeToString([]byte("permission denied"))}
+			return client
+		}(), wantText: `chmod "/etc/motd" exited with status 1: stderr="permission denied"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := &qgaGuest{vm: &fakeGuestHost{client: tt.client}}
+			writer, err := g.Create(context.Background(), "/etc/motd", 0o640)
+			if err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+			err = writer.Close()
+			if tt.wantError != nil && !errors.Is(err, tt.wantError) {
+				t.Fatalf("Close error = %v, want %v", err, tt.wantError)
+			}
+			if tt.wantText != "" && (err == nil || !strings.Contains(err.Error(), tt.wantText)) {
+				t.Fatalf("Close error = %v, want text %q", err, tt.wantText)
+			}
+			if tt.wantError == nil && tt.wantText == "" && err != nil {
+				t.Fatalf("Close: %v", err)
+			}
+			if got, want := tt.client.execPath, "chmod"; got != want {
+				t.Errorf("exec path = %q, want %q", got, want)
+			}
+			if got, want := tt.client.execArgs, []string{"640", "/etc/motd"}; !reflect.DeepEqual(got, want) {
+				t.Errorf("exec args = %#v, want %#v", got, want)
+			}
+			if got, want := tt.client.execEnv, []string{qga.InternalCommandPathEnv}; !reflect.DeepEqual(got, want) {
+				t.Errorf("exec env = %#v, want %#v", got, want)
+			}
+		})
 	}
 }
 

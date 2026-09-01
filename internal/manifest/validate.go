@@ -64,6 +64,10 @@ func (m *Manifest) Validate() error {
 		return fmt.Errorf("manifest.ssh.user is required")
 	case m.SSH.RetryDelay <= 0:
 		return fmt.Errorf("manifest.ssh.retryDelay must be greater than zero; omit manifest.ssh.retry_delay for the 500ms default")
+	case m.QEMU.Memory.Size <= 0:
+		return fmt.Errorf("manifest.qemu.memory.sizeMiB must be greater than zero")
+	case m.QEMU.SMP.CPUs.Set && m.QEMU.SMP.CPUs.Value <= 0:
+		return fmt.Errorf("manifest.qemu.smp.cpus must be greater than zero when set")
 	case m.QEMU.BinaryPath == "":
 		return fmt.Errorf("manifest.qemu.binaryPath is required")
 	case m.QEMU.QMP.SocketPath == "":

@@ -163,6 +163,7 @@ func (d Document) resolveQEMU(host HostInput, hostName string, workingDir string
 	imageMounts := d.Mounts.Image()
 	qemu := QEMU{
 		BinaryPath: binaryPath,
+		RunAsUser:  d.QEMU.User,
 		Name:       hostName,
 		Machine: QEMUMachine{
 			Type:    machineType,
@@ -467,11 +468,7 @@ func aioEngine(host HostInput) string {
 }
 
 func resolveWorkspace(workspace WorkspaceInput) Workspace {
-	return Workspace{
-		GuestDir: workspace.GuestDir,
-		HostDir:  workspace.HostDir,
-		MountCWD: workspace.MountCWD,
-	}
+	return Workspace(workspace)
 }
 
 func resolveVirtioFSMounts(mounts []VirtioFSMountInput, transport string) []QEMUVirtioFSShare {
@@ -599,6 +596,20 @@ func (m *Manifest) resolveHotplugMount(entry MountEntry) (HotplugDevice, error) 
 	}
 }
 
+// ResolveHotplugMount lowers one ad-hoc mount through the same path used by
+// document-declared hotplug mounts, including path, socket, command, and image
+// format defaults.
+func (m *Manifest) ResolveHotplugMount(entry MountEntry) (HotplugDevice, error) {
+	device, err := m.resolveHotplugMount(entry)
+	if err != nil {
+		return HotplugDevice{}, err
+	}
+	if err := validateHotplug(0, device); err != nil {
+		return HotplugDevice{}, err
+	}
+	return device, nil
+}
+
 func (m *Manifest) resolveImageHotplug(entry ImageMountInput) (HotplugDevice, error) {
 	serial := stringValue(entry.Image.Serial)
 	format := resolveImageFormat(entry.Image.Format)
@@ -704,6 +715,20 @@ func resolveNetworkHotplug(entry NetworkInput, index int) (HotplugDevice, error)
 			Forward: forward,
 		},
 	}, nil
+}
+
+// ResolveHotplugNetwork lowers one ad-hoc network through the same path used
+// by document-declared hotplug networks, including forward normalization and
+// backend defaults.
+func (m *Manifest) ResolveHotplugNetwork(entry NetworkInput) (HotplugDevice, error) {
+	device, err := resolveNetworkHotplug(entry, 0)
+	if err != nil {
+		return HotplugDevice{}, err
+	}
+	if err := validateHotplug(0, device); err != nil {
+		return HotplugDevice{}, err
+	}
+	return device, nil
 }
 
 func renderHotplugID(id string, defaultID string, provider TemplateProvider) (string, error) {

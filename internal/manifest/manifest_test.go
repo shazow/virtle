@@ -945,6 +945,22 @@ func TestDocumentQEMUExecRendersTemplates(t *testing.T) {
 	}
 }
 
+func TestDocumentQEMUUserIsRetainedForPersistenceAccess(t *testing.T) {
+	document := validDocument()
+	document.QEMU.User = "qemu-runtime"
+
+	resolved, err := document.Manifest()
+	if err != nil {
+		t.Fatalf("resolve manifest: %v", err)
+	}
+	if got, want := resolved.QEMU.RunAsUser, document.QEMU.User; got != want {
+		t.Fatalf("qemu run-as user: got %q want %q", got, want)
+	}
+	if got := resolved.QEMU.PassthroughArgs; !reflect.DeepEqual(got[:2], []string{"-user", "qemu-runtime"}) {
+		t.Fatalf("qemu user arguments: got %#v", got)
+	}
+}
+
 func TestDocumentQEMUExecRejectsMissingTemplateKey(t *testing.T) {
 	document := validDocument()
 	document.QEMU.Exec = []string{"qemu-system-{{.Missing}}"}
@@ -2614,14 +2630,58 @@ func TestManifestVolumeValidation(t *testing.T) {
 	})
 }
 
-func TestManifestAllowsRuntimeAndQEMUPassedCPUs(t *testing.T) {
-	for _, cpus := range []CPUCount{{}, ExplicitCPUs(0), ExplicitCPUs(-1)} {
-		manifest := validManifest()
-		manifest.QEMU.SMP.CPUs = cpus
+func TestManifestAllowsRuntimeSelectedCPUCount(t *testing.T) {
+	manifest := validManifest()
+	manifest.QEMU.SMP.CPUs = CPUCount{}
 
-		if err := manifest.Validate(); err != nil {
-			t.Fatalf("unexpected validation error for cpus=%v: %v", cpus, err)
-		}
+	if err := manifest.Validate(); err != nil {
+		t.Fatalf("validate omitted CPU count: %v", err)
+	}
+}
+
+func TestManifestRejectsNonPositiveMachineResources(t *testing.T) {
+	tests := []struct {
+		name      string
+		configure func(*Manifest)
+		wantError string
+	}{
+		{
+			name: "zero memory",
+			configure: func(manifest *Manifest) {
+				manifest.QEMU.Memory.Size = 0
+			},
+			wantError: "manifest.qemu.memory.sizeMiB must be greater than zero",
+		},
+		{
+			name: "negative memory",
+			configure: func(manifest *Manifest) {
+				manifest.QEMU.Memory.Size = -1
+			},
+			wantError: "manifest.qemu.memory.sizeMiB must be greater than zero",
+		},
+		{
+			name: "explicit zero CPUs",
+			configure: func(manifest *Manifest) {
+				manifest.QEMU.SMP.CPUs = ExplicitCPUs(0)
+			},
+			wantError: "manifest.qemu.smp.cpus must be greater than zero when set",
+		},
+		{
+			name: "negative CPUs",
+			configure: func(manifest *Manifest) {
+				manifest.QEMU.SMP.CPUs = ExplicitCPUs(-1)
+			},
+			wantError: "manifest.qemu.smp.cpus must be greater than zero when set",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manifest := validManifest()
+			tt.configure(manifest)
+			if err := manifest.Validate(); err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("validation error = %v, want %q", err, tt.wantError)
+			}
+		})
 	}
 }
 

@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+
+	"github.com/shazow/virtle/backend/qemu/limits"
 )
 
 // DefaultFileReadChunkSize is the default guest-agent file read chunk size.
@@ -28,10 +30,20 @@ func WriteFile(ctx context.Context, client FileWriter, guestPath string, payload
 	return closeErr
 }
 
-// ReadFile reads guestPath through client and decodes the base64 chunks.
+// ReadFile reads guestPath through client and decodes at most
+// limits.DefaultMaxFileReadSize bytes.
 func ReadFile(ctx context.Context, client FileReader, guestPath string, chunkSize int) ([]byte, error) {
+	return ReadFileLimit(ctx, client, guestPath, chunkSize, limits.DefaultMaxFileReadSize)
+}
+
+// ReadFileLimit reads guestPath through client and rejects content larger than
+// maxSize. A non-positive maxSize uses limits.DefaultMaxFileReadSize.
+func ReadFileLimit(ctx context.Context, client FileReader, guestPath string, chunkSize int, maxSize int64) ([]byte, error) {
 	if chunkSize <= 0 {
 		chunkSize = DefaultFileReadChunkSize
+	}
+	if maxSize <= 0 {
+		maxSize = limits.DefaultMaxFileReadSize
 	}
 	handle, err := client.OpenFileRead(ctx, guestPath)
 	if err != nil {
@@ -45,6 +57,8 @@ func ReadFile(ctx context.Context, client FileReader, guestPath string, chunkSiz
 			chunk, decodeErr := base64.StdEncoding.DecodeString(payloadBase64)
 			if decodeErr != nil {
 				readErr = fmt.Errorf("decode guest file %q chunk: %w", guestPath, decodeErr)
+			} else if int64(len(chunk)) > maxSize-int64(len(result)) {
+				readErr = &limits.Error{Resource: fmt.Sprintf("guest file %q", guestPath), Limit: maxSize}
 			} else {
 				result = append(result, chunk...)
 			}

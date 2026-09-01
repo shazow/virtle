@@ -10,6 +10,38 @@ import (
 	"testing"
 )
 
+func TestEnsureDirectoryCreatesPrivateAndPreservesExistingMode(t *testing.T) {
+	tmpDir := t.TempDir()
+	privatePath := filepath.Join(tmpDir, "state", "nested")
+	if err := EnsurePrivateDirectory(privatePath); err != nil {
+		t.Fatalf("ensure private directory: %v", err)
+	}
+	for _, path := range []string{filepath.Dir(privatePath), privatePath} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("stat %q: %v", path, err)
+		}
+		if got := info.Mode().Perm(); got != privateDirectoryMode {
+			t.Fatalf("mode of %q: got %o want %o", path, got, privateDirectoryMode)
+		}
+	}
+
+	existingPath := filepath.Join(tmpDir, "existing")
+	if err := os.Mkdir(existingPath, 0o755); err != nil {
+		t.Fatalf("create existing directory: %v", err)
+	}
+	if err := EnsurePrivateDirectory(existingPath); err != nil {
+		t.Fatalf("ensure existing directory: %v", err)
+	}
+	info, err := os.Stat(existingPath)
+	if err != nil {
+		t.Fatalf("stat existing directory: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o755 {
+		t.Fatalf("existing directory mode changed: got %o want 755", got)
+	}
+}
+
 func TestCheckSocketPathRejectsNonSocket(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "cleanup.sock")

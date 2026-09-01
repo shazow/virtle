@@ -7,8 +7,16 @@ import (
 	"time"
 )
 
-// execPollDelay is the delay between exit-status polls.
-const execPollDelay = 250 * time.Millisecond
+const (
+	// InternalCommandPathEnv is the default PATH used to find Virtle's internal
+	// guest commands. It covers common distros such as BusyBox/Alpine,
+	// Debian/Ubuntu, and NixOS/Guix, whose service PATH may omit system commands.
+	// TODO: Add some way for users to bring their own path, or better yet: preload guest's default PATH and prefix it here.
+	InternalCommandPathEnv = "PATH=/bin:/usr/bin:/run/current-system/sw/bin:/run/current-system/profile/bin"
+
+	// execPollDelay is the delay between exit-status polls.
+	execPollDelay = 250 * time.Millisecond
+)
 
 // ExecWait configures guest command execution. The command deadline is
 // carried by ctx; RunCommandStatus polls until the command exits or ctx ends.

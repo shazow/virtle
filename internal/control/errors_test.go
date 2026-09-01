@@ -18,6 +18,17 @@ func TestFailedPrecondition(t *testing.T) {
 	}
 }
 
+func TestResourceLimit(t *testing.T) {
+	err := ResourceLimit(errors.New("too much"))
+	var rpcErr *RPCError
+	if !errors.As(err, &rpcErr) {
+		t.Fatalf("expected RPCError, got %T", err)
+	}
+	if rpcErr.Code != ErrResourceLimit || rpcErr.Message != "too much" {
+		t.Fatalf("unexpected rpc error: %+v", rpcErr)
+	}
+}
+
 func TestIsSocketUnavailable(t *testing.T) {
 	for _, err := range []error{os.ErrNotExist, syscall.ENOENT, syscall.ECONNREFUSED} {
 		if !IsSocketUnavailable(err) {

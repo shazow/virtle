@@ -2,16 +2,20 @@ package executor
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func TestCommandLeavesEmptyEnvNil(t *testing.T) {
@@ -78,6 +82,217 @@ func TestRunnerStartsCommand(t *testing.T) {
 	}
 	if err := process.Wait(); err != nil {
 		t.Fatalf("wait child: %v", err)
+	}
+}
+
+func TestRunnerStopsProcessGroup(t *testing.T) {
+	const helperEnv = "EXECUTOR_PROCESS_GROUP_CHILD"
+	if role := os.Getenv(helperEnv); role != "" {
+		runProcessGroupHelper(helperEnv, role)
+		return
+	}
+
+	tests := []struct {
+		name       string
+		role       string
+		stopCtx    func() context.Context
+		wantStatus string
+	}{
+		{
+			name:       "graceful",
+			role:       "parent-graceful",
+			stopCtx:    context.Background,
+			wantStatus: "dp",
+		},
+		{
+			name: "forced",
+			role: "parent-forced",
+			stopCtx: func() context.Context {
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+				return ctx
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			statusRead, statusWrite, err := os.Pipe()
+			if err != nil {
+				t.Fatalf("create status pipe: %v", err)
+			}
+			defer statusRead.Close()
+
+			cmd := exec.Command(os.Args[0], "-test.run=^TestRunnerStopsProcessGroup$")
+			cmd.Env = replaceEnv(os.Environ(), helperEnv, tt.role)
+			cmd.ExtraFiles = []*os.File{statusWrite}
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+			process, err := (&Runner{}).Start(cmd)
+			if err != nil {
+				statusWrite.Close()
+				t.Fatalf("start process group helper: %v", err)
+			}
+			if err := statusWrite.Close(); err != nil {
+				t.Fatalf("close parent status writer: %v", err)
+			}
+			defer func() {
+				_ = syscall.Kill(-process.PID(), syscall.SIGKILL)
+				_ = process.Wait()
+			}()
+
+			ready := readPipe(t, statusRead, 2)
+			if !strings.Contains(ready, "P") || !strings.Contains(ready, "D") {
+				t.Fatalf("unexpected readiness status %q", ready)
+			}
+
+			process.SetGracePeriod(2 * time.Second)
+			if err := process.Stop(tt.stopCtx()); err != nil {
+				t.Fatalf("stop process group: %v", err)
+			}
+			if got := readPipe(t, statusRead, -1); got != tt.wantStatus {
+				t.Fatalf("unexpected exit status: got %q want %q", got, tt.wantStatus)
+			}
+			if err := process.Stop(context.Background()); err != nil {
+				t.Fatalf("repeat stop: %v", err)
+			}
+		})
+	}
+}
+
+func TestSignalProcessGroupFallsBackToProcess(t *testing.T) {
+	const helperEnv = "EXECUTOR_PROCESS_GROUP_CHILD"
+	statusRead, statusWrite, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("create status pipe: %v", err)
+	}
+	defer statusRead.Close()
+
+	cmd := exec.Command(os.Args[0], "-test.run=^TestRunnerStopsProcessGroup$")
+	cmd.Env = replaceEnv(os.Environ(), helperEnv, "descendant-graceful")
+	cmd.ExtraFiles = []*os.File{statusWrite}
+	process, err := (&Runner{}).Start(cmd)
+	if err != nil {
+		statusWrite.Close()
+		t.Fatalf("start fallback helper: %v", err)
+	}
+	if err := statusWrite.Close(); err != nil {
+		t.Fatalf("close parent status writer: %v", err)
+	}
+	defer func() {
+		_ = process.Kill()
+		_ = process.Wait()
+	}()
+
+	if got := readPipe(t, statusRead, 1); got != "D" {
+		t.Fatalf("unexpected readiness status %q", got)
+	}
+	if err := SignalProcessGroup(process.PID(), syscall.SIGTERM); err != nil {
+		t.Fatalf("signal process group with fallback: %v", err)
+	}
+	if err := process.Wait(); err != nil {
+		t.Fatalf("wait fallback helper: %v", err)
+	}
+	if got := readPipe(t, statusRead, -1); got != "d" {
+		t.Fatalf("unexpected exit status %q", got)
+	}
+}
+
+func runProcessGroupHelper(helperEnv, role string) {
+	status := os.NewFile(3, "status")
+	if status == nil {
+		fmt.Fprintln(os.Stderr, "status descriptor is unavailable")
+		os.Exit(2)
+	}
+	defer status.Close()
+
+	if strings.HasPrefix(role, "descendant-") {
+		signals := make(chan os.Signal, 1)
+		signal.Notify(signals, syscall.SIGTERM)
+		defer signal.Stop(signals)
+		if _, err := status.Write([]byte("D")); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		<-signals
+		if _, err := status.Write([]byte("d")); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		return
+	}
+
+	mode, ok := strings.CutPrefix(role, "parent-")
+	if !ok {
+		fmt.Fprintf(os.Stderr, "unknown process group helper role %q\n", role)
+		os.Exit(2)
+	}
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGTERM)
+	defer signal.Stop(signals)
+
+	descendant := exec.Command(os.Args[0], "-test.run=^TestRunnerStopsProcessGroup$")
+	descendant.Env = replaceEnv(os.Environ(), helperEnv, "descendant-"+mode)
+	descendant.ExtraFiles = []*os.File{status}
+	if err := descendant.Start(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	if _, err := status.Write([]byte("P")); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	<-signals
+	if mode == "forced" {
+		<-make(chan struct{})
+	}
+	if err := descendant.Wait(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	if _, err := status.Write([]byte("p")); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+}
+
+func replaceEnv(env []string, key, value string) []string {
+	prefix := key + "="
+	replaced := make([]string, 0, len(env)+1)
+	for _, entry := range env {
+		if !strings.HasPrefix(entry, prefix) {
+			replaced = append(replaced, entry)
+		}
+	}
+	return append(replaced, prefix+value)
+}
+
+func readPipe(t *testing.T, reader io.Reader, size int) string {
+	t.Helper()
+	type result struct {
+		data []byte
+		err  error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		var data []byte
+		var err error
+		if size < 0 {
+			data, err = io.ReadAll(reader)
+		} else {
+			data = make([]byte, size)
+			_, err = io.ReadFull(reader, data)
+		}
+		resultCh <- result{data: data, err: err}
+	}()
+	select {
+	case result := <-resultCh:
+		if result.err != nil {
+			t.Fatalf("read process status: %v", result.err)
+		}
+		return string(result.data)
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out reading process status")
+		return ""
 	}
 }
 

@@ -9,13 +9,16 @@ host_name = "virtle"  # Default: "virtle"
 # Relative host paths need a stable root. Keeping this explicit lets generated
 # manifests point at the repository checkout while hand-written manifests can
 # opt into another base directory without changing every path below.
-# During launch, virtle resolves a relative working_dir from the directory
-# where virtle was run and persists the absolute path back into the manifest.
+# During launch, virtle resolves a relative working_dir in memory from the
+# directory where virtle was run. The manifest file is not rewritten.
 working_dir = "."  # Default: "." (launch CWD)
 
 # virtle needs one host-side directory for files it owns: lock files, active
 # PID files, saved suspend state, and derived runtime sockets. Put volume images
 # under this directory too when they should move with the VM's local state.
+# Fresh managed directories are private (0700), and generated state and volume
+# files are 0600. Existing paths keep their current permissions; operators can
+# migrate older state explicitly with chmod after stopping its VM.
 state_dir = ".virtle"  # Default: ".virtle"
 
 [qemu]
@@ -42,7 +45,12 @@ fwd_tunnel_exec = ["nc", "{{.Host}}", "{{.Port}}"]  # Default
 
 # QEMU can drop privileges to another host user before running the VM. This is
 # useful for generated manifests that know the host account policy; leaving it
-# empty keeps the current process user.
+# empty keeps the current process user. For a configured user, fresh managed
+# directories are 0710 and assigned to its primary group (group-searchable but
+# not listable or writable), and new auto-created volume images and suspend
+# streams are owned by that user's primary uid/gid with mode 0600. Every
+# existing parent directory must also be searchable by that user. Existing and
+# externally managed disk images are never re-owned or chmodded automatically.
 user = ""  # Default: do not pass QEMU -user
 
 # QEMU seccomp blocks some host syscalls from the VM process. It improves
@@ -141,9 +149,9 @@ backend = "headless"  # Options: headless, gtk, cocoa (default: headless)
 # inside the VM.
 user = "agent"  # Default: "agent"
 
-# The SSH executable and fixed arguments are configurable. Default: [] (no
-# automatic SSH attach or command hint). Generated manifests can pin OpenSSH and
-# identity options. Template values include {{.CID}}, {{.User}},
+# The SSH executable and fixed arguments are configurable. Default: ["ssh"].
+# Generated manifests can pin OpenSSH and identity options. Template values
+# include {{.CID}}, {{.User}},
 # {{.Destination}}, and {{.Env.USER}}.
 exec = [
   "ssh",

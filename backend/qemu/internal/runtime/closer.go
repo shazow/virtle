@@ -31,6 +31,7 @@ type closeActions struct {
 type closer struct {
 	once  sync.Once
 	state *state
+	err   error
 }
 
 func newCloser(state *state) *closer {
@@ -38,17 +39,16 @@ func newCloser(state *state) *closer {
 }
 
 func (c *closer) Close(actions closeActions) error {
-	var err error
 	c.once.Do(func() {
 		if c.state != nil {
 			c.state.Set(control.RuntimeStopping)
 		}
-		err = actions.Run()
+		c.err = actions.Run()
 		if c.state != nil {
 			c.state.Set(control.RuntimeStopped)
 		}
 	})
-	return err
+	return c.err
 }
 
 func (a closeActions) Run() error {

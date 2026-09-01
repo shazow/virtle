@@ -69,6 +69,8 @@ type SocketMonitorDialer struct {
 	// RPCTimeout bounds each QMP operation regardless of the caller's ctx
 	// deadline. Zero uses DefaultRPCTimeout.
 	RPCTimeout time.Duration
+	// MaxFrameSize bounds one QMP response. Zero uses the backend default.
+	MaxFrameSize int64
 }
 
 type socketMonitorClient struct {
@@ -84,7 +86,7 @@ func (d *SocketMonitorDialer) Dial(ctx context.Context, socketPath string, timeo
 	}
 	monitor := &socketMonitor{
 		conn:    conn,
-		decoder: json.NewDecoder(conn),
+		decoder: qmpwire.NewDecoder(conn, d.MaxFrameSize),
 	}
 
 	// The handshake runs through a session bounded by the connect timeout so

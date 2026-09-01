@@ -244,19 +244,25 @@ func (v *VM) ResizeMemory(ctx context.Context, sizeBytes int64) error {
 	return balloon.SetActual(ctx, v.running.qmp, sizeBytes)
 }
 
+func (v *VM) ResolveHotplugMount(entry manifest.MountEntry) (manifest.HotplugDevice, error) {
+	return v.running.plan.Manifest.ResolveHotplugMount(entry)
+}
+
+func (v *VM) ResolveHotplugNetwork(entry manifest.NetworkInput) (manifest.HotplugDevice, error) {
+	return v.running.plan.Manifest.ResolveHotplugNetwork(entry)
+}
+
 // AttachHotplugDevice attaches an ad hoc hotplug device to the running VM.
 // The VM must have been started with PCIe hotplug ports reserved (manifest
 // [hotplug] devices reserve them).
 func (v *VM) AttachHotplugDevice(ctx context.Context, dev manifest.HotplugDevice) error {
 	runner := v.m.hotplugRunner(v.running.runtime.QMP())
-	runner.Devices = append(append([]manifest.HotplugDevice(nil), runner.Devices...), dev)
-	return runner.Attach(ctx, dev.ID)
+	return runner.AttachDevice(ctx, dev)
 }
 
 // DetachHotplugDevice detaches a device previously attached with
 // AttachHotplugDevice (or declared under manifest [hotplug]).
-func (v *VM) DetachHotplugDevice(ctx context.Context, dev manifest.HotplugDevice) error {
+func (v *VM) DetachHotplugDevice(ctx context.Context, id string) error {
 	runner := v.m.hotplugRunner(v.running.runtime.QMP())
-	runner.Devices = append(append([]manifest.HotplugDevice(nil), runner.Devices...), dev)
-	return runner.Detach(ctx, dev.ID)
+	return runner.Detach(ctx, id)
 }

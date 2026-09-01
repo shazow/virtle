@@ -1,44 +1,17 @@
 # History
 
-Brief changes grouped by day, newest first. Consumer-facing changes lead;
-substantial internal changes get a line. Include diffs or before/after examples
-when illustrative of the change. Focus on capabilities instead of implementation
-details.
+This is a curated history of breaking changes and important consumer-facing
+capabilities, grouped by day, newest first. Keep entries terse and focused on
+user-visible outcomes.
 
 ## 2026-09-01
 
-- Manifests now reject non-positive memory sizes and explicitly configured
-  non-positive vCPU counts instead of passing invalid values to QEMU.
-- `Guest.Create` now reports guest-side mode-setting failures from `Close` and
-  resolves `chmod` through Virtle's distribution-independent guest command
-  path.
-- Updated the SSH implementation to `golang.org/x/crypto` v0.52.0, which
-  bounds pathological RSA and DSA public-key parameters during parsing. CI now
-  scans all Go packages for reachable known vulnerabilities on every change.
-- Editing device slices on a `Spec` loaded from a manifest now authoritatively
-  replaces the loaded shares, disks, host port forwards, and inline guest files
-  by slice position. Removing or appending entries is reflected at launch,
-  while backend-only settings and device types remain intact.
-- QEMU's public device-attacher now produces complete ad-hoc share, disk, and
-  port-forward plans using the manifest's validation and defaults, allocates a
-  distinct reserved PCIe port for every attached device, and generates stable
-  collision-resistant IDs. Live virtiofsd helpers are supervised as VM
-  processes, and experimental hotplug state is kept only in the running VM so
-  helper PIDs are never persisted or recovered.
-- Fresh VM state and auto-created volume images are private
-  by default (`0700` directories and `0600` files). Existing path permissions
-  are preserved. When `qemu.user` drops privileges, newly created QEMU-owned
-  disks and suspend streams are assigned to that account through group-
-  searchable, non-listable managed directories.
-- Guest and control-plane inputs now have explicit memory and concurrency
-  bounds. QMP/QGA frames, captured guest-command output, buffered guest-file
-  reads, and control requests fail with recognizable limit errors; control
-  clients receive the new `resource_limit` RPC error code. Defaults are exposed
-  in the QEMU backend's Go package documentation.
-- Managed QEMU and helper commands now terminate their entire process group,
-  preventing wrappers from leaving descendant processes behind during normal
-  shutdown or forced teardown. Interactive QEMU consoles retain their existing
-  foreground process-group behavior.
+- Newly created VM state directories and volume images are private by default
+  (`0700` and `0600`).
+- Guest and control requests now have bounded memory use and concurrency.
+  Oversized control requests return the new `resource_limit` RPC error.
+- QEMU hotplug now supports complete ad-hoc share, disk, and port-forward
+  configurations using the same validation and defaults as manifests.
 
 ## 2026-08-31
 

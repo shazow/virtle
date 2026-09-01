@@ -18,6 +18,7 @@ package qemu
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -264,7 +265,7 @@ func (b *qemuBackend) Attach(ctx context.Context, inst backend.Instance, dev vm.
 	if err != nil {
 		return err
 	}
-	hdev, err := hotplugDevice(dev)
+	hdev, err := hotplugDevice(i.vm, dev)
 	if err != nil {
 		return err
 	}
@@ -277,70 +278,74 @@ func (b *qemuBackend) Detach(ctx context.Context, inst backend.Instance, dev vm.
 	if err != nil {
 		return err
 	}
-	hdev, err := hotplugDevice(dev)
+	hdev, err := hotplugDevice(i.vm, dev)
 	if err != nil {
 		return err
 	}
-	return i.vm.DetachHotplugDevice(ctx, hdev)
+	return i.vm.DetachHotplugDevice(ctx, hdev.ID)
 }
 
-// hotplugDevice maps the sealed vm.Device union onto the internal hotplug
-// device description.
-func hotplugDevice(dev vm.Device) (imanifest.HotplugDevice, error) {
+type hotplugResolver interface {
+	ResolveHotplugMount(imanifest.MountEntry) (imanifest.HotplugDevice, error)
+	ResolveHotplugNetwork(imanifest.NetworkInput) (imanifest.HotplugDevice, error)
+}
+
+// hotplugDevice maps the sealed vm.Device union onto manifest inputs, then
+// resolves them into an executable internal hotplug device description.
+func hotplugDevice(resolver hotplugResolver, dev vm.Device) (imanifest.HotplugDevice, error) {
 	switch d := dev.(type) {
 	case vm.Share:
 		if d.Tag == "" {
 			return imanifest.HotplugDevice{}, fmt.Errorf("share device: Tag is required")
 		}
-		return imanifest.HotplugDevice{
-			Kind: imanifest.HotplugKindVirtioFS,
-			ID:   d.Tag,
-			VirtioFS: imanifest.HotplugVirtioFS{
-				Source: d.HostPath,
-				Target: d.GuestPath,
+		return resolver.ResolveHotplugMount(imanifest.VirtioFSMountInput{
+			Type: imanifest.MountTypeVirtioFS,
+			MountInput: imanifest.MountInput{
+				Tag:        d.Tag,
+				SourcePath: d.HostPath,
+				ReadOnly:   d.ReadOnly,
 			},
-		}, nil
+			Target: d.GuestPath,
+		})
 	case vm.Disk:
 		if d.Path == "" {
 			return imanifest.HotplugDevice{}, fmt.Errorf("disk device: Path is required")
 		}
-		return imanifest.HotplugDevice{
-			Kind: imanifest.HotplugKindBlock,
-			ID:   deviceID("disk", d.Path),
-			Block: imanifest.HotplugBlock{
-				ImagePath: d.Path,
-				Format:    d.Format,
-			},
-		}, nil
+		id := deviceID("disk", d.Path)
+		return resolver.ResolveHotplugMount(imanifest.ImageMountInput{
+			Type:       imanifest.MountTypeImage,
+			SourcePath: d.Path,
+			Image:      imanifest.ImageInput{Format: d.Format, Serial: &id},
+		})
 	case vm.Forward:
 		proto := d.Proto
 		if proto == "" {
 			proto = "tcp"
 		}
-		return imanifest.HotplugDevice{
-			Kind: imanifest.HotplugKindNet,
-			ID:   deviceID("fwd", proto+"-"+d.HostAddr),
-			Net: imanifest.HotplugNet{
-				Backend: "user",
-				Forward: []imanifest.HotplugForward{{Proto: proto, Host: d.HostAddr, Guest: d.GuestAddr}},
-			},
-		}, nil
+		identity := proto + "\x00" + d.HostAddr + "\x00" + d.GuestAddr
+		return resolver.ResolveHotplugNetwork(imanifest.NetworkInput{
+			ID:  deviceID("fwd", identity),
+			MAC: deviceMAC(identity),
+			Forward: []imanifest.ForwardPort{{
+				Proto: d.Proto,
+				From:  "host",
+				Host:  d.HostAddr,
+				Guest: d.GuestAddr,
+			}},
+		})
 	default:
 		return imanifest.HotplugDevice{}, fmt.Errorf("unsupported device type %T", dev)
 	}
 }
 
-// deviceID derives a stable hotplug ID from a device's identity, keeping
-// it filesystem- and QEMU-id-safe.
+// deviceID derives a stable, collision-resistant QEMU ID without embedding
+// caller-controlled path or address syntax.
 func deviceID(kind, identity string) string {
-	safe := make([]rune, 0, len(identity))
-	for _, r := range identity {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '.':
-			safe = append(safe, r)
-		default:
-			safe = append(safe, '_')
-		}
-	}
-	return kind + "-" + string(safe)
+	digest := sha256.Sum256([]byte(identity))
+	return fmt.Sprintf("%s-%x", kind, digest[:8])
+}
+
+func deviceMAC(identity string) string {
+	digest := sha256.Sum256([]byte(identity))
+	return fmt.Sprintf("02:%02x:%02x:%02x:%02x:%02x", digest[0], digest[1], digest[2], digest[3], digest[4])
 }

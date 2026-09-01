@@ -11,6 +11,7 @@ import (
 
 	shellquote "github.com/kballard/go-shellquote"
 	"github.com/shazow/virtle/backend/qemu/internal/balloon"
+	"github.com/shazow/virtle/backend/qemu/internal/hotplug"
 	"github.com/shazow/virtle/backend/qemu/internal/launch"
 	"github.com/shazow/virtle/backend/qemu/internal/qmpclient"
 	"github.com/shazow/virtle/backend/qemu/internal/qmpwire"
@@ -49,6 +50,7 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 	}
 
 	processes := launch.NewProcessSet()
+	m.hotplugRuntime = hotplug.NewRuntime(processes)
 	var qmp qmpclient.Client
 	writeBackOnExit := false
 	socketCleanupReached := false

@@ -33,12 +33,13 @@ func (m *manager) hotplugFeature(client qmpclient.Client) managerHotplugFeature 
 func (m *manager) hotplugRunner(client qmpclient.Client) hotplug.Runner {
 	launchManifest := m.launchManifest
 	return hotplug.Runner{
-		StateDir: launchManifest.ResolvedPersistenceStateDir(),
-		WorkDir:  launchManifest.Paths.WorkingDir,
-		Devices:  launchManifest.Hotplug,
-		Start:    managedProcessStarter{m: m},
-		Sockets:  socketReadinessWaiter{m: m},
-		QMP:      hotplug.QMPDeviceAdapter{Client: client},
-		Guest:    guestCommandRunner{m: m},
+		WorkDir: launchManifest.Paths.WorkingDir,
+		Devices: launchManifest.Hotplug,
+		Start:   managedProcessStarter{m: m},
+		Sockets: socketReadinessWaiter{m: m},
+		QMP:     hotplug.QMPDeviceAdapter{Client: client},
+		Guest:   guestCommandRunner{m: m},
+		Runtime: m.hotplugRuntime,
+		Ports:   launchManifest.QEMU.Hotplug.PCIEPorts,
 	}
 }

@@ -4,13 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
-	"syscall"
 	"testing"
+	"time"
 
 	"github.com/shazow/virtle/internal/executor"
 	"github.com/shazow/virtle/internal/executor/executortest"
@@ -77,7 +76,7 @@ func TestQMPDeviceAdapterDetachFinishesCleanupAfterDeviceDelCancellation(t *test
 	}
 }
 
-func TestVirtioFSAttachSuccessWritesState(t *testing.T) {
+func TestVirtioFSAttachStartsSupervisedHelperAndMountsGuest(t *testing.T) {
 	tmpDir := t.TempDir()
 	runner, starter, qmp, guest := testRunner(tmpDir, manifest.HotplugDevice{
 		Kind: manifest.HotplugKindVirtioFS,
@@ -97,29 +96,71 @@ func TestVirtioFSAttachSuccessWritesState(t *testing.T) {
 	if got, want := starter.starts, []string{"virtiofsd"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("starts: got %#v want %#v", got, want)
 	}
+	if got, want := starter.tracked, []int{100}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("supervised helper pids: got %#v want %#v", got, want)
+	}
 	if !strings.Contains(strings.Join(qmp.commands, "\n"), `"execute":"chardev-add"`) {
 		t.Fatalf("expected chardev-add, got %#v", qmp.commands)
 	}
 	if got, want := guest.commands, [][]string{{"mount", "-t", "virtiofs", "cache", "/mnt/cache"}}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("guest commands: got %#v want %#v", got, want)
 	}
-	state, err := ReadState(filepath.Join(tmpDir, "state", "hotplug", "cache.json"))
-	if err != nil {
-		t.Fatalf("read state: %v", err)
+}
+
+func TestVirtioFSHelperExitStillAllowsDeviceDetach(t *testing.T) {
+	tmpDir := t.TempDir()
+	runner, starter, _, _ := testRunner(tmpDir, testVirtioFSDevice(tmpDir))
+	starter.forgot = make(chan int, 1)
+
+	if err := runner.Attach(context.Background(), "cache"); err != nil {
+		t.Fatalf("attach: %v", err)
 	}
-	if state.ID != "cache" || state.Kind != manifest.HotplugKindVirtioFS || state.Bus != "pcie.hotplug.0" || state.PID != 100 {
-		t.Fatalf("unexpected state: %#v", state)
-	}
-	for path, want := range map[string]os.FileMode{
-		filepath.Join(tmpDir, "state", "hotplug"):               privateDirectoryMode,
-		filepath.Join(tmpDir, "state", "hotplug", "cache.json"): privateFileMode,
-	} {
-		info, err := os.Stat(path)
-		if err != nil {
-			t.Fatalf("stat %q: %v", path, err)
+	starter.processes[100].Complete(errors.New("virtiofsd exited"))
+
+	select {
+	case pid := <-starter.forgot:
+		if pid != 100 {
+			t.Fatalf("forgot helper pid %d, want 100", pid)
 		}
-		if got := info.Mode().Perm(); got != want {
-			t.Fatalf("mode of %q: got %o want %o", path, got, want)
+	case <-time.After(time.Second):
+		t.Fatal("helper exit was not observed")
+	}
+	if err := runner.Detach(context.Background(), "cache"); err != nil {
+		t.Fatalf("detach after helper exit: %v", err)
+	}
+}
+
+func TestMultipleAdHocHotplugDevicesUseDistinctReservedPorts(t *testing.T) {
+	tmpDir := t.TempDir()
+	secondShare := testVirtioFSDevice(tmpDir)
+	secondShare.ID = "archive"
+	secondShare.VirtioFS.SocketPath = filepath.Join(tmpDir, "archive.sock")
+	devices := []manifest.HotplugDevice{
+		testVirtioFSDevice(tmpDir),
+		secondShare,
+		{Kind: manifest.HotplugKindBlock, ID: "data", Block: manifest.HotplugBlock{ImagePath: "/tmp/data.raw", Format: "raw"}},
+		{Kind: manifest.HotplugKindBlock, ID: "scratch", Block: manifest.HotplugBlock{ImagePath: "/tmp/scratch.raw", Format: "raw"}},
+		{Kind: manifest.HotplugKindNet, ID: "web", Net: manifest.HotplugNet{Backend: "user", MAC: "02:00:00:00:00:10"}},
+		{Kind: manifest.HotplugKindNet, ID: "dns", Net: manifest.HotplugNet{Backend: "user", MAC: "02:00:00:00:00:11"}},
+	}
+	runner, _, qmp, _ := testRunnerDevices(tmpDir, nil)
+	runner.Ports = len(devices)
+
+	for _, device := range devices {
+		if err := runner.AttachDevice(context.Background(), device); err != nil {
+			t.Fatalf("attach %q: %v", device.ID, err)
+		}
+	}
+	joined := strings.Join(qmp.commands, "\n")
+	for port := range devices {
+		bus := BusName(port)
+		if !strings.Contains(joined, `"bus":"`+bus+`"`) {
+			t.Fatalf("QMP plans do not use reserved bus %q: %#v", bus, qmp.commands)
+		}
+	}
+	for _, device := range devices {
+		if err := runner.Detach(context.Background(), device.ID); err != nil {
+			t.Fatalf("detach %q: %v", device.ID, err)
 		}
 	}
 }
@@ -138,8 +179,9 @@ func TestVirtioFSAttachQMPFailureRollsBackHost(t *testing.T) {
 	if got := strings.Join(qmp.commands, "\n"); !strings.Contains(got, `"execute":"chardev-remove"`) {
 		t.Fatalf("expected qmp rollback, got %#v", qmp.commands)
 	}
-	if _, err := os.Stat(filepath.Join(tmpDir, "state", "hotplug", "cache.json")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("expected no state file, got %v", err)
+	qmp.errAt = 0
+	if err := runner.Attach(context.Background(), "cache"); err != nil {
+		t.Fatalf("retry attach after rollback: %v", err)
 	}
 }
 
@@ -162,10 +204,12 @@ func TestVirtioFSAttachGuestFailureRollsBackQMPAndHost(t *testing.T) {
 func TestVirtioFSDetachWaitsForDeviceDeletedBeforeChardevRemove(t *testing.T) {
 	tmpDir := t.TempDir()
 	runner, _, qmp, guest := testRunner(tmpDir, testVirtioFSDevice(tmpDir))
-	statePath := filepath.Join(tmpDir, "state", "hotplug", "cache.json")
-	if err := WriteState(statePath, State{ID: "cache", Kind: manifest.HotplugKindVirtioFS, Bus: "pcie.hotplug.0", PID: 42}); err != nil {
-		t.Fatalf("write state: %v", err)
+	if err := runner.Attach(context.Background(), "cache"); err != nil {
+		t.Fatalf("attach: %v", err)
 	}
+	qmp.events = nil
+	qmp.commands = nil
+	guest.commands = nil
 
 	if err := runner.Detach(context.Background(), "cache"); err != nil {
 		t.Fatalf("detach: %v", err)
@@ -182,20 +226,18 @@ func TestVirtioFSDetachCompletesCleanupAfterDeviceDelCancellation(t *testing.T) 
 	tmpDir := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
 	runner, _, qmp, _ := testRunner(tmpDir, testVirtioFSDevice(tmpDir))
-	qmp.afterDeviceDel = cancel
-	statePath := filepath.Join(tmpDir, "state", "hotplug", "cache.json")
-	if err := WriteState(statePath, State{ID: "cache", Kind: manifest.HotplugKindVirtioFS, Bus: "pcie.hotplug.0", PID: 42}); err != nil {
-		t.Fatalf("write state: %v", err)
+	if err := runner.Attach(context.Background(), "cache"); err != nil {
+		t.Fatalf("attach: %v", err)
 	}
+	qmp.events = nil
+	qmp.commands = nil
+	qmp.afterDeviceDel = cancel
 
 	if err := runner.Detach(ctx, "cache"); err != nil {
 		t.Fatalf("detach: %v", err)
 	}
 	if got, want := qmp.events, []string{"device_del:dev-cache", "run:chardev-remove"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("events: got %#v want %#v", got, want)
-	}
-	if _, err := os.Stat(statePath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("expected hotplug state file removed, got %v", err)
 	}
 }
 
@@ -203,20 +245,19 @@ func TestVirtioFSDetachCompletesQMPAfterGuestUnmountCancellation(t *testing.T) {
 	tmpDir := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
 	runner, _, qmp, guest := testRunner(tmpDir, testVirtioFSDevice(tmpDir))
-	guest.afterRun = cancel
-	statePath := filepath.Join(tmpDir, "state", "hotplug", "cache.json")
-	if err := WriteState(statePath, State{ID: "cache", Kind: manifest.HotplugKindVirtioFS, Bus: "pcie.hotplug.0", PID: 42}); err != nil {
-		t.Fatalf("write state: %v", err)
+	if err := runner.Attach(context.Background(), "cache"); err != nil {
+		t.Fatalf("attach: %v", err)
 	}
+	qmp.events = nil
+	qmp.commands = nil
+	guest.commands = nil
+	guest.afterRun = cancel
 
 	if err := runner.Detach(ctx, "cache"); err != nil {
 		t.Fatalf("detach: %v", err)
 	}
 	if got, want := qmp.events, []string{"device_del:dev-cache", "run:chardev-remove"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("events: got %#v want %#v", got, want)
-	}
-	if _, err := os.Stat(statePath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("expected hotplug state file removed, got %v", err)
 	}
 }
 
@@ -246,30 +287,6 @@ func TestNetAttachDetachCommands(t *testing.T) {
 	}
 	if got, want := qmp.deviceDels, []string{"dev-vpn"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("device dels: got %#v want %#v", got, want)
-	}
-}
-
-func TestDetachRejectsStateKindMismatchBeforeCleanup(t *testing.T) {
-	tmpDir := t.TempDir()
-	runner, _, qmp, _ := testRunner(tmpDir, manifest.HotplugDevice{
-		Kind: manifest.HotplugKindNet,
-		ID:   "cache",
-		Net:  manifest.HotplugNet{Backend: "user", MAC: "02:02:00:00:00:10"},
-	})
-	statePath := filepath.Join(tmpDir, "state", "hotplug", "cache.json")
-	if err := WriteState(statePath, State{ID: "cache", Kind: manifest.HotplugKindVirtioFS, Bus: "pcie.hotplug.0", PID: 42}); err != nil {
-		t.Fatalf("write state: %v", err)
-	}
-
-	err := runner.Detach(context.Background(), "cache")
-	if err == nil || !strings.Contains(err.Error(), `kind "virtiofs", not current manifest kind "net"`) {
-		t.Fatalf("expected kind mismatch error, got %v", err)
-	}
-	if len(qmp.commands) != 0 || len(qmp.deviceDels) != 0 {
-		t.Fatalf("expected no qmp cleanup, got commands=%#v deviceDels=%#v", qmp.commands, qmp.deviceDels)
-	}
-	if _, err := os.Stat(statePath); err != nil {
-		t.Fatalf("expected state file to remain, got %v", err)
 	}
 }
 
@@ -312,36 +329,6 @@ func TestHotplugRegistryMissingID(t *testing.T) {
 	}
 }
 
-func TestHotplugRegistryRejectsDuplicateIDs(t *testing.T) {
-	tmpDir := t.TempDir()
-	runner, _, _, _ := testRunnerDevices(tmpDir, []manifest.HotplugDevice{
-		testVirtioFSDevice(tmpDir),
-		{
-			Kind: manifest.HotplugKindNet,
-			ID:   "cache",
-			Net:  manifest.HotplugNet{Backend: "user", MAC: "02:02:00:00:00:10"},
-		},
-	})
-
-	err := runner.Attach(context.Background(), "cache")
-	if err == nil || !strings.Contains(err.Error(), `manifest.hotplug id "cache" is duplicated`) {
-		t.Fatalf("expected duplicate id error, got %v", err)
-	}
-}
-
-func TestHotplugRegistryRejectsUnsupportedKind(t *testing.T) {
-	tmpDir := t.TempDir()
-	runner, _, _, _ := testRunnerDevices(tmpDir, []manifest.HotplugDevice{
-		testVirtioFSDevice(tmpDir),
-		{Kind: manifest.HotplugKind("unsupported"), ID: "bad"},
-	})
-
-	err := runner.Attach(context.Background(), "bad")
-	if err == nil || !strings.Contains(err.Error(), `manifest.hotplug id "bad" has unsupported kind "unsupported"`) {
-		t.Fatalf("expected unsupported kind error, got %v", err)
-	}
-}
-
 func testRunner(tmpDir string, device manifest.HotplugDevice) (Runner, *fakeStarter, *fakeQMPClient, *fakeGuest) {
 	return testRunnerDevices(tmpDir, []manifest.HotplugDevice{device})
 }
@@ -351,45 +338,15 @@ func testRunnerDevices(tmpDir string, devices []manifest.HotplugDevice) (Runner,
 	client := &fakeQMPClient{}
 	guest := &fakeGuest{}
 	return Runner{
-		StateDir: filepath.Join(tmpDir, "state"),
-		WorkDir:  tmpDir,
-		Devices:  devices,
-		Start:    starter,
-		Sockets:  fakeSockets{},
-		QMP:      QMPDeviceAdapter{Client: client},
-		Guest:    guest,
+		WorkDir: tmpDir,
+		Devices: devices,
+		Start:   starter,
+		Sockets: fakeSockets{},
+		QMP:     QMPDeviceAdapter{Client: client},
+		Guest:   guest,
+		Runtime: NewRuntime(starter),
+		Ports:   max(4, len(devices)),
 	}, starter, client, guest
-}
-
-// Every sequence in devicePlan is written out per kind rather than derived
-// from the attach commands. The cost of that is a new kind silently omitting
-// one and skipping its cleanup; this pins it.
-func TestDevicePlansDeclareEverySequenceExplicitly(t *testing.T) {
-	devices := []manifest.HotplugDevice{
-		testVirtioFSDevice(t.TempDir()),
-		{Kind: manifest.HotplugKindNet, ID: "net0", Net: manifest.HotplugNet{Backend: "user", MAC: "02:02:00:00:00:10"}},
-		{Kind: manifest.HotplugKindBlock, ID: "data", Block: manifest.HotplugBlock{ImagePath: "/tmp/data.img", Format: "raw"}},
-	}
-
-	for _, device := range devices {
-		t.Run(string(device.Kind), func(t *testing.T) {
-			plan := planFor(device, "pcie.hotplug.0")
-			if len(plan.backend) == 0 {
-				t.Errorf("backend sequence is empty")
-			}
-			if plan.deviceAdd == "" {
-				t.Errorf("deviceAdd command is empty")
-			}
-			if len(plan.release) == 0 {
-				t.Errorf("release sequence is empty: attach rollback and detach would both leak the backend")
-			}
-			// Rollback replays release[:succeeded] where succeeded counts
-			// backend commands, so the two sequences must pair 1:1.
-			if len(plan.backend) != len(plan.release) {
-				t.Errorf("backend and release sequences must pair 1:1: %d backend vs %d release", len(plan.backend), len(plan.release))
-			}
-		})
-	}
 }
 
 func testVirtioFSDevice(tmpDir string) manifest.HotplugDevice {
@@ -406,8 +363,11 @@ func testVirtioFSDevice(tmpDir string) manifest.HotplugDevice {
 }
 
 type fakeStarter struct {
-	starts  []string
-	stopped []int
+	starts    []string
+	stopped   []int
+	tracked   []int
+	processes map[int]*executortest.Process
+	forgot    chan int
 }
 
 func (s *fakeStarter) Start(ctx context.Context, cmd *exec.Cmd) (*executor.Process, error) {
@@ -416,17 +376,34 @@ func (s *fakeStarter) Start(ctx context.Context, cmd *exec.Cmd) (*executor.Proce
 		name = filepath.Base(cmd.Args[0])
 	}
 	s.starts = append(s.starts, name)
-	return (&executortest.Process{OverrideName: name, OverridePID: 100, Exited: true}).Process(), nil
+	if s.processes == nil {
+		s.processes = make(map[int]*executortest.Process)
+	}
+	pid := 100 + len(s.processes)
+	process := &executortest.Process{OverrideName: name, OverridePID: pid}
+	s.processes[process.PID()] = process
+	return process.Process(), nil
 }
 
 func (s *fakeStarter) Stop(process *executor.Process) error {
 	s.stopped = append(s.stopped, process.PID())
+	if running := s.processes[process.PID()]; running != nil {
+		running.Complete(nil)
+	}
 	return nil
 }
 
-func (s *fakeStarter) SignalPIDGroup(pid int, signal syscall.Signal) error {
-	s.stopped = append(s.stopped, pid)
-	return nil
+func (s *fakeStarter) Add(processes ...*executor.Process) {
+	for _, process := range processes {
+		s.tracked = append(s.tracked, process.PID())
+	}
+}
+
+func (s *fakeStarter) Remove(process *executor.Process) bool {
+	if s.forgot != nil {
+		s.forgot <- process.PID()
+	}
+	return true
 }
 
 type fakeSockets struct{}

@@ -7,7 +7,13 @@ details.
 
 ## 2026-09-01
 
-- Fresh VM state, hotplug metadata, and auto-created volume images are private
+- QEMU's public device-attacher now produces complete ad-hoc share, disk, and
+  port-forward plans using the manifest's validation and defaults, allocates a
+  distinct reserved PCIe port for every attached device, and generates stable
+  collision-resistant IDs. Live virtiofsd helpers are supervised as VM
+  processes, and experimental hotplug state is kept only in the running VM so
+  helper PIDs are never persisted or recovered.
+- Fresh VM state and auto-created volume images are private
   by default (`0700` directories and `0600` files). Existing path permissions
   are preserved. When `qemu.user` drops privileges, newly created QEMU-owned
   disks and suspend streams are assigned to that account through group-

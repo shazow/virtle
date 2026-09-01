@@ -24,6 +24,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/shazow/virtle/backend/qemu/internal/hotplug"
 	"github.com/shazow/virtle/backend/qemu/internal/launch"
 	"github.com/shazow/virtle/backend/qemu/internal/qga"
 	"github.com/shazow/virtle/backend/qemu/internal/qmpclient"
@@ -48,6 +49,7 @@ type manager struct {
 	// for launches, the Suspend and Hotplug wrappers otherwise); one manager
 	// serves exactly one manifest.
 	launchManifest *manifest.Manifest
+	hotplugRuntime *hotplug.Runtime
 
 	locker              launch.Locker
 	vsockCIDChecker     launch.VSockCIDChecker

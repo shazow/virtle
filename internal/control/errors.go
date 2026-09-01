@@ -11,6 +11,11 @@ func FailedPrecondition(err error) error {
 	return &RPCError{Code: ErrFailedPrecondition, Message: err.Error()}
 }
 
+// ResourceLimit wraps err as an RPC resource-limit error.
+func ResourceLimit(err error) error {
+	return &RPCError{Code: ErrResourceLimit, Message: err.Error()}
+}
+
 // IsSocketUnavailable reports whether err means no control socket is reachable.
 func IsSocketUnavailable(err error) bool {
 	if err == nil {

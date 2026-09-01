@@ -298,6 +298,126 @@ func TestControlInvalidJSONAndUnknownMethod(t *testing.T) {
 	}
 }
 
+func TestServerRejectsOversizedRequest(t *testing.T) {
+	router, err := NewRouter(Handlers{Core: &fakeControlCore{}})
+	if err != nil {
+		t.Fatalf("router: %v", err)
+	}
+	server, err := NewServer(router)
+	if err != nil {
+		t.Fatalf("server: %v", err)
+	}
+	server.MaxRequestSize = 64
+	serverConn, clientConn := net.Pipe()
+	defer clientConn.Close()
+	handled := make(chan struct{})
+	go func() {
+		server.handleConn(serverConn)
+		close(handled)
+	}()
+
+	writeDone := make(chan error, 1)
+	go func() {
+		writeDone <- json.NewEncoder(clientConn).Encode(requestEnvelope{
+			ID:     1,
+			Method: rpcStatus,
+			Params: json.RawMessage(`{"padding":"` + strings.Repeat("x", 128) + `"}`),
+		})
+	}()
+	var response responseEnvelope
+	if err := json.NewDecoder(clientConn).Decode(&response); err != nil {
+		t.Fatalf("decode oversized response: %v", err)
+	}
+	if response.Error == nil || response.Error.Code != ErrResourceLimit {
+		t.Fatalf("expected resource-limit response, got %#v", response)
+	}
+	if !strings.Contains(response.Error.Message, "maximum 64 bytes") {
+		t.Fatalf("unexpected limit message: %v", response.Error)
+	}
+	<-handled
+	<-writeDone
+}
+
+func TestServerTimesOutIncompleteRequest(t *testing.T) {
+	router, err := NewRouter(Handlers{Core: &fakeControlCore{}})
+	if err != nil {
+		t.Fatalf("router: %v", err)
+	}
+	server, err := NewServer(router)
+	if err != nil {
+		t.Fatalf("server: %v", err)
+	}
+	server.RequestReadTimeout = 20 * time.Millisecond
+	serverConn, clientConn := net.Pipe()
+	defer clientConn.Close()
+	go server.handleConn(serverConn)
+
+	var response responseEnvelope
+	if err := json.NewDecoder(clientConn).Decode(&response); err != nil {
+		t.Fatalf("decode timeout response: %v", err)
+	}
+	if response.Error == nil || response.Error.Code != ErrInvalidRequest {
+		t.Fatalf("expected invalid-request timeout response, got %#v", response)
+	}
+	if !strings.Contains(response.Error.Message, "timeout") {
+		t.Fatalf("unexpected timeout message: %v", response.Error)
+	}
+}
+
+func TestServerBoundsConcurrentHandlers(t *testing.T) {
+	handler := &blockingGuestHandler{
+		entered:  make(chan struct{}),
+		canceled: make(chan struct{}),
+	}
+	router, err := NewRouter(Handlers{Core: &fakeControlCore{}, Guest: handler})
+	if err != nil {
+		t.Fatalf("router: %v", err)
+	}
+	server, err := NewServer(router)
+	if err != nil {
+		t.Fatalf("server: %v", err)
+	}
+	server.MaxHandlers = 1
+	path := filepath.Join(t.TempDir(), "control.sock")
+	listener, err := Listen(path)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- server.Serve(listener) }()
+	defer func() {
+		if err := server.Close(); err != nil {
+			t.Errorf("close server: %v", err)
+		}
+		if err := <-serveDone; err != nil {
+			t.Errorf("serve: %v", err)
+		}
+	}()
+
+	first, err := net.Dial("unix", path)
+	if err != nil {
+		t.Fatalf("dial first client: %v", err)
+	}
+	payload, err := json.Marshal(GuestExecRequest{Path: "/bin/wait"})
+	if err != nil {
+		t.Fatalf("marshal params: %v", err)
+	}
+	if err := json.NewEncoder(first).Encode(requestEnvelope{ID: 1, Method: rpcGuestExec, Params: payload}); err != nil {
+		t.Fatalf("send first request: %v", err)
+	}
+	<-handler.entered
+
+	_, err = Dial(path).Status(context.Background(), StatusRequest{})
+	var rpcErr *RPCError
+	if !errors.As(err, &rpcErr) || rpcErr.Code != ErrResourceLimit {
+		t.Fatalf("expected concurrent-handler limit, got %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("close first client: %v", err)
+	}
+	<-handler.canceled
+}
+
 func startTestControlServer(t *testing.T, runtime any) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "virtle.sock")

@@ -5,14 +5,58 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"sync"
 	"time"
+
+	"github.com/shazow/virtle/backend/qemu/limits"
 )
 
 // DefaultRPCTimeout bounds a single round trip on a QEMU control socket when
 // the dialer does not configure one.
 const DefaultRPCTimeout = 15 * time.Second
+
+// NewDecoder returns a JSON decoder that rejects line-delimited messages
+// larger than maxFrameSize without reading beyond the limit. A non-positive
+// limit uses limits.DefaultMaxFrameSize.
+func NewDecoder(reader io.Reader, maxFrameSize int64) *json.Decoder {
+	if maxFrameSize <= 0 {
+		maxFrameSize = limits.DefaultMaxFrameSize
+	}
+	return json.NewDecoder(&frameReader{reader: reader, max: maxFrameSize})
+}
+
+type frameReader struct {
+	reader io.Reader
+	max    int64
+	size   int64
+}
+
+func (r *frameReader) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	remaining := r.max - r.size
+	if remaining < 0 {
+		return 0, &limits.Error{Resource: "QEMU control frame", Limit: r.max}
+	}
+	if int64(len(p)) > remaining+1 {
+		p = p[:remaining+1]
+	}
+	n, err := r.reader.Read(p)
+	for i, b := range p[:n] {
+		if b == '\n' {
+			r.size = 0
+			continue
+		}
+		r.size++
+		if r.size > r.max {
+			return i + 1, &limits.Error{Resource: "QEMU control frame", Limit: r.max}
+		}
+	}
+	return n, err
+}
 
 // WireError marks a connection-level failure — a failed write, read, or
 // decode — after which the stream position is unknown and the connection must

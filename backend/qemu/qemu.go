@@ -3,6 +3,17 @@
 // wired into Instance.RemoteControl: QGA (the QEMU Guest Agent, equivalent
 // to the virtle CLI today) now, a virtle-native guest daemon transport
 // later.
+//
+// # Resource limits
+//
+// The backend bounds data buffered across guest and local-control trust
+// boundaries. Run
+//
+//	go doc github.com/shazow/virtle/backend/qemu/limits
+//
+// to inspect the enforced defaults and the error returned when a guest
+// operation crosses one. Control clients receive an RPC error with code
+// resource_limit.
 package qemu
 
 import (

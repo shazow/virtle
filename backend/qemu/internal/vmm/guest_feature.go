@@ -3,11 +3,13 @@ package vmm
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/shazow/virtle/backend/qemu/internal/launch"
 	"github.com/shazow/virtle/backend/qemu/internal/qga"
+	"github.com/shazow/virtle/backend/qemu/limits"
 	controlpkg "github.com/shazow/virtle/internal/control"
 	"github.com/shazow/virtle/internal/executor"
 	"github.com/shazow/virtle/internal/manifest"
@@ -31,7 +33,7 @@ func (f managerGuestFeature) GuestPS(ctx context.Context, req controlpkg.GuestPS
 	}
 	info, err := f.manager.collectGuestInfo(ctx, f.socketPath, watchers)
 	if err != nil {
-		return controlpkg.GuestPSResponse{}, controlpkg.FailedPrecondition(err)
+		return controlpkg.GuestPSResponse{}, guestFeatureError(err)
 	}
 	return controlpkg.GuestPSResponse{ProcessList: info.ProcessList}, nil
 }
@@ -45,7 +47,7 @@ func (f managerGuestFeature) GuestExec(ctx context.Context, req controlpkg.Guest
 	}
 	client, err := f.guestClient(ctx)
 	if err != nil {
-		return controlpkg.GuestExecResponse{}, controlpkg.FailedPrecondition(err)
+		return controlpkg.GuestExecResponse{}, guestFeatureError(err)
 	}
 	defer client.Disconnect()
 
@@ -59,7 +61,7 @@ func (f managerGuestFeature) GuestExec(ctx context.Context, req controlpkg.Guest
 		CaptureOutput: req.CaptureOutput,
 	})
 	if err != nil {
-		return controlpkg.GuestExecResponse{}, controlpkg.FailedPrecondition(err)
+		return controlpkg.GuestExecResponse{}, guestFeatureError(err)
 	}
 	return controlpkg.GuestExecResponse{
 		Exited:   status.Exited,
@@ -75,13 +77,13 @@ func (f managerGuestFeature) GuestRead(ctx context.Context, req controlpkg.Guest
 	}
 	client, err := f.guestClient(ctx)
 	if err != nil {
-		return controlpkg.GuestReadResponse{}, controlpkg.FailedPrecondition(err)
+		return controlpkg.GuestReadResponse{}, guestFeatureError(err)
 	}
 	defer client.Disconnect()
 
 	data, err := f.manager.readGuestFile(ctx, client, req.Path)
 	if err != nil {
-		return controlpkg.GuestReadResponse{}, controlpkg.FailedPrecondition(err)
+		return controlpkg.GuestReadResponse{}, guestFeatureError(err)
 	}
 	return controlpkg.GuestReadResponse{Path: req.Path, DataBase64: base64.StdEncoding.EncodeToString(data)}, nil
 }
@@ -95,14 +97,21 @@ func (f managerGuestFeature) GuestWrite(ctx context.Context, req controlpkg.Gues
 	}
 	client, err := f.guestClient(ctx)
 	if err != nil {
-		return controlpkg.GuestWriteResponse{}, controlpkg.FailedPrecondition(err)
+		return controlpkg.GuestWriteResponse{}, guestFeatureError(err)
 	}
 	defer client.Disconnect()
 
 	if err := f.manager.writeGuestFile(ctx, client, req.Path, req.DataBase64); err != nil {
-		return controlpkg.GuestWriteResponse{}, controlpkg.FailedPrecondition(err)
+		return controlpkg.GuestWriteResponse{}, guestFeatureError(err)
 	}
 	return controlpkg.GuestWriteResponse{Path: req.Path}, nil
+}
+
+func guestFeatureError(err error) error {
+	if errors.Is(err, limits.ErrExceeded) {
+		return controlpkg.ResourceLimit(err)
+	}
+	return controlpkg.FailedPrecondition(err)
 }
 
 func (f managerGuestFeature) guestClient(ctx context.Context) (qga.Client, error) {

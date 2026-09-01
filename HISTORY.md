@@ -7,6 +7,11 @@ details.
 
 ## 2026-09-01
 
+- Guest and control-plane inputs now have explicit memory and concurrency
+  bounds. QMP/QGA frames, captured guest-command output, buffered guest-file
+  reads, and control requests fail with recognizable limit errors; control
+  clients receive the new `resource_limit` RPC error code. Defaults are exposed
+  in the QEMU backend's Go package documentation.
 - Managed QEMU and helper commands now terminate their entire process group,
   preventing wrappers from leaving descendant processes behind during normal
   shutdown or forced teardown. Interactive QEMU consoles retain their existing

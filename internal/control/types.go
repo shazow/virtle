@@ -164,6 +164,8 @@ const (
 	ErrUnsupported ErrorCode = "unsupported"
 	// ErrFailedPrecondition means the runtime is not ready for the requested operation.
 	ErrFailedPrecondition ErrorCode = "failed_precondition"
+	// ErrResourceLimit means the server rejected work that crossed a resource limit.
+	ErrResourceLimit ErrorCode = "resource_limit"
 	// ErrInternal means the request failed with an unexpected internal error.
 	ErrInternal ErrorCode = "internal"
 )

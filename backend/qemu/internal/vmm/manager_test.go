@@ -29,6 +29,7 @@ import (
 	"github.com/shazow/virtle/backend/qemu/internal/qga"
 	"github.com/shazow/virtle/backend/qemu/internal/qmpclient"
 	runtimepkg "github.com/shazow/virtle/backend/qemu/internal/runtime"
+	"github.com/shazow/virtle/backend/qemu/limits"
 	control "github.com/shazow/virtle/internal/control"
 	"github.com/shazow/virtle/internal/executor"
 	"github.com/shazow/virtle/internal/executor/executortest"
@@ -3786,6 +3787,14 @@ func TestGuestExecRejectsNegativeTimeout(t *testing.T) {
 	var rpcErr *control.RPCError
 	if !errors.As(err, &rpcErr) || rpcErr.Code != control.ErrInvalidParams {
 		t.Fatalf("expected invalid params error, got %v", err)
+	}
+}
+
+func TestGuestFeatureMapsResourceLimit(t *testing.T) {
+	err := guestFeatureError(&limits.Error{Resource: "guest command output", Limit: 42})
+	var rpcErr *control.RPCError
+	if !errors.As(err, &rpcErr) || rpcErr.Code != control.ErrResourceLimit {
+		t.Fatalf("expected resource limit error, got %v", err)
 	}
 }
 

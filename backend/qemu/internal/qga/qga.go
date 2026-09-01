@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/shazow/virtle/backend/qemu/internal/qmpwire"
+	"github.com/shazow/virtle/backend/qemu/limits"
 )
 
 // DefaultRPCTimeout bounds a single guest-agent round trip when the dialer
@@ -75,12 +76,20 @@ type SocketDialer struct {
 	// ctx deadline, so a wedged agent fails fast even when the command itself
 	// has no time limit. Zero uses DefaultRPCTimeout.
 	RPCTimeout time.Duration
+	// MaxFrameSize bounds one guest-agent response. Zero uses
+	// limits.DefaultMaxFrameSize.
+	MaxFrameSize int64
+	// MaxCommandOutputSize bounds the combined encoded stdout and stderr in a
+	// guest-exec-status response. Zero uses
+	// limits.DefaultMaxCommandOutputSize.
+	MaxCommandOutputSize int64
 }
 
 type socketClient struct {
-	conn    net.Conn
-	decoder *json.Decoder
-	session *qmpwire.Session
+	conn                 net.Conn
+	decoder              *json.Decoder
+	session              *qmpwire.Session
+	maxCommandOutputSize int64
 }
 
 // ExecStatus is the guest-agent status response for an executed process.
@@ -102,14 +111,19 @@ func (d *SocketDialer) Dial(ctx context.Context, socketPath string, timeout time
 		rpcTimeout = DefaultRPCTimeout
 	}
 	reader := bufio.NewReader(conn)
+	maxCommandOutputSize := d.MaxCommandOutputSize
+	if maxCommandOutputSize <= 0 {
+		maxCommandOutputSize = limits.DefaultMaxCommandOutputSize
+	}
 	client := &socketClient{
-		conn:    conn,
-		session: &qmpwire.Session{Conn: conn, RPCTimeout: rpcTimeout},
+		conn:                 conn,
+		session:              &qmpwire.Session{Conn: conn, RPCTimeout: rpcTimeout},
+		maxCommandOutputSize: maxCommandOutputSize,
 	}
 	if err := client.synchronize(ctx, reader); err != nil {
 		return nil, errors.Join(fmt.Errorf("synchronize guest agent: %w", err), conn.Close())
 	}
-	client.decoder = json.NewDecoder(reader)
+	client.decoder = qmpwire.NewDecoder(reader, d.MaxFrameSize)
 	return client, nil
 }
 
@@ -269,6 +283,9 @@ func (c *socketClient) ExecStatus(ctx context.Context, pid int) (ExecStatus, err
 	}
 	if err := json.Unmarshal(response, &result); err != nil {
 		return ExecStatus{}, fmt.Errorf("guest agent exec-status pid %d returned invalid status: %w", pid, err)
+	}
+	if int64(len(result.OutData))+int64(len(result.ErrData)) > c.maxCommandOutputSize {
+		return ExecStatus{}, &limits.Error{Resource: "guest command output", Limit: c.maxCommandOutputSize}
 	}
 	status := ExecStatus{
 		Exited:  result.Exited,

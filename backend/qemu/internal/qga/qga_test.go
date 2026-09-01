@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/shazow/virtle/backend/qemu/internal/qmpwire"
+	"github.com/shazow/virtle/backend/qemu/limits"
 )
 
 func TestClientFileAndExecCommands(t *testing.T) {
@@ -123,6 +124,50 @@ func TestClientSkipsEvents(t *testing.T) {
 	assertCommand(t, commands, "guest-ping")
 }
 
+func TestClientRejectsOversizedCommandOutput(t *testing.T) {
+	client, commands, cleanup := newTestClient(t, func(message map[string]any) map[string]any {
+		return map[string]any{
+			"return": map[string]any{
+				"exited":   true,
+				"exitcode": 0,
+				"out-data": "b3V0",
+				"err-data": "ZXJy",
+			},
+		}
+	})
+	defer cleanup()
+	client.maxCommandOutputSize = 7
+
+	_, err := client.ExecStatus(context.Background(), 7)
+	if !errors.Is(err, limits.ErrExceeded) {
+		t.Fatalf("expected command output limit error, got %v", err)
+	}
+	assertCommand(t, commands, "guest-exec-status")
+}
+
+func TestClientRejectsOversizedWireFrame(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		var request map[string]any
+		if err := json.NewDecoder(serverConn).Decode(&request); err != nil {
+			return
+		}
+		_, _ = serverConn.Write([]byte(`{"return":"` + strings.Repeat("x", 128) + `"}` + "\n"))
+	}()
+
+	client := newSocketClient(clientConn, time.Second)
+	client.decoder = qmpwire.NewDecoder(clientConn, 32)
+	err := client.Ping(context.Background())
+	if !errors.Is(err, limits.ErrExceeded) || !qmpwire.IsWireError(err) {
+		t.Fatalf("expected wire-level frame limit error, got %v", err)
+	}
+	_ = client.Disconnect()
+	<-done
+}
+
 func TestClientCancellationInterruptsBlockedRead(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	defer serverConn.Close()
@@ -192,9 +237,10 @@ func TestClientRPCTimeoutBoundsUnresponsiveAgent(t *testing.T) {
 
 func newSocketClient(conn net.Conn, rpcTimeout time.Duration) *socketClient {
 	return &socketClient{
-		conn:    conn,
-		decoder: json.NewDecoder(conn),
-		session: &qmpwire.Session{Conn: conn, RPCTimeout: rpcTimeout},
+		conn:                 conn,
+		decoder:              qmpwire.NewDecoder(conn, 0),
+		session:              &qmpwire.Session{Conn: conn, RPCTimeout: rpcTimeout},
+		maxCommandOutputSize: limits.DefaultMaxCommandOutputSize,
 	}
 }
 

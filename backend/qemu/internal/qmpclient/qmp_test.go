@@ -6,11 +6,13 @@ import (
 	"errors"
 	"net"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	rawQMP "github.com/digitalocean/go-qemu/qmp/raw"
 	"github.com/shazow/virtle/backend/qemu/internal/qmpwire"
+	"github.com/shazow/virtle/backend/qemu/limits"
 )
 
 func TestQMPClientQuit(t *testing.T) {
@@ -206,6 +208,26 @@ func TestQMPClientFailsFastAfterTimedOutOperation(t *testing.T) {
 	}
 }
 
+func TestQMPClientRejectsOversizedWireFrame(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = serverConn.Write([]byte(`{"return":"` + strings.Repeat("x", 128) + `"}` + "\n"))
+	}()
+	monitor := &socketMonitor{
+		conn:    clientConn,
+		decoder: qmpwire.NewDecoder(clientConn, 32),
+	}
+	_, err := monitor.readResponse()
+	if !errors.Is(err, limits.ErrExceeded) || !qmpwire.IsWireError(err) {
+		t.Fatalf("expected wire-level frame limit error, got %v", err)
+	}
+	_ = monitor.Disconnect()
+	<-done
+}
+
 func TestQMPDialContextCancelsDuringHandshake(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "qmp.sock")
 	listener, err := net.Listen("unix", socketPath)
@@ -313,7 +335,7 @@ func newTestQMPClient(t *testing.T, handler func(message map[string]any) map[str
 
 	monitor := &socketMonitor{
 		conn:    clientConn,
-		decoder: json.NewDecoder(clientConn),
+		decoder: qmpwire.NewDecoder(clientConn, 0),
 	}
 	if err := monitor.Connect(); err != nil {
 		t.Fatalf("connect qmp test monitor: %v", err)

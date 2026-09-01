@@ -52,7 +52,8 @@ Invariants worth preserving (changes here are design changes, not
 refactors): the `database/sql`-shaped split with one-way imports
 (`backend` → `vm`, never the reverse; no default backend); capabilities as
 standalone `-er` interfaces discovered by assertion, never added to
-`Backend`/`Instance`; zero QEMU vocabulary outside `backend/qemu`; sealed
+`Backend`/`Instance` (renamed `Machine` per improvements.md); zero QEMU
+vocabulary outside `backend/qemu`; sealed
 unions over `any` for closed type sets (`vm.Device`,
 `qemu.RemoteControl`); exactly two compatibility contracts (manifest TOML
 + schema, control-socket wire format) with everything else on disk

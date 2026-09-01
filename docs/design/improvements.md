@@ -14,10 +14,37 @@ as cheap now as they will ever be. Design references: the extended
 standard library (`x/net/nettest`, `testing/fstest`, `os.Root`),
 `net/http`'s server shape, `database/sql/driver`, and `tsnet`.
 
-Sequencing is at the end; items 1–3 change what everything later is
+Sequencing is at the end; items 0–3 change what everything later is
 written against and should land first.
 
-## 1. Capabilities move onto `Instance`
+## 0. `Instance` is renamed `Machine`
+
+**Today.** `backend.Backend.Start` returns a `backend.Instance`.
+
+**Trace.** "Instance" is generic and carries the spec-vs-running
+distinction only by convention. The thing is a machine: firecracker-go-sdk
+starts a `Machine` from a `Config`, VirtualBox's API is `IMachine`, and
+KubeVirt's `VirtualMachine` (spec) / `VirtualMachineInstance` (running)
+split is the same idea wearing the generic word. `VM` loses because the
+package is already named `vm`; `Process` is wrong for in-process backends
+(the reason the contract avoids process vocabulary); `Domain` is libvirt
+jargon; `Sandbox` names the purpose, not the mechanism; `Guest` and
+`Session` already mean other things here. One collision inside
+`backend/qemu`: `Config.Machine string` is the QEMU machine type, and
+becomes `MachineType` — QEMU's own vocabulary (`-machine type=`), freeing
+`qemu.Machine` for the exported concrete type (item 3).
+
+**Proposal.** `backend.Machine`, with `m` as the conventional variable
+name; `vm.Spec` → `backend.Machine` reads as description → running
+machine without a qualifier. Everything below uses the new name in
+proposals and the old name when describing today's code.
+
+```go
+m, err := b.Start(ctx, spec)
+defer m.Shutdown(ctx)
+```
+
+## 1. Capabilities move onto `Machine`
 
 **Today.** `backend.Suspender`, `MemoryResizer`, and `DeviceAttacher` are
 asserted on the *backend* and take `inst Instance` as an argument;
@@ -38,13 +65,13 @@ change has zero in-tree churn. `database/sql/driver`, the stated model,
 puts optional interfaces on the live object (`driver.Conn`:
 `ConnBeginTx`, `Pinger`, `SessionResetter`), not on `driver.Driver`.
 
-**Proposal.** Live-object capabilities on `Instance`; the one capability
-that *creates* an instance stays on the backend.
+**Proposal.** Live-object capabilities on `Machine`; the one capability
+that *creates* a machine stays on the backend.
 
 ```go
 // on the live object
 type Suspender interface {
-	// Suspend saves the instance's state to its state directory and stops it.
+	// Suspend saves the machine's state to its state directory and stops it.
 	Suspend(ctx context.Context) error
 }
 type MemoryResizer interface {
@@ -58,10 +85,10 @@ type ConsoleProvider interface { // unchanged
 	Console(ctx context.Context) (vm.Term, error)
 }
 
-// on the backend, because it creates instances
+// on the backend, because it creates machines
 type Resumer interface {
-	// Resume restores the instance whose state the spec's state directory holds.
-	Resume(ctx context.Context, spec *vm.Spec) (Instance, error)
+	// Resume restores the machine whose state the spec's state directory holds.
+	Resume(ctx context.Context, spec *vm.Spec) (Machine, error)
 	StateVersion() string
 }
 ```
@@ -72,21 +99,21 @@ check the runtime did. `stateDir` goes: state lives where the spec says.
 Before / after:
 
 ```go
-// before: keep b and inst paired, pass one back to the other
+// before: keep b and m paired, pass one back to the other
 if s, ok := b.(backend.Suspender); ok {
-	err = s.Suspend(ctx, inst, "")
+	err = s.Suspend(ctx, m, "")
 }
 
 // after
-if s, ok := inst.(backend.Suspender); ok {
+if s, ok := m.(backend.Suspender); ok {
 	err = s.Suspend(ctx)
 }
 ```
 
-## 2. Graceful shutdown is part of the instance contract
+## 2. Graceful shutdown is part of the machine contract
 
 **Today.** `Instance` has `Wait`, `Kill`, `RemoteControl`. Graceful stop
-is a package helper, `backend.Shutdown(ctx, inst)`, which does
+is a package helper, `backend.Shutdown(ctx, m)`, which does
 `RemoteControl → Guest.Shutdown → Wait`, falling back to `Kill`.
 
 **Trace.** The QEMU instance already implements a richer teardown that the
@@ -102,7 +129,7 @@ both on the object.
 **Proposal.**
 
 ```go
-type Instance interface {
+type Machine interface {
 	Wait(ctx context.Context) error
 	Kill() error
 	Shutdown(ctx context.Context) error // graceful; falls back to Kill on ctx expiry
@@ -114,11 +141,11 @@ type Instance interface {
 Before / after:
 
 ```go
-defer backend.Shutdown(ctx, inst)   // before
-defer inst.Shutdown(ctx)            // after
+defer backend.Shutdown(ctx, m)   // before
+defer m.Shutdown(ctx)            // after
 ```
 
-## 3. Export the QEMU backend and instance types
+## 3. Export the QEMU backend and machine types
 
 **Today.** `qemu.New(cfg Config) (backend.Backend, error)` returns an
 interface wrapping unexported `qemuBackend`; instances are unexported
@@ -137,7 +164,7 @@ struct with exported config fields, zero value usable, defaults applied at
 first use.
 
 **Proposal.** `Config`'s fields become fields of an exported `Backend`;
-`New` is deleted; the instance type is exported so its capabilities are
+`New` is deleted; the machine type is exported so its capabilities are
 documented by assertion.
 
 ```go
@@ -145,24 +172,24 @@ package qemu
 
 type Backend struct {
 	Binary        string
-	Machine       string
+	MachineType   string // QEMU machine type (-machine type=); was Machine
 	// ... today's Config fields ...
 	RemoteControl RemoteControl
 	Logger        *slog.Logger // nil discards
 }
 
-func (b *Backend) Start(ctx context.Context, spec *vm.Spec) (backend.Instance, error)
-func (b *Backend) Resume(ctx context.Context, spec *vm.Spec) (backend.Instance, error)
+func (b *Backend) Start(ctx context.Context, spec *vm.Spec) (backend.Machine, error)
+func (b *Backend) Resume(ctx context.Context, spec *vm.Spec) (backend.Machine, error)
 func (b *Backend) StateVersion() string
 
-type Instance struct{ /* unexported fields */ }
+type Machine struct{ /* unexported fields */ }
 
 var (
 	_ backend.Backend        = (*Backend)(nil)
 	_ backend.Resumer        = (*Backend)(nil)
-	_ backend.Suspender      = (*Instance)(nil)
-	_ backend.MemoryResizer  = (*Instance)(nil)
-	_ backend.DeviceAttacher = (*Instance)(nil)
+	_ backend.Suspender      = (*Machine)(nil)
+	_ backend.MemoryResizer  = (*Machine)(nil)
+	_ backend.DeviceAttacher = (*Machine)(nil)
 )
 ```
 
@@ -173,11 +200,11 @@ does. Before / after:
 // before
 b, err := qemu.New(qemu.Config{RemoteControl: qemu.QGA{}})
 if err != nil { return err } // never taken
-inst, err := b.Start(ctx, spec)
+m, err := b.Start(ctx, spec)
 
 // after
 b := &qemu.Backend{RemoteControl: qemu.QGA{}}
-inst, err := b.Start(ctx, spec)
+m, err := b.Start(ctx, spec)
 ```
 
 `manifest.Load` keeps returning `backend.Backend`; internally it
@@ -238,7 +265,7 @@ err := g.Run(ctx, &vm.GuestCmd{Path: "make", Dir: "/workspace", Stdout: os.Stdou
 if err != nil { return err } // includes non-zero exit
 ```
 
-## 5. `Instance` exposes `Done` and `Err`
+## 5. `Machine` exposes `Done` and `Err`
 
 **Today.** Exit is observable only by blocking in `Wait(ctx)`.
 
@@ -254,7 +281,7 @@ needs exactly this.
 **Proposal.** The `context.Context` shape, with `Wait` kept as sugar:
 
 ```go
-type Instance interface {
+type Machine interface {
 	Done() <-chan struct{} // closed when the VM has exited and runtime state is released
 	Err() error            // exit error, valid after Done is closed
 	Wait(ctx context.Context) error // select over Done and ctx
@@ -266,19 +293,19 @@ Before / after, the shape the CLI loop takes once rebuilt on the public API:
 
 ```go
 // before: a goroutine per waiter
-go func() { errc <- inst.Wait(ctx) }()
+go func() { errc <- m.Wait(ctx) }()
 select { case err := <-errc: ...; case <-sig: ... }
 
 // after
 select {
-case <-inst.Done():
-	err := inst.Err()
+case <-m.Done():
+	err := m.Err()
 case <-sig:
-	inst.Shutdown(ctx)
+	m.Shutdown(ctx)
 }
 ```
 
-An instance-level `Events(ctx) iter.Seq[Event]` capability (boot, guest
+A machine-level `Events(ctx) iter.Seq[Event]` capability (boot, guest
 ready, suspended, exited) is the natural follow-on for the session
 rebuild; it is not part of this item.
 
@@ -425,7 +452,7 @@ the first time a second backend or a downstream consumer appears.
 All items are breaking, which is acceptable pre-v1; each lands separately
 with `go build ./... && go test ./... && nix flake check` green.
 
-1. Items 1–3 together (contract shape: capabilities on `Instance`,
+1. Items 0–3 together (contract shape: the `Machine` rename, capabilities on `Machine`,
    `Shutdown` in the contract, exported QEMU types) — they change what
    everything after is written against, and no in-tree caller moves.
 2. Item 4 (`Run` contract) — fixes the live `chmod` bug in passing.

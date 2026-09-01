@@ -111,6 +111,10 @@ func (d *SocketDialer) Dial(ctx context.Context, socketPath string, timeout time
 		rpcTimeout = DefaultRPCTimeout
 	}
 	reader := bufio.NewReader(conn)
+	maxFrameSize := d.MaxFrameSize
+	if maxFrameSize <= 0 {
+		maxFrameSize = limits.DefaultMaxFrameSize
+	}
 	maxCommandOutputSize := d.MaxCommandOutputSize
 	if maxCommandOutputSize <= 0 {
 		maxCommandOutputSize = limits.DefaultMaxCommandOutputSize
@@ -120,17 +124,17 @@ func (d *SocketDialer) Dial(ctx context.Context, socketPath string, timeout time
 		session:              &qmpwire.Session{Conn: conn, RPCTimeout: rpcTimeout},
 		maxCommandOutputSize: maxCommandOutputSize,
 	}
-	if err := client.synchronize(ctx, reader); err != nil {
+	if err := client.synchronize(ctx, reader, maxFrameSize); err != nil {
 		return nil, errors.Join(fmt.Errorf("synchronize guest agent: %w", err), conn.Close())
 	}
-	client.decoder = qmpwire.NewDecoder(reader, d.MaxFrameSize)
+	client.decoder = qmpwire.NewDecoder(reader, maxFrameSize)
 	return client, nil
 }
 
 // synchronize discards replies left in QGA's virtio-serial stream by an
 // earlier host connection. Without guest-sync-delimited, a fresh client can
 // mistake a stale empty reply for guest-exec's PID response.
-func (c *socketClient) synchronize(ctx context.Context, reader *bufio.Reader) error {
+func (c *socketClient) synchronize(ctx context.Context, reader *bufio.Reader, maxFrameSize int64) error {
 	const syncID int64 = 0x564952544c45 // "VIRTLE"
 	payload, err := json.Marshal(map[string]any{
 		"execute":   "guest-sync-delimited",
@@ -149,10 +153,10 @@ func (c *socketClient) synchronize(ctx context.Context, reader *bufio.Reader) er
 			// QGA prefixes every guest-sync-delimited response with 0xff. Scan
 			// for that sentinel before parsing JSON so stale or partial data
 			// cannot poison the decoder.
-			if _, err := reader.ReadBytes(0xff); err != nil {
+			if _, err := readDelimited(reader, 0xff, maxFrameSize, false); err != nil {
 				return &qmpwire.WireError{Err: err}
 			}
-			line, err := reader.ReadBytes('\n')
+			line, err := readDelimited(reader, '\n', maxFrameSize, true)
 			if err != nil {
 				return &qmpwire.WireError{Err: err}
 			}
@@ -166,6 +170,27 @@ func (c *socketClient) synchronize(ctx context.Context, reader *bufio.Reader) er
 			}
 		}
 	})
+}
+
+// readDelimited consumes one bounded segment without letting bufio allocate in
+// proportion to an untrusted peer's input. The delimiter is not returned.
+func readDelimited(reader *bufio.Reader, delimiter byte, limit int64, retain bool) ([]byte, error) {
+	var result []byte
+	for size := int64(0); ; size++ {
+		b, err := reader.ReadByte()
+		if err != nil {
+			return nil, err
+		}
+		if b == delimiter {
+			return result, nil
+		}
+		if size >= limit {
+			return nil, &limits.Error{Resource: "QEMU control frame", Limit: limit}
+		}
+		if retain {
+			result = append(result, b)
+		}
+	}
 }
 
 func (c *socketClient) Ping(ctx context.Context) error {

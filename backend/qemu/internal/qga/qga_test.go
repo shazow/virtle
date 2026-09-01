@@ -104,8 +104,28 @@ func TestClientSynchronizeDiscardsStaleReplies(t *testing.T) {
 	client := newSocketClient(clientConn, time.Second)
 	defer client.Disconnect()
 	reader := bufio.NewReader(clientConn)
-	if err := client.synchronize(context.Background(), reader); err != nil {
+	if err := client.synchronize(context.Background(), reader, limits.DefaultMaxFrameSize); err != nil {
 		t.Fatalf("synchronize: %v", err)
+	}
+}
+
+func TestClientSynchronizeRejectsOversizedFrame(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	go func() {
+		buf := make([]byte, 1024)
+		if _, err := serverConn.Read(buf); err != nil {
+			return
+		}
+		_, _ = serverConn.Write([]byte(strings.Repeat("x", 33)))
+	}()
+
+	client := newSocketClient(clientConn, time.Second)
+	err := client.synchronize(context.Background(), bufio.NewReader(clientConn), 32)
+	if !errors.Is(err, limits.ErrExceeded) || !qmpwire.IsWireError(err) {
+		t.Fatalf("expected wire-level frame limit error, got %v", err)
 	}
 }
 

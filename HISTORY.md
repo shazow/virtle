@@ -53,6 +53,12 @@ user-visible outcomes.
   closed, so callers can `select` over VM exit, signals, and their own events
   without a goroutine per waiter. `Wait` remains as the blocking sugar.
 
+- `virtle launch` now loads its manifest through the public `manifest.Load`
+  and runs the session on the returned backend, so the CLI exercises the same
+  path and overlay contract that library consumers rely on. Manifest sizes
+  declared without `create = true` no longer surface as a `Disk.Size` in the
+  loaded `vm.Spec`, since they have no effect on launch.
+
 - Newly created VM state directories and volume images are private by default
   (`0700` and `0600`).
 - Guest and control requests now have bounded memory use and concurrency.

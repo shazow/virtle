@@ -16,10 +16,14 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/jessevdk/go-flags"
+	"github.com/shazow/virtle/backend"
+	"github.com/shazow/virtle/backend/qemu"
 	"github.com/shazow/virtle/backend/qemu/session"
 	"github.com/shazow/virtle/internal/control"
 	"github.com/shazow/virtle/internal/manifest"
 	manifestschema "github.com/shazow/virtle/internal/manifest/schema"
+	libmanifest "github.com/shazow/virtle/manifest"
+	"github.com/shazow/virtle/vm"
 )
 
 type Options struct {
@@ -76,7 +80,7 @@ func runLaunch(options *Options) error {
 	}
 
 	rootLogger.With("package", "main").Info("loading launch manifest", "path", options.Manifest)
-	loaded, err := loadLaunchManifest(options.Manifest, rootLogger.With("package", "manifest"))
+	spec, b, err := loadLaunchSpec(options.Manifest)
 	if err != nil {
 		return err
 	}
@@ -84,7 +88,7 @@ func runLaunch(options *Options) error {
 	// The session layer owns the whole foreground lifecycle; backend
 	// details (suspend-state versioning, readiness, guest control) live
 	// inside the machinery it wraps.
-	return session.Run(context.Background(), loaded, session.Options{
+	return session.Run(context.Background(), b, spec, session.Options{
 		Resume:        options.Launch.Resume,
 		SSH:           options.Launch.SSH,
 		RemoteCommand: options.Launch.Args.RemoteCommand,
@@ -194,6 +198,31 @@ func runRPC(options *Options) error {
 	return err
 }
 
+// loadLaunchSpec loads the launch manifest through the public manifest
+// package — the same path library consumers take, so the CLI exercises the
+// contract it documents — and configures the returned backend for the CLI.
+func loadLaunchSpec(path string) (*vm.Spec, backend.Backend, error) {
+	resolvedPath, err := resolveManifestPath(path)
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve manifest path %q: %w", path, err)
+	}
+	data, err := readManifestFile(resolvedPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open manifest %q: %w", resolvedPath, err)
+	}
+	spec, b, err := libmanifest.Load(bytes.NewReader(data))
+	if err != nil {
+		return nil, nil, fmt.Errorf("load manifest %q: %w", resolvedPath, err)
+	}
+	if qb, ok := b.(*qemu.Backend); ok {
+		qb.Logger = rootLogger
+	}
+	return spec, b, nil
+}
+
+// loadLaunchManifest loads the internal manifest with resolution logging,
+// for the out-of-process commands (hotplug) that address a running
+// session.
 func loadLaunchManifest(path string, logger *slog.Logger) (*manifest.Manifest, error) {
 	doc, resolvedPath, err := loadManifestDocument(path)
 	if err != nil {

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/shazow/virtle/backend/qemu"
 	"github.com/shazow/virtle/internal/control"
 )
 
@@ -498,6 +499,16 @@ func TestLoadLaunchManifestResolvesWorkingDirAgainstProcessCWD(t *testing.T) {
 	if loaded.Paths.WorkingDir == tmpDir {
 		t.Fatalf("working dir must not anchor to the manifest directory %q", tmpDir)
 	}
+	spec, b, err := loadLaunchSpec(manifestPath)
+	if err != nil {
+		t.Fatalf("load launch spec: %v", err)
+	}
+	if spec.Dir != wantDir {
+		t.Fatalf("unexpected spec working dir: got %q want %q", spec.Dir, wantDir)
+	}
+	if qb, ok := b.(*qemu.Backend); !ok || qb.Logger == nil {
+		t.Fatalf("launch backend = %T, want a *qemu.Backend configured with the CLI logger", b)
+	}
 
 	// Loading must never write to the manifest, whatever the working dir.
 	data, err := os.ReadFile(manifestPath)
@@ -523,6 +534,9 @@ func TestLoadManifestLeavesReadOnlyManifestIntact(t *testing.T) {
 	}
 	if _, err := loadLaunchManifest(manifestPath, slog.New(slog.DiscardHandler)); err != nil {
 		t.Fatalf("load launch manifest: %v", err)
+	}
+	if _, _, err := loadLaunchSpec(manifestPath); err != nil {
+		t.Fatalf("load launch spec: %v", err)
 	}
 
 	info, err := os.Stat(manifestPath)

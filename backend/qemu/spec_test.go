@@ -99,7 +99,7 @@ func TestSpecDocument(t *testing.T) {
 	}
 	if len(doc.WriteFiles) != 1 || doc.WriteFiles[0].GuestPath != "/etc/motd" ||
 		doc.WriteFiles[0].Text == nil || *doc.WriteFiles[0].Text != "hi" ||
-		doc.WriteFiles[0].Mode == nil || *doc.WriteFiles[0].Mode != "644" {
+		doc.WriteFiles[0].Mode == nil || *doc.WriteFiles[0].Mode != "0644" {
 		t.Errorf("write files = %+v", doc.WriteFiles)
 	}
 }
@@ -314,7 +314,7 @@ func TestSpecDocumentOverlaysBase(t *testing.T) {
 	if len(files) != 2 {
 		t.Fatalf("guest file plan = %+v, want one edited inline file and one backend-owned file", files)
 	}
-	if got := files[1]; got.GuestPath != "/etc/new" || got.Content.Kind != imanifest.WriteFileContentText || got.Content.Text != "new content" || got.Mode != "640" || got.Chown != "root:root" || !got.Overwrite {
+	if got := files[1]; got.GuestPath != "/etc/new" || got.Content.Kind != imanifest.WriteFileContentText || got.Content.Text != "new content" || got.Mode != "0640" || got.Chown != "root:root" || !got.Overwrite {
 		t.Errorf("edited inline file = %+v", got)
 	}
 	if got := files[0]; got.GuestPath != "/etc/backend.conf" || got.Content.Kind != imanifest.WriteFileContentPath || got.Content.Path != "/work/host.conf" || !got.WriteBack {

@@ -158,6 +158,16 @@ func NewBackendFromDocument(doc imanifest.Document) *Backend {
 	return &Backend{RemoteControl: QGA{}, doc: &doc}
 }
 
+// ResolvedManifest lowers spec onto this backend's configuration (and the
+// loaded document, for manifest.Load backends) and returns the resolved
+// internal manifest: the bridge the virtle CLI's session layer runs on,
+// so the CLI consumes the same public path as library callers. The
+// manifest type is internal, so this is not callable (and not supported)
+// outside the module.
+func (b *Backend) ResolvedManifest(spec *vm.Spec) (*imanifest.Manifest, error) {
+	return b.resolveSpec(spec, b.logger())
+}
+
 // Start launches a VM from spec. It implements backend.Backend.
 func (b *Backend) Start(ctx context.Context, spec *vm.Spec) (backend.Instance, error) {
 	return b.start(ctx, spec, vmm.ResumeModeNo)

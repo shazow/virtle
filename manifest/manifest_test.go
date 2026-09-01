@@ -1,10 +1,16 @@
 package manifest
 
 import (
+	"encoding/json"
 	"io"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/shazow/virtle/backend/qemu"
+	imanifest "github.com/shazow/virtle/internal/manifest"
 	"github.com/shazow/virtle/units"
 )
 
@@ -104,5 +110,66 @@ func TestLoadJSON(t *testing.T) {
 	}
 	if spec.Kernel.Path != "vmlinuz" {
 		t.Errorf("Kernel = %+v", spec.Kernel)
+	}
+}
+
+// TestLoadOverlayMatchesDirectResolution verifies the overlay contract end
+// to end: a manifest loaded through Load and started from its own Spec
+// resolves to exactly the runtime manifest the manifest resolves to
+// directly, for every example manifest. The CLI launch runs on this path.
+func TestLoadOverlayMatchesDirectResolution(t *testing.T) {
+	examples := os.DirFS(filepath.Join("..", "examples"))
+	names, err := fs.Glob(examples, "*.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(names) == 0 {
+		t.Fatal("no example manifests found")
+	}
+	workingDir, err := filepath.Abs(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range names {
+		t.Run(name, func(t *testing.T) {
+			data, err := fs.ReadFile(examples, name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			doc, err := imanifest.DecodeDocumentBytes(data, name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			doc.WorkingDir = workingDir
+			direct, err := doc.Manifest()
+			if err != nil {
+				t.Fatalf("resolve directly: %v", err)
+			}
+
+			spec, b, err := Load(strings.NewReader(string(data)))
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			qb, ok := b.(*qemu.Backend)
+			if !ok {
+				t.Fatalf("Load returned %T, want *qemu.Backend", b)
+			}
+			overlaid, err := qb.ResolvedManifest(spec)
+			if err != nil {
+				t.Fatalf("resolve through the Spec overlay: %v", err)
+			}
+
+			want, err := json.MarshalIndent(direct, "", "  ")
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := json.MarshalIndent(overlaid, "", "  ")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != string(want) {
+				t.Errorf("overlay resolution differs from direct resolution:\n--- direct\n%s\n--- overlay\n%s", want, got)
+			}
+		})
 	}
 }

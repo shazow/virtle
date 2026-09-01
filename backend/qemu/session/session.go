@@ -16,11 +16,16 @@ package session
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 
+	"github.com/shazow/virtle/backend"
+	"github.com/shazow/virtle/backend/qemu"
 	"github.com/shazow/virtle/backend/qemu/internal/vmm"
 	"github.com/shazow/virtle/internal/manifest"
+	"github.com/shazow/virtle/vm"
 )
 
 // Options configures a CLI session.
@@ -32,13 +37,23 @@ type Options struct {
 	Logger *slog.Logger // default: discard
 }
 
-// Run boots the VM with CLI semantics (resume modes, --ssh preflight
-// validation, process signal handlers) and runs the foreground session to
-// completion. A session that ends in a saved suspend reports success.
-func Run(ctx context.Context, mf *manifest.Manifest, opts Options) error {
+// Run boots the VM described by spec on b with CLI semantics (resume
+// modes, --ssh preflight validation, process signal handlers) and runs
+// the foreground session to completion. A session that ends in a saved
+// suspend reports success. b must be a *qemu.Backend, typically the one
+// manifest.Load returns; the session's VM machinery is QEMU-bound.
+func Run(ctx context.Context, b backend.Backend, spec *vm.Spec, opts Options) error {
 	logger := opts.Logger
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
+	}
+	qb, ok := b.(*qemu.Backend)
+	if !ok {
+		return fmt.Errorf("session requires the qemu backend, got %T: %w", b, errors.ErrUnsupported)
+	}
+	mf, err := qb.ResolvedManifest(spec)
+	if err != nil {
+		return err
 	}
 	sessionLogger := logger.With("package", "session")
 	sessionLogger.Info("starting vm session", "resume", opts.Resume, "ssh", opts.SSH)

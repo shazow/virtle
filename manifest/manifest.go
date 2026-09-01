@@ -23,14 +23,27 @@ import (
 )
 
 // Load reads a virtle manifest and lowers it to a neutral Spec plus the
-// backend it configures. The returned backend preserves manifest detail
+// backend it configures. It is the path the virtle CLI's launch takes, so
+// the two agree on what a manifest means.
+//
+// The returned backend is a *qemu.Backend that preserves manifest detail
 // beyond what Spec models (balloon controller, hotplug table, write-file
 // ownership, ...); the Spec is the neutral view, and edits to it are
 // overlaid when the backend starts. Shares, disks, host port forwards, and
 // inline files replace their corresponding loaded entries by slice position;
 // removing an entry removes it from launch, and extra entries append. Manifest
 // entries with no Spec representation remain backend-owned. Normal manifest
-// defaulting and validation still apply to the combined result.
+// defaulting and validation still apply to the combined result. This overlay
+// is transitional: once the manifest format is consolidated onto Spec, Load
+// returns a complete Spec and backend with no document carried inside.
+//
+// Backend knobs the manifest does not set (Logger, ConsoleOutput) are
+// configured on the returned backend before Start:
+//
+//	spec, b, err := manifest.Load(f)
+//	if qb, ok := b.(*qemu.Backend); ok {
+//		qb.Logger = slog.Default()
+//	}
 //
 // A relative working_dir (including the "." default) resolves against the
 // process working directory.
@@ -92,11 +105,13 @@ func specFromDocument(doc imanifest.Document) (*vm.Spec, error) {
 		})
 	}
 	for _, mount := range doc.Mounts.Image() {
-		spec.Disks = append(spec.Disks, vm.Disk{
-			Path:   mount.SourcePath,
-			Format: mount.Image.Format,
-			Size:   units.Bytes(mount.Image.Size.Bytes()),
-		})
+		disk := vm.Disk{Path: mount.SourcePath, Format: mount.Image.Format}
+		if mount.Image.AutoCreate {
+			// Disk.Size is a creation size; a manifest size without
+			// create has no effect on launch and no Spec equivalent.
+			disk.Size = units.Bytes(mount.Image.Size.Bytes())
+		}
+		spec.Disks = append(spec.Disks, disk)
 	}
 	for _, network := range doc.Networks {
 		for _, forward := range network.Forward {

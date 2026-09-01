@@ -317,7 +317,7 @@ func overlayFile(input imanifest.WriteFileInput, file vm.File) (imanifest.WriteF
 	input.Path = nil
 	input.Mode = nil
 	if file.Mode != 0 {
-		mode := fmt.Sprintf("%03o", file.Mode.Perm())
+		mode := fmt.Sprintf("%04o", file.Mode.Perm())
 		input.Mode = &mode
 	}
 	return input, nil

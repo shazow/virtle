@@ -535,9 +535,9 @@ same code; none is its own PR.
   `Balloon`, `GuestPS`, `GuestExec`, `GuestRead`, `GuestWrite` are
   unreachable from production: the CLI's `rpc` uses `Raw`, `vmm/control.go`
   uses `Suspend`, and the rest are called only from `manager_test.go`'s
-  control-periphery tests. Delete them; those tests use `Raw` with the
-  request types. The roadmap's "public control client" is designed later,
-  against the `Machine` contract, not grown from these.
+  control-periphery tests. They are replaced, not kept: item 13 makes the
+  control client a `backend.Machine`, and the ad-hoc typed methods go with
+  it (the tests use `Raw` with the request types until then).
 - Test helpers unreachable even from tests: `manifestWritePath`,
   `commandEnvAdditions`, `stringPtr`/`intPtr`/`boolPtr` in
   `vmm/manager_test.go`; `commandArguments` in `qmpclient/qmp_test.go`.
@@ -612,6 +612,85 @@ compatibility shim); `vmm.StartVM` (the library path's entry point,
 unreachable only from `main`).
 
 
+## 13. The control socket serves the `Machine` contract
+
+**Today.** `internal/control` is a bespoke JSON-RPC client and server
+(`status`, `methods`, `suspend`, `hotplug`, `balloon`, `guest-*`).
+`virtle suspend`/`hotplug` reach it through `vmm`; `virtle rpc` uses
+`Raw`; the remaining typed client methods are unreachable (item 12).
+
+**Trace.** The socket exists for one reason: `virtle suspend` runs in a
+different process from the one that owns the machine — the
+machine-handle-across-processes problem. Docker's Go client implements
+what dockerd serves and Tailscale's `LocalClient` mirrors `LocalBackend`;
+neither builds its CLI on a raw passthrough. The wire format is one of the
+two frozen contracts, and its method names map one to one onto `Machine`
+and capability methods, so the Go client shape can change while the bytes
+do not.
+
+**Proposal.** `control.Dial` returns a `backend.Machine` implemented over
+the socket — the same contract in-process and out-of-process.
+
+```go
+func Dial(ctx context.Context, socketPath string) (backend.Machine, error)
+```
+
+- **Capabilities and skew.** Go interface assertions are static per type,
+  but the proxy's real capabilities depend on the server it dialed. The
+  proxy therefore implements every capability and returns
+  `errors.ErrUnsupported` from any the server's `methods` list lacks —
+  the contract's existing rule for absent capabilities, so version skew is
+  a runtime `ErrUnsupported`, never a compile-time surprise.
+- **`Wait`/`Done`/`Err`.** An additive `wait` RPC (Docker's container
+  wait), issued in a goroutine at `Dial`; `Done` closes when it returns
+  and `Err` holds the result. The server answers pending `wait` calls
+  before tearing the socket down (the runtime's ordered close). Socket EOF
+  is the safety net for a server that dies without answering: `Done`
+  closes with an "exited without status" error, refined from the on-disk
+  launch record when present. Older servers whose `methods` lack `wait`
+  degrade to `status` polling plus EOF. When the `Events` capability lands
+  (JSON-RPC notification frames on a subscribed connection), `exited` is
+  one of its events; `wait` remains the simple call.
+- **`status`.** A capability, `backend.StatusReporter`, with a `Status`
+  struct whose JSON tags are the frozen wire names (`qmpSocket`,
+  `guestAgentSocket`, `qmpReadyAt`, …) and whose Go fields are neutral —
+  bytes fixed, identifiers free. Implemented by the QEMU machine
+  in-process and by the proxy, so `virtle status` and
+  `m.(backend.StatusReporter)` are one call; it converges into `Events`'
+  first frame later.
+
+```go
+type StatusReporter interface {
+	Status(ctx context.Context) (Status, error)
+}
+```
+
+- **`RemoteControl()`** on the proxy returns a `vm.Guest` over the
+  socket's `guest-*` methods today; once the daemon exists it returns a
+  client dialed straight to the daemon, so `guest-*` proxying ends and the
+  socket narrows to host-session concerns without a wire break (this
+  settles roadmap item 5).
+- **`virtle rpc` keeps `Raw`** as the debugging escape hatch (`kubectl get
+  --raw`, `virsh qemu-monitor-command`). `virtle suspend`, `hotplug`, and
+  a new `status` become thin typed calls over the proxy, which deletes the
+  `session` delegates for a better reason than "they're wrappers".
+- **Conformance for free**: `backendtest.TestBackend` runs against the
+  proxy, so the socket is held to the same suite as QEMU and the fake.
+
+Before / after:
+
+```go
+// before: bespoke, out-of-process only
+session.Suspend(ctx, mf) // → vmm → control.Dial(path).Suspend(ctx, control.SuspendRequest{})
+
+// after: the same contract in and out of process
+m, err := control.Dial(ctx, socketPath)
+if s, ok := m.(backend.Suspender); ok {
+	err = s.Suspend(ctx)
+}
+```
+
+
 ## Sequencing
 
 All items are breaking, which is acceptable pre-v1; each lands separately
@@ -631,3 +710,7 @@ with `go build ./... && go test ./... && nix flake check` green.
 6. Item 12 has no step of its own: each cleanup lands inside the item or
    roadmap step that touches the same code, and the session-era tests are
    deleted, not ported, when roadmap item 4 removes their subject.
+7. Item 13 lands right after step 1, since it implements the `Machine`
+   contract remotely, and does not wait for the daemon: `wait` and
+   `StatusReporter` are additive to the frozen wire format, and the proxy's
+   `RemoteControl` switches to the daemon when roadmap item 2 lands.

@@ -24,6 +24,17 @@ user-visible outcomes.
   }
   ```
 
+- **Library API (breaking).** `vm.Guest.Run` follows the `os/exec` contract:
+  `GuestCmd` gained `Stdout` and `Stderr` writers, a non-zero exit status is
+  returned as a `*vm.ExitError`, and `vm.Output` is the `exec.Cmd.Output`
+  analog. `vm.GuestResult` is gone, so a failing guest command can no longer
+  be mistaken for success by checking only the error.
+
+  ```go
+  err := guest.Run(ctx, &vm.GuestCmd{Path: "make", Stdout: os.Stdout})
+  out, err := vm.Output(ctx, guest, &vm.GuestCmd{Path: "uname", Args: []string{"-r"}})
+  ```
+
 - Newly created VM state directories and volume images are private by default
   (`0700` and `0600`).
 - Guest and control requests now have bounded memory use and concurrency.

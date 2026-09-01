@@ -1,6 +1,7 @@
 package qemu
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -116,21 +117,57 @@ func (c *fakeQGAClient) Disconnect() error                  { return nil }
 func TestQGAGuestRun(t *testing.T) {
 	client := newFakeQGAClient()
 	client.status = qga.ExecStatus{
-		ExitCode: 3,
-		OutData:  base64.StdEncoding.EncodeToString([]byte("out")),
-		ErrData:  base64.StdEncoding.EncodeToString([]byte("err")),
+		OutData: base64.StdEncoding.EncodeToString([]byte("out")),
+		ErrData: base64.StdEncoding.EncodeToString([]byte("err")),
 	}
 	g := &qgaGuest{vm: &fakeGuestHost{client: client}}
 
-	result, err := g.Run(context.Background(), &vm.GuestCmd{Path: "make", Args: []string{"-j2"}})
+	var stdout, stderr bytes.Buffer
+	err := g.Run(context.Background(), &vm.GuestCmd{Path: "make", Args: []string{"-j2"}, Stdout: &stdout, Stderr: &stderr})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if client.execPath != "make" || len(client.execArgs) != 1 || client.execArgs[0] != "-j2" {
 		t.Errorf("exec = %q %v", client.execPath, client.execArgs)
 	}
-	if result.ExitCode != 3 || string(result.Stdout) != "out" || string(result.Stderr) != "err" {
-		t.Errorf("result = %+v", result)
+	if stdout.String() != "out" || stderr.String() != "err" {
+		t.Errorf("stdout = %q, stderr = %q", stdout.String(), stderr.String())
+	}
+}
+
+func TestQGAGuestRunNonZeroExit(t *testing.T) {
+	client := newFakeQGAClient()
+	client.status = qga.ExecStatus{
+		ExitCode: 3,
+		OutData:  base64.StdEncoding.EncodeToString([]byte("out")),
+		ErrData:  base64.StdEncoding.EncodeToString([]byte("err")),
+	}
+	g := &qgaGuest{vm: &fakeGuestHost{client: client}}
+
+	// Without a Stderr writer, the exit error carries the stderr tail.
+	stdout, err := vm.Output(context.Background(), g, &vm.GuestCmd{Path: "make"})
+	var exit *vm.ExitError
+	if !errors.As(err, &exit) {
+		t.Fatalf("Run error = %v, want *vm.ExitError", err)
+	}
+	if exit.Code != 3 || string(exit.Stderr) != "err" {
+		t.Errorf("exit error = %+v", exit)
+	}
+	if string(stdout) != "out" {
+		t.Errorf("stdout = %q, want %q", stdout, "out")
+	}
+
+	// With a Stderr writer, the caller owns stderr and the error omits it.
+	var stderr bytes.Buffer
+	err = g.Run(context.Background(), &vm.GuestCmd{Path: "make", Stderr: &stderr})
+	if !errors.As(err, &exit) {
+		t.Fatalf("Run error = %v, want *vm.ExitError", err)
+	}
+	if exit.Code != 3 || exit.Stderr != nil {
+		t.Errorf("exit error = %+v, want code 3 and no stderr", exit)
+	}
+	if stderr.String() != "err" {
+		t.Errorf("stderr = %q, want %q", stderr.String(), "err")
 	}
 }
 
@@ -138,7 +175,7 @@ func TestQGAGuestRunDirEnvWrapsShell(t *testing.T) {
 	client := newFakeQGAClient()
 	g := &qgaGuest{vm: &fakeGuestHost{client: client}}
 
-	if _, err := g.Run(context.Background(), &vm.GuestCmd{
+	if err := g.Run(context.Background(), &vm.GuestCmd{
 		Path: "make", Dir: "/workspace", Env: []string{"FOO=bar"},
 	}); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -156,7 +193,7 @@ func TestQGAGuestRunDirEnvWrapsShell(t *testing.T) {
 
 func TestQGAGuestRunStdinUnsupported(t *testing.T) {
 	g := &qgaGuest{vm: &fakeGuestHost{client: newFakeQGAClient()}}
-	if _, err := g.Run(context.Background(), &vm.GuestCmd{Path: "cat", Stdin: strings.NewReader("x")}); err == nil {
+	if err := g.Run(context.Background(), &vm.GuestCmd{Path: "cat", Stdin: strings.NewReader("x")}); err == nil {
 		t.Fatal("expected stdin to be unsupported over QGA")
 	}
 }

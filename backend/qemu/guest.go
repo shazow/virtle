@@ -29,12 +29,19 @@ type qgaGuest struct {
 
 var _ vm.Guest = (*qgaGuest)(nil)
 
-func (g *qgaGuest) Run(ctx context.Context, cmd *vm.GuestCmd) (*vm.GuestResult, error) {
+// exitErrorStderrLimit bounds the stderr tail carried by vm.ExitError when
+// the caller did not collect stderr itself.
+const exitErrorStderrLimit = 32 << 10
+
+// Run executes cmd through guest-exec. QGA delivers output only once the
+// command has exited, so cmd.Stdout and cmd.Stderr receive the buffered
+// output at completion; a non-zero exit is returned as *vm.ExitError.
+func (g *qgaGuest) Run(ctx context.Context, cmd *vm.GuestCmd) error {
 	if cmd == nil || cmd.Path == "" {
-		return nil, fmt.Errorf("guest command path is required")
+		return fmt.Errorf("guest command path is required")
 	}
 	if cmd.Stdin != nil {
-		return nil, fmt.Errorf("guest command stdin over QGA: %w", errors.ErrUnsupported)
+		return fmt.Errorf("guest command stdin over QGA: %w", errors.ErrUnsupported)
 	}
 	path, args := cmd.Path, cmd.Args
 	if cmd.Dir != "" || len(cmd.Env) > 0 {
@@ -55,7 +62,7 @@ func (g *qgaGuest) Run(ctx context.Context, cmd *vm.GuestCmd) (*vm.GuestResult, 
 
 	client, err := g.vm.DialGuestAgent(ctx)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer client.Disconnect()
 
@@ -67,17 +74,37 @@ func (g *qgaGuest) Run(ctx context.Context, cmd *vm.GuestCmd) (*vm.GuestResult, 
 		CaptureOutput: true,
 	})
 	if err != nil {
-		return nil, err
+		return err
 	}
 	stdout, err := base64.StdEncoding.DecodeString(status.OutData)
 	if err != nil {
-		return nil, fmt.Errorf("decode guest stdout: %w", err)
+		return fmt.Errorf("decode guest stdout: %w", err)
 	}
 	stderr, err := base64.StdEncoding.DecodeString(status.ErrData)
 	if err != nil {
-		return nil, fmt.Errorf("decode guest stderr: %w", err)
+		return fmt.Errorf("decode guest stderr: %w", err)
 	}
-	return &vm.GuestResult{ExitCode: status.ExitCode, Stdout: stdout, Stderr: stderr}, nil
+	if cmd.Stdout != nil && len(stdout) > 0 {
+		if _, err := cmd.Stdout.Write(stdout); err != nil {
+			return fmt.Errorf("write guest stdout: %w", err)
+		}
+	}
+	if cmd.Stderr != nil && len(stderr) > 0 {
+		if _, err := cmd.Stderr.Write(stderr); err != nil {
+			return fmt.Errorf("write guest stderr: %w", err)
+		}
+	}
+	if status.ExitCode != 0 {
+		exit := &vm.ExitError{Code: status.ExitCode}
+		if cmd.Stderr == nil {
+			if len(stderr) > exitErrorStderrLimit {
+				stderr = stderr[len(stderr)-exitErrorStderrLimit:]
+			}
+			exit.Stderr = stderr
+		}
+		return exit
+	}
+	return nil
 }
 
 func (g *qgaGuest) Open(ctx context.Context, name string) (io.ReadCloser, error) {

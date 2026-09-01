@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/shazow/virtle/backend/qemu"
 	"github.com/shazow/virtle/units"
@@ -39,13 +40,15 @@ func Example() {
 		log.Print(err)
 		return
 	}
-	result, err := guest.Run(ctx, &vm.GuestCmd{
-		Path: "make",
-		Dir:  "/workspace",
+	// A non-zero exit is an error (*vm.ExitError), as with exec.Cmd.Run.
+	err = guest.Run(ctx, &vm.GuestCmd{
+		Path:   "make",
+		Dir:    "/workspace",
+		Stdout: os.Stdout,
 	})
 	if err != nil {
 		log.Print(err)
 		return
 	}
-	fmt.Printf("exit=%d\n%s", result.ExitCode, result.Stdout)
+	fmt.Println("make succeeded")
 }

@@ -96,8 +96,11 @@ g, err := inst.RemoteControl()
 if err != nil {
 	log.Fatal(err) // this VM has no guest agent
 }
-out, err := g.Run(ctx, &vm.GuestCmd{Path: "make", Dir: "/workspace"})
-fmt.Printf("exit=%d\n%s", out.ExitCode, out.Stdout)
+// A non-zero exit is an error (*vm.ExitError), as with exec.Cmd.Run.
+err = g.Run(ctx, &vm.GuestCmd{Path: "make", Dir: "/workspace", Stdout: os.Stdout})
+if err != nil {
+	log.Fatal(err)
+}
 ```
 
 Optional functionality is discovered by type assertion, as in

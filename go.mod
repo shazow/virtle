@@ -1,6 +1,6 @@
 module github.com/shazow/virtle
 
-go 1.25.7
+go 1.25.13
 
 require (
 	github.com/BurntSushi/toml v1.6.0

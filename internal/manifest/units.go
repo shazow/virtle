@@ -1,4 +1,4 @@
-package units
+package manifest
 
 import (
 	"encoding/json"
@@ -8,13 +8,19 @@ import (
 	"time"
 )
 
-// Duration is a time.Duration that decodes from a Go duration string such as
-// "30s" or "5m". Bare numbers, quoted or not, decode as seconds; that form is
-// undocumented and kept for backward compatibility.
+const bytesPerMiB int64 = 1024 * 1024
+
+// MiB is the manifest format's mebibyte-denominated size.
+type MiB int
+
+func (m MiB) Bytes() int64 { return int64(m) * bytesPerMiB }
+
+func (m MiB) Int() int { return int(m) }
+
+// Duration is the manifest format's duration encoding. Resolved runtime and
+// public API types use time.Duration directly.
 type Duration time.Duration
 
-// ParseDuration parses a Go duration string, treating a bare number as
-// seconds.
 func ParseDuration(value string) (Duration, error) {
 	if seconds, err := strconv.ParseFloat(value, 64); err == nil {
 		return secondsDuration(seconds)
@@ -26,10 +32,6 @@ func ParseDuration(value string) (Duration, error) {
 	return Duration(parsed), nil
 }
 
-// secondsDuration converts seconds to a Duration. Positive infinity and
-// overflow saturate to the maximum duration (effectively no timeout); NaN and
-// negative infinity are rejected because their integer conversion is
-// platform-defined.
 func secondsDuration(seconds float64) (Duration, error) {
 	if math.IsNaN(seconds) || math.IsInf(seconds, -1) {
 		return 0, fmt.Errorf("invalid duration %v: must not be NaN or negative infinity", seconds)
@@ -45,8 +47,6 @@ func (d Duration) Duration() time.Duration { return time.Duration(d) }
 
 func (d Duration) String() string { return time.Duration(d).String() }
 
-// MarshalText encodes the duration in Go's duration-string form so text-based
-// encoders such as TOML emit values the decoder reads back unchanged.
 func (d Duration) MarshalText() ([]byte, error) {
 	return []byte(time.Duration(d).String()), nil
 }
@@ -77,8 +77,6 @@ func (d *Duration) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// UnmarshalTOML decodes TOML integers and floats as seconds and strings as Go
-// durations.
 func (d *Duration) UnmarshalTOML(value any) error {
 	switch v := value.(type) {
 	case int64:

@@ -1,5 +1,5 @@
 // Package qemu implements a virtle backend that launches virtual machines
-// with QEMU. Config.RemoteControl selects the guest-control transport
+// with QEMU. Backend.RemoteControl selects the guest-control transport
 // wired into Instance.RemoteControl: QGA (the QEMU Guest Agent, equivalent
 // to the virtle CLI today) now, a virtle-native guest daemon transport
 // later.
@@ -44,13 +44,14 @@ const (
 	ConsoleInteractive Console = "console" // interactive console on the host terminal
 )
 
-// Config holds the QEMU-only knobs. The zero value works.
-type Config struct {
+// Backend starts QEMU virtual machines. The zero value works. Fields must not
+// be modified after Start or Resume has been called.
+type Backend struct {
 	Binary         string            // default: qemu-system-<arch>
 	Machine        string            // QEMU machine type; default: microvm
 	MachineOptions map[string]string // extra machine options
 	CPUModel       string            // QEMU CPU model; default derived per host
-	KVM            *bool             // enable KVM acceleration; default derived per host
+	Accel          Accel             // acceleration mode; default: auto
 	ExtraArgs      []string          // passthrough QEMU arguments
 	Console        Console
 	Seccomp        bool   // enable QEMU seccomp sandboxing
@@ -77,9 +78,20 @@ type Config struct {
 	// ConsoleOutput receives explicitly requested console output. The default
 	// is os.Stderr.
 	ConsoleOutput io.Writer
+
+	doc *imanifest.Document // non-nil for manifest.Load-configured backends
 }
 
-// RemoteControl is a guest-control transport for Config.RemoteControl.
+// Accel selects QEMU's acceleration mode.
+type Accel string
+
+const (
+	AccelAuto Accel = ""    // KVM when available, otherwise TCG
+	AccelKVM  Accel = "kvm" // require KVM acceleration
+	AccelTCG  Accel = "tcg" // use software emulation
+)
+
+// RemoteControl is a guest-control transport for Backend.RemoteControl.
 // It is sealed (unexported method): QGA today, the virtle-native guest
 // daemon later. Each transport carries its own knobs.
 type RemoteControl interface{ remoteControl() }
@@ -97,59 +109,47 @@ type QGA struct {
 
 func (QGA) remoteControl() {}
 
-// New returns a QEMU backend. Config.RemoteControl selects guest control —
-// there is no default transport, mirroring how backends themselves are
-// named explicitly:
-//
-//	b, err := qemu.New(qemu.Config{RemoteControl: qemu.QGA{}})
-func New(cfg Config) (backend.Backend, error) {
-	return newBackend(cfg, nil), nil
-}
-
-type qemuBackend struct {
-	cfg Config
-	doc *imanifest.Document // non-nil for manifest.Load-configured backends
-}
-
-func newBackend(cfg Config, doc *imanifest.Document) *qemuBackend {
+func (b *Backend) effective() Backend {
+	cfg := *b
 	if cfg.Logger == nil {
 		cfg.Logger = slog.New(slog.DiscardHandler)
 	}
 	if cfg.ConsoleOutput == nil {
 		cfg.ConsoleOutput = os.Stderr
 	}
-	return &qemuBackend{cfg: cfg, doc: doc}
+	return cfg
 }
 
-func (b *qemuBackend) hasRemoteControl() bool { return b.cfg.RemoteControl != nil }
+func (b *Backend) hasRemoteControl() bool { return b.RemoteControl != nil }
 
-// StateVersion implements backend.Suspender: it reports the suspend-state
+// StateVersion implements backend.Resumer: it reports the suspend-state
 // version this backend's machinery stamps on saves and compares on
 // resume. Only an exact match is resumable, since the saved VM state is a
 // QEMU migration stream.
-func (b *qemuBackend) StateVersion() string { return vmm.StateVersion }
+func (b *Backend) StateVersion() string { return vmm.StateVersion }
 
 // NewBackendFromDocument is the bridge for the public manifest package:
 // the returned backend starts from the loaded document, preserving
 // manifest sections that have no vm.Spec equivalent, and overlays the Spec
 // passed to Start on top. The document type is internal, so this is not
 // callable (and not supported) outside the module.
-func NewBackendFromDocument(doc imanifest.Document, cfg Config) backend.Backend {
+func NewBackendFromDocument(doc imanifest.Document, cfg Backend) backend.Backend {
 	// Manifests describe agent-equipped guests today, matching the CLI.
 	if cfg.RemoteControl == nil {
 		cfg.RemoteControl = QGA{}
 	}
-	return newBackend(cfg, &doc)
+	cfg.doc = &doc
+	return &cfg
 }
 
-func (b *qemuBackend) Start(ctx context.Context, spec *vm.Spec) (backend.Instance, error) {
+func (b *Backend) Start(ctx context.Context, spec *vm.Spec) (backend.Instance, error) {
 	return b.start(ctx, spec, vmm.ResumeModeNo)
 }
 
 // resolveSpec lowers the spec (plus any base document) through the manifest
 // resolution pipeline.
-func (b *qemuBackend) resolveSpec(spec *vm.Spec, logger *slog.Logger) (*imanifest.Manifest, error) {
-	doc, err := specDocument(spec, b.cfg, b.doc)
+func (b *Backend) resolveSpec(spec *vm.Spec, logger *slog.Logger) (*imanifest.Manifest, error) {
+	doc, err := specDocument(spec, *b, b.doc)
 	if err != nil {
 		return nil, err
 	}
@@ -160,35 +160,86 @@ func (b *qemuBackend) resolveSpec(spec *vm.Spec, logger *slog.Logger) (*imanifes
 	return mf, nil
 }
 
-func (b *qemuBackend) start(ctx context.Context, spec *vm.Spec, resume vmm.ResumeMode) (backend.Instance, error) {
-	logger := b.cfg.Logger
+// ResolveSpecForSession is the internal bridge used by the transitional CLI
+// session package. Its internal-manifest result keeps it unavailable to
+// external consumers; library callers should use Start or Resume.
+func (b *Backend) ResolveSpecForSession(spec *vm.Spec, logger *slog.Logger) (*imanifest.Manifest, error) {
+	if logger == nil {
+		logger = b.effective().Logger
+	}
+	return b.resolveSpec(spec, logger)
+}
+
+func (b *Backend) start(ctx context.Context, spec *vm.Spec, resume vmm.ResumeMode) (backend.Instance, error) {
+	cfg := b.effective()
+	logger := cfg.Logger
 	mf, err := b.resolveSpec(spec, logger)
 	if err != nil {
 		return nil, err
 	}
 	handle, err := vmm.StartVM(ctx, mf, vmm.StartOptions{
 		Resume:           resume,
-		HasRemoteControl: b.hasRemoteControl(),
+		HasRemoteControl: cfg.hasRemoteControl(),
 	}, vmm.Config{
 		Logger:        logger,
-		ConsoleOutput: b.cfg.ConsoleOutput,
+		ConsoleOutput: cfg.ConsoleOutput,
 	})
 	if err != nil {
 		return nil, err
 	}
-	return &instance{vm: handle, hasRemoteControl: b.hasRemoteControl()}, nil
+	return newInstance(handle, cfg.hasRemoteControl()), nil
 }
 
-type instance struct {
+// Instance is a running QEMU virtual machine.
+type Instance struct {
 	vm               *vmm.VM
 	hasRemoteControl bool
+	done             chan struct{}
+	err              error
 }
 
-func (i *instance) Wait(ctx context.Context) error { return i.vm.Wait(ctx) }
+func newInstance(handle *vmm.VM, hasRemoteControl bool) *Instance {
+	i := &Instance{vm: handle, hasRemoteControl: hasRemoteControl, done: make(chan struct{})}
+	go func() {
+		i.err = handle.Wait(context.Background())
+		close(i.done)
+	}()
+	return i
+}
 
-func (i *instance) Kill() error { return i.vm.Kill() }
+func (i *Instance) Done() <-chan struct{} { return i.done }
 
-func (i *instance) RemoteControl() (vm.Guest, error) {
+func (i *Instance) Err() error { return i.err }
+
+func (i *Instance) Wait(ctx context.Context) error {
+	select {
+	case <-i.done:
+		return i.err
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	}
+}
+
+func (i *Instance) Kill() error { return i.vm.Kill() }
+
+func (i *Instance) Shutdown(ctx context.Context) error {
+	guest, err := i.RemoteControl()
+	if err != nil {
+		return i.Kill()
+	}
+	if err := guest.Shutdown(ctx); err != nil {
+		return i.Kill()
+	}
+	if err := i.Wait(ctx); err != nil {
+		if ctx.Err() != nil {
+			return i.Kill()
+		}
+		return err
+	}
+	return nil
+}
+
+func (i *Instance) RemoteControl() (vm.Guest, error) {
 	if !i.hasRemoteControl {
 		return nil, fmt.Errorf("vm has no guest control agent: %w", errors.ErrUnsupported)
 	}
@@ -201,70 +252,34 @@ func (i *instance) RemoteControl() (vm.Guest, error) {
 // without it teardown goes straight to QMP quit. Wait and Kill already
 // release runtime state; Close covers callers abandoning a VM without
 // waiting.
-func (i *instance) Close() error { return i.vm.Close() }
-
-func (b *qemuBackend) ownInstance(inst backend.Instance) (*instance, error) {
-	i, ok := inst.(*instance)
-	if !ok {
-		return nil, fmt.Errorf("instance was not started by this backend")
-	}
-	return i, nil
-}
+func (i *Instance) Close() error { return i.vm.Close() }
 
 // Suspend implements backend.Suspender: it saves the running instance's
-// state via QMP migration and stops the VM. The state lands in the
-// instance's own state directory (derived from its Spec); a differing
-// stateDir is rejected because socket paths and lock files are anchored
-// there at Start. Pass "" to use the instance's directory.
-func (b *qemuBackend) Suspend(ctx context.Context, inst backend.Instance, stateDir string) error {
-	i, err := b.ownInstance(inst)
-	if err != nil {
-		return err
-	}
-	if stateDir != "" && stateDir != i.vm.StateDir() {
-		return fmt.Errorf("suspend state dir is fixed at Start (%q): %w", i.vm.StateDir(), errors.ErrUnsupported)
-	}
+// state via QMP migration and stops the VM. State lands in the directory
+// derived from the Spec used at Start.
+func (i *Instance) Suspend(ctx context.Context) error {
 	return i.vm.Suspend(ctx)
 }
 
-// Resume implements backend.Suspender: it restores a previously suspended
+// Resume implements backend.Resumer: it restores a previously suspended
 // instance. The spec (plus this backend's config) must resolve to the same
 // state directory the suspend wrote to.
-func (b *qemuBackend) Resume(ctx context.Context, spec *vm.Spec, stateDir string) (backend.Instance, error) {
-	inst, err := b.start(ctx, spec, vmm.ResumeModeForce)
-	if err != nil {
-		return nil, err
-	}
-	i := inst.(*instance)
-	if stateDir != "" && stateDir != i.vm.StateDir() {
-		return nil, errors.Join(
-			fmt.Errorf("resume state dir %q does not match the spec's state dir %q", stateDir, i.vm.StateDir()),
-			i.Kill(),
-		)
-	}
-	return inst, nil
+func (b *Backend) Resume(ctx context.Context, spec *vm.Spec) (backend.Instance, error) {
+	return b.start(ctx, spec, vmm.ResumeModeForce)
 }
 
 // ResizeMemory implements backend.MemoryResizer via virtio-balloon. The
-// backend must be configured with Config.Balloon (or a manifest balloon
+// backend must be configured with Backend.Balloon (or a manifest balloon
 // device).
-func (b *qemuBackend) ResizeMemory(ctx context.Context, inst backend.Instance, size units.Bytes) error {
-	i, err := b.ownInstance(inst)
-	if err != nil {
-		return err
-	}
+func (i *Instance) ResizeMemory(ctx context.Context, size units.Bytes) error {
 	return i.vm.ResizeMemory(ctx, size.Int64())
 }
 
 // Attach implements backend.DeviceAttacher over QMP hotplug. The instance
-// must have PCIe hotplug ports reserved at Start: set Config.HotplugPorts
+// must have PCIe hotplug ports reserved at Start: set Backend.HotplugPorts
 // (or a manifest [hotplug] section / hotplug.ports for manifest.Load
 // backends).
-func (b *qemuBackend) Attach(ctx context.Context, inst backend.Instance, dev vm.Device) error {
-	i, err := b.ownInstance(inst)
-	if err != nil {
-		return err
-	}
+func (i *Instance) Attach(ctx context.Context, dev vm.Device) error {
 	hdev, err := hotplugDevice(i.vm, dev)
 	if err != nil {
 		return err
@@ -273,17 +288,21 @@ func (b *qemuBackend) Attach(ctx context.Context, inst backend.Instance, dev vm.
 }
 
 // Detach implements backend.DeviceAttacher; see Attach.
-func (b *qemuBackend) Detach(ctx context.Context, inst backend.Instance, dev vm.Device) error {
-	i, err := b.ownInstance(inst)
-	if err != nil {
-		return err
-	}
+func (i *Instance) Detach(ctx context.Context, dev vm.Device) error {
 	hdev, err := hotplugDevice(i.vm, dev)
 	if err != nil {
 		return err
 	}
 	return i.vm.DetachHotplugDevice(ctx, hdev.ID)
 }
+
+var (
+	_ backend.Backend        = (*Backend)(nil)
+	_ backend.Resumer        = (*Backend)(nil)
+	_ backend.Suspender      = (*Instance)(nil)
+	_ backend.MemoryResizer  = (*Instance)(nil)
+	_ backend.DeviceAttacher = (*Instance)(nil)
+)
 
 type hotplugResolver interface {
 	ResolveHotplugMount(imanifest.MountEntry) (imanifest.HotplugDevice, error)
@@ -320,14 +339,14 @@ func hotplugDevice(resolver hotplugResolver, dev vm.Device) (imanifest.HotplugDe
 	case vm.Forward:
 		proto := d.Proto
 		if proto == "" {
-			proto = "tcp"
+			proto = vm.TCP
 		}
-		identity := proto + "\x00" + d.HostAddr + "\x00" + d.GuestAddr
+		identity := string(proto) + "\x00" + d.HostAddr + "\x00" + d.GuestAddr
 		return resolver.ResolveHotplugNetwork(imanifest.NetworkInput{
 			ID:  deviceID("fwd", identity),
 			MAC: deviceMAC(identity),
 			Forward: []imanifest.ForwardPort{{
-				Proto: d.Proto,
+				Proto: string(d.Proto),
 				From:  "host",
 				Host:  d.HostAddr,
 				Guest: d.GuestAddr,

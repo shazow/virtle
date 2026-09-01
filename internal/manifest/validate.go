@@ -9,8 +9,6 @@ import (
 	"text/template"
 	"text/template/parse"
 	"time"
-
-	"github.com/shazow/virtle/internal/units"
 )
 
 const (
@@ -18,7 +16,7 @@ const (
 	defaultVSockCIDStart  = 3
 	defaultVSockCIDEnd    = 65535
 	defaultVolumeFSType   = "ext4"
-	minAutoVolumeSize     = units.MiB(256)
+	minAutoVolumeSize     = MiB(256)
 )
 
 var writeFileModePattern = regexp.MustCompile(`^0?[0-7]{3}$`)

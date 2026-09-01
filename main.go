@@ -16,10 +16,13 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/jessevdk/go-flags"
+	"github.com/shazow/virtle/backend"
 	"github.com/shazow/virtle/backend/qemu/session"
 	"github.com/shazow/virtle/internal/control"
 	"github.com/shazow/virtle/internal/manifest"
 	manifestschema "github.com/shazow/virtle/internal/manifest/schema"
+	publicmanifest "github.com/shazow/virtle/manifest"
+	"github.com/shazow/virtle/vm"
 )
 
 type Options struct {
@@ -76,7 +79,7 @@ func runLaunch(options *Options) error {
 	}
 
 	rootLogger.With("package", "main").Info("loading launch manifest", "path", options.Manifest)
-	loaded, err := loadLaunchManifest(options.Manifest, rootLogger.With("package", "manifest"))
+	spec, selected, err := loadPublicManifest(options.Manifest)
 	if err != nil {
 		return err
 	}
@@ -84,12 +87,29 @@ func runLaunch(options *Options) error {
 	// The session layer owns the whole foreground lifecycle; backend
 	// details (suspend-state versioning, readiness, guest control) live
 	// inside the machinery it wraps.
-	return session.Run(context.Background(), loaded, session.Options{
+	return session.Run(context.Background(), spec, selected, session.Options{
 		Resume:        options.Launch.Resume,
 		SSH:           options.Launch.SSH,
 		RemoteCommand: options.Launch.Args.RemoteCommand,
 		Logger:        rootLogger,
 	})
+}
+
+func loadPublicManifest(path string) (*vm.Spec, backend.Backend, error) {
+	resolvedPath, err := resolveManifestPath(path)
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve manifest path %q: %w", path, err)
+	}
+	file, err := os.Open(resolvedPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open manifest %q: %w", resolvedPath, err)
+	}
+	defer file.Close()
+	spec, selected, err := publicmanifest.Load(file)
+	if err != nil {
+		return nil, nil, fmt.Errorf("load manifest %q: %w", resolvedPath, err)
+	}
+	return spec, selected, nil
 }
 
 func runSuspend(options *Options) error {

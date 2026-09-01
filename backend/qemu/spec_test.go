@@ -16,17 +16,11 @@ import (
 
 func TestBackendLoggersAreConfiguredIndependently(t *testing.T) {
 	var firstOutput, secondOutput bytes.Buffer
-	first, err := New(Config{Logger: slog.New(slog.NewTextHandler(&firstOutput, nil))})
-	if err != nil {
-		t.Fatalf("new first backend: %v", err)
-	}
-	second, err := New(Config{Logger: slog.New(slog.NewTextHandler(&secondOutput, nil))})
-	if err != nil {
-		t.Fatalf("new second backend: %v", err)
-	}
+	first := &Backend{Logger: slog.New(slog.NewTextHandler(&firstOutput, nil))}
+	second := &Backend{Logger: slog.New(slog.NewTextHandler(&secondOutput, nil))}
 
-	first.(*qemuBackend).cfg.Logger.Info("first backend")
-	second.(*qemuBackend).cfg.Logger.Info("second backend")
+	first.Logger.Info("first backend")
+	second.Logger.Info("second backend")
 
 	if logs := firstOutput.String(); !strings.Contains(logs, "first backend") || strings.Contains(logs, "second backend") {
 		t.Fatalf("unexpected first backend logs: %q", logs)
@@ -37,16 +31,16 @@ func TestBackendLoggersAreConfiguredIndependently(t *testing.T) {
 }
 
 func TestBackendOutputDefaultsAndOverrides(t *testing.T) {
-	defaults := newBackend(Config{}, nil)
-	if defaults.cfg.ConsoleOutput != os.Stderr {
+	defaults := (&Backend{}).effective()
+	if defaults.ConsoleOutput != os.Stderr {
 		t.Fatal("expected default console output on stderr")
 	}
 
 	var foreground bytes.Buffer
-	configured := newBackend(Config{
+	configured := (&Backend{
 		ConsoleOutput: &foreground,
-	}, nil)
-	if configured.cfg.ConsoleOutput != &foreground {
+	}).effective()
+	if configured.ConsoleOutput != &foreground {
 		t.Fatal("expected configured console output to be preserved")
 	}
 }
@@ -65,7 +59,7 @@ func testSpec() *vm.Spec {
 }
 
 func TestSpecDocument(t *testing.T) {
-	doc, err := specDocument(testSpec(), Config{HostName: "testvm"}, nil)
+	doc, err := specDocument(testSpec(), Backend{HostName: "testvm"}, nil)
 	if err != nil {
 		t.Fatalf("specDocument: %v", err)
 	}
@@ -109,7 +103,7 @@ func TestSpecDocument(t *testing.T) {
 }
 
 func TestSpecDocumentQGASocketOverride(t *testing.T) {
-	doc, err := specDocument(testSpec(), Config{RemoteControl: QGA{SocketPath: "custom-qga.sock"}}, nil)
+	doc, err := specDocument(testSpec(), Backend{RemoteControl: QGA{SocketPath: "custom-qga.sock"}}, nil)
 	if err != nil {
 		t.Fatalf("specDocument: %v", err)
 	}
@@ -118,8 +112,32 @@ func TestSpecDocumentQGASocketOverride(t *testing.T) {
 	}
 }
 
+func TestSpecDocumentAccel(t *testing.T) {
+	for _, tt := range []struct {
+		accel Accel
+		want  *bool
+	}{
+		{accel: AccelAuto},
+		{accel: AccelKVM, want: boolPointer(true)},
+		{accel: AccelTCG, want: boolPointer(false)},
+	} {
+		doc, err := specDocument(testSpec(), Backend{Accel: tt.accel}, nil)
+		if err != nil {
+			t.Fatalf("accel %q: %v", tt.accel, err)
+		}
+		if !reflect.DeepEqual(doc.Machine.KVM, tt.want) {
+			t.Errorf("accel %q produced KVM %#v, want %#v", tt.accel, doc.Machine.KVM, tt.want)
+		}
+	}
+	if _, err := specDocument(testSpec(), Backend{Accel: "invalid"}, nil); err == nil {
+		t.Fatal("invalid acceleration mode unexpectedly succeeded")
+	}
+}
+
+func boolPointer(value bool) *bool { return &value }
+
 func TestSpecDocumentHotplugPorts(t *testing.T) {
-	doc, err := specDocument(testSpec(), Config{HotplugPorts: 3}, nil)
+	doc, err := specDocument(testSpec(), Backend{HotplugPorts: 3}, nil)
 	if err != nil {
 		t.Fatalf("specDocument: %v", err)
 	}
@@ -136,7 +154,7 @@ func TestSpecDocumentHotplugPorts(t *testing.T) {
 }
 
 func TestSpecDocumentResolves(t *testing.T) {
-	doc, err := specDocument(testSpec(), Config{}, nil)
+	doc, err := specDocument(testSpec(), Backend{}, nil)
 	if err != nil {
 		t.Fatalf("specDocument: %v", err)
 	}
@@ -147,7 +165,7 @@ func TestSpecDocumentResolves(t *testing.T) {
 
 func TestSpecDocumentDefaults(t *testing.T) {
 	spec := &vm.Spec{Kernel: vm.Kernel{Path: "vmlinuz", Initrd: "initrd.img"}, Dir: t.TempDir()}
-	doc, err := specDocument(spec, Config{}, nil)
+	doc, err := specDocument(spec, Backend{}, nil)
 	if err != nil {
 		t.Fatalf("specDocument: %v", err)
 	}
@@ -160,14 +178,14 @@ func TestSpecDocumentDefaults(t *testing.T) {
 }
 
 func TestSpecDocumentRequiresKernel(t *testing.T) {
-	if _, err := specDocument(&vm.Spec{Dir: t.TempDir()}, Config{}, nil); err == nil {
+	if _, err := specDocument(&vm.Spec{Dir: t.TempDir()}, Backend{}, nil); err == nil {
 		t.Fatal("expected error for missing kernel")
 	}
 }
 
 func TestSpecDocumentRejectsUnalignedMemory(t *testing.T) {
 	spec := &vm.Spec{Kernel: vm.Kernel{Path: "k", Initrd: "i"}, Memory: 100 * units.Kibibyte, Dir: t.TempDir()}
-	if _, err := specDocument(spec, Config{}, nil); err == nil {
+	if _, err := specDocument(spec, Backend{}, nil); err == nil {
 		t.Fatal("expected error for non-MiB-aligned memory")
 	}
 }
@@ -243,7 +261,7 @@ func TestSpecDocumentOverlaysBase(t *testing.T) {
 		Ports:  []vm.Forward{{Proto: "udp", HostAddr: "127.0.0.1:8080", GuestAddr: "10.0.2.15:80"}},
 		Files:  []vm.File{{GuestPath: "/etc/new", Content: strings.NewReader("new content"), Mode: 0o640}},
 	}
-	doc, err := specDocument(spec, Config{}, &base)
+	doc, err := specDocument(spec, Backend{}, &base)
 	if err != nil {
 		t.Fatalf("specDocument: %v", err)
 	}

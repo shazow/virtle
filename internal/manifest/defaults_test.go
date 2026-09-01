@@ -3,8 +3,6 @@ package manifest
 import (
 	"testing"
 	"time"
-
-	"github.com/shazow/virtle/internal/units"
 )
 
 func TestDocumentWithDefaultsPreservesExplicitEmptyNetworks(t *testing.T) {
@@ -72,8 +70,8 @@ func TestDocumentWithDefaultsPreservesKeyResolvedDefaults(t *testing.T) {
 	if got := manifest.QEMU.Machine.Type; got != "microvm" {
 		t.Fatalf("machine type = %q, want %q", got, "microvm")
 	}
-	if got := manifest.QEMU.Memory.Size; got != units.MiB(1024) {
-		t.Fatalf("memory = %d, want %d", got, units.MiB(1024))
+	if got := manifest.QEMU.Memory.Size; got != MiB(1024) {
+		t.Fatalf("memory = %d, want %d", got, MiB(1024))
 	}
 	if got := manifest.QEMU.QMP.SocketPath; got != "qmp.sock" {
 		t.Fatalf("qmp socket = %q, want %q", got, "qmp.sock")
@@ -106,7 +104,7 @@ func TestDocumentWithDefaultsPreservesExplicitOverridesForMovedDefaults(t *testi
 	document.QEMU.GuestAgentSocket = "custom-qga.sock"
 	document.SSH.User = "custom-user"
 	document.SSH.ReadySocket = "custom-ready.sock"
-	document.SSH.RetryDelay = units.Duration(2500 * time.Millisecond)
+	document.SSH.RetryDelay = Duration(2500 * time.Millisecond)
 	document.VSock.CIDRange = RangeInput{Min: 10, Max: 20}
 
 	manifest, err := document.Manifest()

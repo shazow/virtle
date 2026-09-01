@@ -524,6 +524,9 @@ func TestLoadManifestLeavesReadOnlyManifestIntact(t *testing.T) {
 	if _, err := loadLaunchManifest(manifestPath, slog.New(slog.DiscardHandler)); err != nil {
 		t.Fatalf("load launch manifest: %v", err)
 	}
+	if _, _, err := loadPublicManifest(manifestPath); err != nil {
+		t.Fatalf("load public manifest: %v", err)
+	}
 
 	info, err := os.Stat(manifestPath)
 	if err != nil {

@@ -6,6 +6,15 @@ user-visible outcomes.
 
 ## 2026-09-01
 
+- **Breaking library API cleanup:** QEMU now uses the exported, zero-value-ready
+  `qemu.Backend` and exposes its live `qemu.Instance`; suspend, memory resize,
+  hotplug, graceful shutdown, and selectable completion live on the instance.
+- Guest commands now follow `os/exec`: output goes to `GuestCmd` writers,
+  non-zero status returns `*vm.ExitError`, and `vm.Output` captures stdout.
+- `units` now contains the single text-marshaled `Bytes` type; QEMU acceleration
+  and forwarding protocols use typed enums. New `backend/backendtest` and
+  `vm/vmtest` packages support downstream tests.
+- `virtle launch` now loads through the public `manifest.Load` path.
 - Newly created VM state directories and volume images are private by default
   (`0700` and `0600`).
 - Guest and control requests now have bounded memory use and concurrency.

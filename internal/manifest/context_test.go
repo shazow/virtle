@@ -4,8 +4,6 @@ import (
 	"context"
 	"testing"
 	"time"
-
-	"github.com/shazow/virtle/internal/units"
 )
 
 func TestGuestCommandContextBoundsCommands(t *testing.T) {
@@ -26,7 +24,7 @@ func TestGuestCommandContextBoundsCommands(t *testing.T) {
 	}
 
 	document := validDocument()
-	document.QEMU.GuestDefaultTimeout = units.Duration(30 * time.Second)
+	document.QEMU.GuestDefaultTimeout = Duration(30 * time.Second)
 	resolved, err := document.Manifest()
 	if err != nil {
 		t.Fatalf("resolve manifest: %v", err)

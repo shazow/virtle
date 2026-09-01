@@ -16,11 +16,15 @@ package session
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 
+	"github.com/shazow/virtle/backend"
+	"github.com/shazow/virtle/backend/qemu"
 	"github.com/shazow/virtle/backend/qemu/internal/vmm"
 	"github.com/shazow/virtle/internal/manifest"
+	"github.com/shazow/virtle/vm"
 )
 
 // Options configures a CLI session.
@@ -35,13 +39,21 @@ type Options struct {
 // Run boots the VM with CLI semantics (resume modes, --ssh preflight
 // validation, process signal handlers) and runs the foreground session to
 // completion. A session that ends in a saved suspend reports success.
-func Run(ctx context.Context, mf *manifest.Manifest, opts Options) error {
+func Run(ctx context.Context, spec *vm.Spec, selected backend.Backend, opts Options) error {
 	logger := opts.Logger
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
 	sessionLogger := logger.With("package", "session")
 	sessionLogger.Info("starting vm session", "resume", opts.Resume, "ssh", opts.SSH)
+	qemuBackend, ok := selected.(*qemu.Backend)
+	if !ok {
+		return fmt.Errorf("CLI session requires the QEMU backend, got %T", selected)
+	}
+	mf, err := qemuBackend.ResolveSpecForSession(spec, logger)
+	if err != nil {
+		return err
+	}
 	sessionOpts := vmm.SessionOptions{
 		SSH:           opts.SSH,
 		RemoteCommand: opts.RemoteCommand,

@@ -7,7 +7,6 @@ import (
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/shazow/virtle/internal/manifest"
-	"github.com/shazow/virtle/internal/units"
 )
 
 // Generate returns the JSON Schema for the virtle manifest input format.
@@ -17,7 +16,7 @@ func Generate() (*jsonschema.Schema, error) {
 			// Durations are documented as Go duration strings; the decoder
 			// also accepts bare numbers of seconds for backward
 			// compatibility, deliberately left out of the schema.
-			reflect.TypeOf(units.Duration(0)): {Type: "string"},
+			reflect.TypeOf(manifest.Duration(0)): {Type: "string"},
 		},
 	}
 

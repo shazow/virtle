@@ -26,7 +26,7 @@ diagnostics are logged at `DEBUG`. Warnings are visible at every verbosity.
 The logger is created in `main` and passed into the QEMU backend at
 construction. Sub-packages derive loggers carrying a `package` attribute such
 as `session`, `vmm`, `ssh`, or `balloon`; they do not configure a process-global
-logger. Library callers may provide their own `*slog.Logger` in `qemu.Config`.
+logger. Library callers may provide their own `*slog.Logger` in `qemu.Backend`.
 If they do not, backend logging is discarded.
 
 External commands are started through `internal/executor`. At `DEBUG`, an

@@ -82,35 +82,35 @@ spec := &vm.Spec{
 	Shares: []vm.Share{{Tag: "src", HostPath: ".", GuestPath: "/workspace"}},
 	Memory: 2048 * units.Mebibyte,
 }
-b, err := qemu.New(qemu.Config{
+b := &qemu.Backend{
 	RemoteControl: qemu.QGA{},
 	Logger:        slog.Default(),
-})
-if err != nil {
-	log.Fatal(err)
 }
 inst, err := b.Start(ctx, spec)
 if err != nil {
 	log.Fatal(err)
 }
-defer backend.Shutdown(ctx, inst)
+defer inst.Shutdown(ctx)
 
 g, err := inst.RemoteControl()
 if err != nil {
 	log.Fatal(err) // this VM has no guest agent
 }
-out, err := g.Run(ctx, &vm.GuestCmd{Path: "make", Dir: "/workspace"})
-fmt.Printf("exit=%d\n%s", out.ExitCode, out.Stdout)
+out, err := vm.Output(ctx, g, &vm.GuestCmd{Path: "make", Dir: "/workspace"})
+if err != nil {
+	log.Fatal(err) // includes a *vm.ExitError for an unsuccessful command
+}
+fmt.Print(string(out))
 ```
 
 Optional functionality is discovered by type assertion, as in
 `database/sql/driver`:
 
 ```go
-if s, ok := b.(backend.Suspender); ok {
-	err = s.Suspend(ctx, inst, "")
+if s, ok := inst.(backend.Suspender); ok {
+	err = s.Suspend(ctx)
 } else {
-	err = backend.Shutdown(ctx, inst)
+	err = inst.Shutdown(ctx)
 }
 ```
 

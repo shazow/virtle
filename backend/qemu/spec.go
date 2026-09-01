@@ -9,18 +9,17 @@ import (
 	"strings"
 
 	imanifest "github.com/shazow/virtle/internal/manifest"
-	iunits "github.com/shazow/virtle/internal/units"
 	"github.com/shazow/virtle/units"
 	"github.com/shazow/virtle/vm"
 )
 
-// specDocument lowers a neutral vm.Spec plus the backend Config onto the
+// specDocument lowers a neutral vm.Spec plus the Backend configuration onto the
 // internal manifest document, which then flows through the same defaults,
 // validation, and resolution pipeline as a TOML manifest. When base is
 // non-nil (a manifest.Load-configured backend), the spec overlays it:
 // scalar fields override, and Shares/Disks/Ports/Files replace the neutral
 // entries represented by the loaded Spec.
-func specDocument(spec *vm.Spec, cfg Config, base *imanifest.Document) (imanifest.Document, error) {
+func specDocument(spec *vm.Spec, cfg Backend, base *imanifest.Document) (imanifest.Document, error) {
 	if spec == nil {
 		spec = &vm.Spec{}
 	}
@@ -72,7 +71,7 @@ func specDocument(spec *vm.Spec, cfg Config, base *imanifest.Document) (imanifes
 		if memory%units.Mebibyte != 0 {
 			return imanifest.Document{}, fmt.Errorf("memory size %s is not MiB-aligned", memory)
 		}
-		doc.Machine.Memory = iunits.MiB(memory.Mebibytes())
+		doc.Machine.Memory = imanifest.MiB(memory.Mebibytes())
 	}
 
 	if spec.Kernel != (vm.Kernel{}) {
@@ -110,9 +109,16 @@ func specDocument(spec *vm.Spec, cfg Config, base *imanifest.Document) (imanifes
 	if cfg.CPUModel != "" {
 		doc.Machine.CPU = cfg.CPUModel
 	}
-	if cfg.KVM != nil {
-		kvm := *cfg.KVM
+	switch cfg.Accel {
+	case AccelAuto:
+	case AccelKVM:
+		kvm := true
 		doc.Machine.KVM = &kvm
+	case AccelTCG:
+		kvm := false
+		doc.Machine.KVM = &kvm
+	default:
+		return imanifest.Document{}, fmt.Errorf("unsupported QEMU acceleration mode %q", cfg.Accel)
 	}
 	if cfg.Console != "" {
 		doc.Kernel.Serial = string(cfg.Console)
@@ -225,7 +231,7 @@ func overlayDisk(input imanifest.ImageMountInput, disk vm.Disk) (imanifest.Image
 	}
 	input.Type = imanifest.MountTypeImage
 	input.SourcePath = disk.Path
-	input.Image.Size = iunits.MiB(disk.Size.Mebibytes())
+	input.Image.Size = imanifest.MiB(disk.Size.Mebibytes())
 	input.Image.Format = disk.Format
 	input.Image.AutoCreate = disk.Size != 0
 	return input, nil
@@ -259,7 +265,7 @@ func overlaySpecPorts(doc *imanifest.Document, ports []vm.Forward) error {
 }
 
 func specForward(forward vm.Forward) imanifest.ForwardPort {
-	proto := forward.Proto
+	proto := string(forward.Proto)
 	if proto == "" {
 		proto = "tcp"
 	}

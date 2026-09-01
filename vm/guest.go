@@ -2,7 +2,9 @@ package vm
 
 import (
 	"archive/tar"
+	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"io/fs"
 )
@@ -12,13 +14,14 @@ import (
 // QGA adapter. Shapes are os/exec- and io/fs-flavored, never protocol-
 // flavored. Implementations must be safe for concurrent use.
 //
-// Daemon-only features (file-tree copy, streaming exec, file watching, ...)
-// are GuestWithX extension interfaces discovered by type assertion; they
-// are never added to Guest itself.
+// Daemon-only features (file-tree copy, file watching, ...) are GuestWithX
+// extension interfaces discovered by type assertion; they are never added to
+// Guest itself.
 type Guest interface {
-	// Run executes a command to completion with buffered output (the
-	// exec.Cmd.Output analog); streaming exec arrives as an extension.
-	Run(ctx context.Context, cmd *GuestCmd) (*GuestResult, error)
+	// Run executes a command to completion. A non-zero status is returned as
+	// an *ExitError. Implementations write command output to GuestCmd's writers
+	// as it becomes available, or at completion when the transport buffers it.
+	Run(ctx context.Context, cmd *GuestCmd) error
 	// Open opens the named guest file for reading.
 	Open(ctx context.Context, name string) (io.ReadCloser, error)
 	// Create creates or truncates the named guest file for writing.
@@ -36,12 +39,33 @@ type GuestCmd struct {
 	Env   []string
 	Dir   string
 	Stdin io.Reader
+	// Stdout and Stderr receive command output. Nil discards output.
+	Stdout, Stderr io.Writer
 }
 
-// GuestResult is the buffered outcome of a completed GuestCmd.
-type GuestResult struct {
-	ExitCode       int
-	Stdout, Stderr []byte
+// ExitError reports an unsuccessful guest command.
+type ExitError struct {
+	Code   int
+	Stderr []byte
+}
+
+func (e *ExitError) Error() string { return fmt.Sprintf("exit status %d", e.Code) }
+
+// Output runs cmd and returns its standard output, analogous to
+// exec.Cmd.Output. cmd.Stdout must be nil. When cmd.Stderr is nil and the
+// command exits unsuccessfully, the returned *ExitError carries stderr.
+func Output(ctx context.Context, guest Guest, cmd *GuestCmd) ([]byte, error) {
+	if cmd == nil {
+		return nil, fmt.Errorf("guest command is nil")
+	}
+	if cmd.Stdout != nil {
+		return nil, fmt.Errorf("guest command stdout is already set")
+	}
+	var stdout bytes.Buffer
+	outputCmd := *cmd
+	outputCmd.Stdout = &stdout
+	err := guest.Run(ctx, &outputCmd)
+	return stdout.Bytes(), err
 }
 
 // GuestWithCopy streams file trees between host and guest as tar archives.
@@ -66,11 +90,10 @@ type CopyOptions struct {
 	// satisfying errors.Is(err, fs.ErrExist) — the os.CopyFS default.
 	Overwrite bool
 
-	// UID/GID override ownership of created entries; nil keeps whatever
-	// the archive recorded (ArchiveFS records none, since host uids are
-	// meaningless in-guest). Pointers are load-bearing: 0 (root) is a
-	// valid value, so nil must be distinguishable from it.
-	UID, GID *int
+	// Chown applies UID and GID to created entries. When false, extraction
+	// keeps the owners recorded by the archive.
+	Chown    bool
+	UID, GID int
 }
 
 // ArchiveFS adapts the common host case — "copy this directory" — to the

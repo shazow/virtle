@@ -66,7 +66,7 @@ func Load(r io.Reader) (*vm.Spec, backend.Backend, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	return spec, qemu.NewBackendFromDocument(doc, qemu.Config{}), nil
+	return spec, qemu.NewBackendFromDocument(doc, qemu.Backend{}), nil
 }
 
 // specFromDocument extracts the neutral Spec view from a defaults-merged
@@ -106,7 +106,7 @@ func specFromDocument(doc imanifest.Document) (*vm.Spec, error) {
 			spec.Ports = append(spec.Ports, vm.Forward{
 				HostAddr:  forward.Host,
 				GuestAddr: forward.Guest,
-				Proto:     forward.Proto,
+				Proto:     vm.Proto(forward.Proto),
 			})
 		}
 	}

@@ -1,11 +1,11 @@
 package main_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log"
 
-	"github.com/shazow/virtle/backend"
 	"github.com/shazow/virtle/backend/qemu"
 	"github.com/shazow/virtle/units"
 	"github.com/shazow/virtle/vm"
@@ -23,18 +23,14 @@ func Example() {
 		Memory: 2048 * units.Mebibyte,
 	}
 
-	b, err := qemu.New(qemu.Config{RemoteControl: qemu.QGA{}})
-	if err != nil {
-		log.Print(err)
-		return
-	}
+	b := &qemu.Backend{RemoteControl: qemu.QGA{}}
 	inst, err := b.Start(ctx, spec)
 	if err != nil {
 		log.Print(err)
 		return
 	}
 	defer func() {
-		if err := backend.Shutdown(ctx, inst); err != nil {
+		if err := inst.Shutdown(ctx); err != nil {
 			log.Print(err)
 		}
 	}()
@@ -44,13 +40,15 @@ func Example() {
 		log.Print(err)
 		return
 	}
-	result, err := guest.Run(ctx, &vm.GuestCmd{
-		Path: "make",
-		Dir:  "/workspace",
+	var stdout bytes.Buffer
+	err = guest.Run(ctx, &vm.GuestCmd{
+		Path:   "make",
+		Dir:    "/workspace",
+		Stdout: &stdout,
 	})
 	if err != nil {
 		log.Print(err)
 		return
 	}
-	fmt.Printf("exit=%d\n%s", result.ExitCode, result.Stdout)
+	fmt.Print(stdout.String())
 }

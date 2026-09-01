@@ -48,11 +48,20 @@ type Disk struct {
 	Size      units.Bytes // created at this size if the image is absent
 }
 
-// Forward is a host<->guest port forward.
+// Proto is a port-forward transport protocol.
+type Proto string
+
+const (
+	TCP Proto = "tcp"
+	UDP Proto = "udp"
+)
+
+// Forward is a host<->guest port forward. Endpoint strings use host:port or
+// :port syntax and may contain hostnames. A zero Proto means TCP.
 type Forward struct {
-	HostAddr  string
+	HostAddr  string // "host:port" or ":port"; hostnames are allowed
 	GuestAddr string
-	Proto     string // defaults to "tcp"
+	Proto     Proto
 }
 
 // File is a small file placed in the guest before the workload starts;

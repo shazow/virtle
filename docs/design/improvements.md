@@ -309,33 +309,61 @@ A machine-level `Events(ctx) iter.Seq[Event]` capability (boot, guest
 ready, suspended, exited) is the natural follow-on for the session
 rebuild; it is not part of this item.
 
-## 6. One `units` package, with `Duration` demoted
+## 6. One `units` package, doubled down on
 
-**Today.** `units` (public) and `internal/units` are byte-identical
-copies; both export `Bytes` and `Duration`.
+**Today.** Two packages: public `units` (`Bytes` + `Duration`) and
+`internal/units` (the legacy `MiB int` count type with `Bytes()`/`Int()`,
+plus a byte-identical copy of `Duration`).
 
 **Trace.** Every internal importer — `internal/manifest/*`,
-`internal/control/types.go`, `backend/qemu/spec.go` — still imports
-`internal/units`; nothing under `internal/` imports the public copy.
-`units.Duration` appears nowhere in `vm`, `backend`, or `backend/qemu`'s
-exported surface: it exists so TOML bare numbers can mean seconds
-(`UnmarshalTOML`) and for the control socket's wire types. `units.Bytes`
-lacks the text marshalling `Duration` has, so it cannot round-trip through
-TOML/JSON as `"2GiB"`.
+`internal/control/types.go`, `backend/qemu/spec.go` — still uses
+`internal/units`; nothing under `internal/` imports the public package.
+The manifest's size fields (`Memory`, image `Size`, the balloon
+thresholds) are typed `units.MiB` because their TOML/JSON contract is a
+bare number denominated in MiB; `manifest.Load` converts at the boundary
+(`mount.Image.Size.Bytes()` → `units.Bytes`). `Duration` exists so bare
+numbers can mean seconds (`UnmarshalTOML`, `UnmarshalJSON`) and for the
+control socket's `Timeout` wire field; it has `MarshalText` but no
+`UnmarshalText`. `Bytes` has `String()` and nothing else: no parser, no
+codecs, so it cannot round-trip `"2GiB"` through any encoding. The schema
+generator special-cases `units.Duration` by reflection
+(`internal/manifest/schema/schema.go`). In short: unit logic is split
+across two packages and the manifest, and the public one is the thinner.
 
-**Proposal.** Delete `internal/units`; public types speak `time.Duration`;
-`Duration` becomes a manifest/control encoding detail living with the
-manifest decoder (`internal/manifest`, later public `manifest` per the
-roadmap); `units` keeps `Bytes` and gains the symmetry:
+**Proposal.** `units` is the single, public, reusable home for
+unit-related logic — types, constants, parsing, formatting, and encoding —
+and the manifest becomes a consumer of it rather than a co-owner.
+
+- Delete `internal/units`; every importer moves to `units`.
+- Roles, stated in the package doc: `Bytes` is the API type (all of
+  `vm`/`backend` speak it); `MiB` is retained as the *denominated codec
+  type* for encoded fields whose format counts in MiB, with lossless
+  conversion both ways (`MiB.Bytes() Bytes`, `Bytes.Mebibytes() MiB`).
+  Method parameters that never cross an encoding boundary use
+  `time.Duration` (`http.Server.ReadTimeout` precedent); encoded fields use
+  `units.Duration`, converting via `.Duration()`.
+- Symmetry for `Bytes`: `ParseBytes("2GiB")`, `MarshalText`/`UnmarshalText`
+  (string form with unit suffix), JSON and TOML codecs built on them, and
+  accessors matching `Mebibytes()` (`Kibibytes`, `Gibibytes`).
+- `Duration` gains `UnmarshalText`; both types get one documented grammar
+  for the string forms they accept.
+- The schema hints for `Duration` and `MiB` (string vs integer, the unit in
+  the description) move next to the types, so `schema.go` stops reflecting
+  on them by hand.
+
+Before / after, the manifest's memory field reaching a Spec:
 
 ```go
-func ParseBytes(s string) (Bytes, error)         // "2GiB", "512MiB", "1536B"
-func (b Bytes) MarshalText() ([]byte, error)
-func (b *Bytes) UnmarshalText(text []byte) error
+// before: two packages, conversion by hand
+Memory iunits.MiB `toml:"memory"`            // internal/manifest
+spec.Memory = units.Bytes(doc.Memory.Bytes()) // manifest.Load
+
+// after: one package, typed conversion
+Memory units.MiB `toml:"memory"`
+spec.Memory = doc.Memory.Bytes()
 ```
 
-The manifest's MiB-denominated bare numbers stay a manifest rule,
-implemented in its decoder, not in `Bytes`.
+`vm.Spec` and `backend` keep `units.Bytes` exactly as they are.
 
 ## 7. `Config.KVM *bool` becomes an `Accel` enum
 

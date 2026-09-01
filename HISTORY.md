@@ -7,6 +7,8 @@ details.
 
 ## 2026-09-01
 
+- Manifests now reject non-positive memory sizes and explicitly configured
+  non-positive vCPU counts instead of passing invalid values to QEMU.
 - `Guest.Create` now reports guest-side mode-setting failures from `Close` and
   resolves `chmod` through Virtle's distribution-independent guest command
   path.

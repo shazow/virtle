@@ -468,11 +468,7 @@ func aioEngine(host HostInput) string {
 }
 
 func resolveWorkspace(workspace WorkspaceInput) Workspace {
-	return Workspace{
-		GuestDir: workspace.GuestDir,
-		HostDir:  workspace.HostDir,
-		MountCWD: workspace.MountCWD,
-	}
+	return Workspace(workspace)
 }
 
 func resolveVirtioFSMounts(mounts []VirtioFSMountInput, transport string) []QEMUVirtioFSShare {

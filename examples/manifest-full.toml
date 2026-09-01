@@ -9,8 +9,8 @@ host_name = "virtle"  # Default: "virtle"
 # Relative host paths need a stable root. Keeping this explicit lets generated
 # manifests point at the repository checkout while hand-written manifests can
 # opt into another base directory without changing every path below.
-# During launch, virtle resolves a relative working_dir from the directory
-# where virtle was run and persists the absolute path back into the manifest.
+# During launch, virtle resolves a relative working_dir in memory from the
+# directory where virtle was run. The manifest file is not rewritten.
 working_dir = "."  # Default: "." (launch CWD)
 
 # virtle needs one host-side directory for files it owns: lock files, active
@@ -149,9 +149,9 @@ backend = "headless"  # Options: headless, gtk, cocoa (default: headless)
 # inside the VM.
 user = "agent"  # Default: "agent"
 
-# The SSH executable and fixed arguments are configurable. Default: [] (no
-# automatic SSH attach or command hint). Generated manifests can pin OpenSSH and
-# identity options. Template values include {{.CID}}, {{.User}},
+# The SSH executable and fixed arguments are configurable. Default: ["ssh"].
+# Generated manifests can pin OpenSSH and identity options. Template values
+# include {{.CID}}, {{.User}},
 # {{.Destination}}, and {{.Env.USER}}.
 exec = [
   "ssh",

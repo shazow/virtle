@@ -378,13 +378,3 @@ func assertQMPCommand(t *testing.T, commands <-chan map[string]any, want string)
 	}
 	return nil
 }
-
-func commandArguments(t *testing.T, message map[string]any) map[string]any {
-	t.Helper()
-
-	args, ok := message["arguments"].(map[string]any)
-	if !ok {
-		t.Fatalf("expected command arguments, got %#v", message["arguments"])
-	}
-	return args
-}

@@ -35,7 +35,6 @@ import (
 	"github.com/shazow/virtle/internal/executor"
 	"github.com/shazow/virtle/internal/executor/executortest"
 	"github.com/shazow/virtle/internal/manifest"
-	imanifest "github.com/shazow/virtle/internal/manifest"
 	"github.com/shazow/virtle/internal/units"
 )
 
@@ -47,13 +46,6 @@ const (
 func manifestWriteText(text string) manifest.WriteFile {
 	return manifest.WriteFile{
 		Content:     manifest.WriteFileContent{Kind: manifest.WriteFileContentText, Text: text},
-		FollowLinks: true,
-	}
-}
-
-func manifestWritePath(path string) manifest.WriteFile {
-	return manifest.WriteFile{
-		Content:     manifest.WriteFileContent{Kind: manifest.WriteFileContentPath, Path: path},
 		FollowLinks: true,
 	}
 }
@@ -3740,7 +3732,7 @@ type testHotplugControlHandler struct {
 
 func (h *testHotplugControlHandler) Hotplug(ctx context.Context, req control.HotplugRequest) (control.HotplugResponse, error) {
 	h.requests = append(h.requests, req)
-	return control.HotplugResponse{ID: req.ID, Detach: req.Detach}, nil
+	return control.HotplugResponse(req), nil
 }
 
 func TestManagerHotplugUsesControlSocket(t *testing.T) {
@@ -3770,11 +3762,11 @@ func TestLaunchRuntimeRegistersHotplugAtControlPeriphery(t *testing.T) {
 	cfg.Persistence.StateDir = ".virtle"
 	cfg.Paths.RuntimeDir = manifest.RuntimeDir{Mode: manifest.RuntimeDirPath, Path: ".virtle"}
 	cfg.QEMU.Hotplug.PCIEPorts = 1
-	cfg.Hotplug = []imanifest.HotplugDevice{
+	cfg.Hotplug = []manifest.HotplugDevice{
 		{
-			Kind: imanifest.HotplugKindNet,
+			Kind: manifest.HotplugKindNet,
 			ID:   "vpn",
-			Net:  imanifest.HotplugNet{Backend: "user", MAC: "02:02:00:00:00:10"},
+			Net:  manifest.HotplugNet{Backend: "user", MAC: "02:02:00:00:00:10"},
 		},
 	}
 
@@ -4460,12 +4452,12 @@ func validManifest(workingDir string) *manifest.Manifest {
 }
 
 func validManifestWithBalloon(workingDir string) *manifest.Manifest {
-	manifest := validManifest(workingDir)
-	manifest.QEMU.Devices.Balloon = &imanifest.BalloonDevice{
+	mf := validManifest(workingDir)
+	mf.QEMU.Devices.Balloon = &manifest.BalloonDevice{
 		ID:        "balloon0",
 		Transport: "pci",
 	}
-	return manifest
+	return mf
 }
 
 type launchRunner struct {
@@ -4677,19 +4669,6 @@ func commandArgs(cmd *exec.Cmd) []string {
 		return nil
 	}
 	return cmd.Args[1:]
-}
-
-func commandEnvAdditions(env []string) []string {
-	environ := os.Environ()
-	if len(env) < len(environ) {
-		return env
-	}
-	for i, entry := range environ {
-		if env[i] != entry {
-			return env
-		}
-	}
-	return env[len(environ):]
 }
 
 func commandProcessGroup(cmd *exec.Cmd) bool {
@@ -5594,18 +5573,6 @@ func indexStringContaining(values []string, needle string) int {
 		}
 	}
 	return -1
-}
-
-func stringPtr(value string) *string {
-	return &value
-}
-
-func intPtr(value int) *int {
-	return &value
-}
-
-func boolPtr(value bool) *bool {
-	return &value
 }
 
 func setXDGTestRuntimeDir(t *testing.T, runtimeDir string) {

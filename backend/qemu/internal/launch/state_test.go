@@ -297,6 +297,7 @@ func testManifest(t *testing.T) *manifest.Manifest {
 		},
 		QEMU: manifest.QEMU{
 			BinaryPath: "/bin/qemu",
+			Memory:     manifest.QEMUMemory{Size: 128},
 			QMP:        manifest.QEMUQMP{SocketPath: "qmp.sock"},
 			Devices: manifest.QEMUDevices{
 				RNG:   manifest.QEMURNGDevice{ID: "rng0", Transport: "pci"},

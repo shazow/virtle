@@ -54,6 +54,7 @@ func validPlanManifest(workingDir string) *manifest.Manifest {
 		},
 		QEMU: manifest.QEMU{
 			BinaryPath: "/bin/qemu-system-x86_64",
+			Memory:     manifest.QEMUMemory{Size: 128},
 			QMP: manifest.QEMUQMP{
 				SocketPath: "qmp.sock",
 			},

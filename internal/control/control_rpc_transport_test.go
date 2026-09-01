@@ -64,7 +64,7 @@ func (h *fakeControlHandler) Suspend(context.Context, SuspendRequest) (SuspendRe
 
 func (h *fakeControlHandler) Hotplug(ctx context.Context, req HotplugRequest) (HotplugResponse, error) {
 	h.hotplugReq = req
-	return HotplugResponse{ID: req.ID, Detach: req.Detach}, nil
+	return HotplugResponse(req), nil
 }
 
 func (h *fakeControlHandler) Balloon(ctx context.Context, req BalloonRequest) (BalloonResponse, error) {

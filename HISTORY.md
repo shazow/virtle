@@ -59,6 +59,11 @@ user-visible outcomes.
   declared without `create = true` no longer surface as a `Disk.Size` in the
   loaded `vm.Spec`, since they have no effect on launch.
 
+- New test packages: `vm/vmtest` provides an in-memory `vm.Guest` (a
+  `fstest.MapFS`-backed filesystem plus scripted command results) for testing
+  code that operates on guests without a VM, and `backend/backendtest`
+  provides a conformance test for `backend.Backend` implementations.
+
 - Newly created VM state directories and volume images are private by default
   (`0700` and `0600`).
 - Guest and control requests now have bounded memory use and concurrency.

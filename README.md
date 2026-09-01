@@ -122,6 +122,11 @@ spec, b, err := manifest.Load(f)
 inst, err := b.Start(ctx, spec)
 ```
 
+Test code that takes a `vm.Guest` without a VM using `vm/vmtest`, an
+in-memory guest with a `fstest.MapFS` filesystem and scripted command
+results; check a backend implementation against the contract with
+`backend/backendtest`.
+
 ## License
 
 MIT

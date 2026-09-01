@@ -173,23 +173,75 @@ func TestSpecDocumentRejectsUnalignedMemory(t *testing.T) {
 }
 
 func TestSpecDocumentOverlaysBase(t *testing.T) {
+	owner := "root:root"
+	overwrite := true
+	hostSource := "host.conf"
+	writeBack := true
+	diskLabel := "data"
+	diskSerial := "base-serial"
+	inlineText := "old content"
+	inlineMode := "600"
 	base := imanifest.DefaultDocument()
 	base.Kernel.Path = "vmlinuz"
 	base.Kernel.InitrdPath = "initrd.img"
 	base.WorkingDir = "/work"
-	base.Mounts = append(base.Mounts, imanifest.VirtioFSMountInput{
-		Type:       imanifest.MountTypeVirtioFS,
-		MountInput: imanifest.MountInput{Tag: "src", SourcePath: "/host/src"},
-		Target:     "/workspace",
-	})
+	base.StateDir = "/state"
+	base.Mounts = imanifest.MountsInput{
+		imanifest.VirtioFSMountInput{
+			Type:       imanifest.MountTypeVirtioFS,
+			MountInput: imanifest.MountInput{Tag: "old-src", SourcePath: "/host/old"},
+			Target:     "/old-workspace",
+			VirtioFS: imanifest.VirtioFSInput{
+				Socket: "custom.sock",
+				Bin:    "/custom/virtiofsd",
+				Args:   []string{"--socket={{.Socket}}", "--source={{.MountSource}}", "--tag={{.MountTag}}"},
+			},
+		},
+		imanifest.NinePMountInput{
+			Type:       imanifest.MountTypeNineP,
+			MountInput: imanifest.MountInput{Tag: "backend-only", SourcePath: "/host/legacy"},
+			NineP:      imanifest.NinePInput{SecurityModel: "none"},
+		},
+		imanifest.ImageMountInput{
+			Type:       imanifest.MountTypeImage,
+			SourcePath: "old.img",
+			ReadOnly:   true,
+			Image: imanifest.ImageInput{
+				Size:   64,
+				FSType: "ext4",
+				Format: "raw",
+				Label:  &diskLabel,
+				Direct: true,
+				Serial: &diskSerial,
+			},
+		},
+	}
+	base.Networks[0].Forward = []imanifest.ForwardPort{
+		{Proto: "tcp", From: "host", Host: "127.0.0.1:1000", Guest: "10.0.2.15:10"},
+		{Proto: "tcp", From: "guest", Host: "127.0.0.1:2000", Guest: "10.0.2.15:20"},
+	}
+	base.WriteFiles = []imanifest.WriteFileInput{
+		{
+			GuestPath: "/etc/old",
+			Chown:     &owner,
+			Text:      &inlineText,
+			Mode:      &inlineMode,
+			Overwrite: &overwrite,
+		},
+		{
+			GuestPath: "/etc/backend.conf",
+			Path:      &hostSource,
+			WriteBack: &writeBack,
+		},
+	}
 
 	spec := &vm.Spec{
 		Memory: 4096 * units.Mebibyte,
 		Kernel: vm.Kernel{Path: "vmlinuz", Initrd: "initrd.img"},
-		Shares: []vm.Share{
-			{Tag: "src", HostPath: "ignored", GuestPath: "/elsewhere"}, // existing tag: kept from base
-			{Tag: "extra", HostPath: "/host/extra", GuestPath: "/extra"},
-		},
+		Shares: []vm.Share{{Tag: "src", HostPath: "/host/new", GuestPath: "/workspace", ReadOnly: true}},
+		Disks:  []vm.Disk{{Path: "new.qcow2", Format: "qcow2", Size: 256 * units.Mebibyte}},
+		Ports:  []vm.Forward{{Proto: "udp", HostAddr: "127.0.0.1:8080", GuestAddr: "10.0.2.15:80"}},
+		Files:  []vm.File{{GuestPath: "/etc/new", Content: strings.NewReader("new content"), Mode: 0o640}},
 	}
 	doc, err := specDocument(spec, Config{}, &base)
 	if err != nil {
@@ -198,15 +250,53 @@ func TestSpecDocumentOverlaysBase(t *testing.T) {
 	if got, want := int(doc.Machine.Memory), 4096; got != want {
 		t.Errorf("Memory = %d MiB, want %d", got, want)
 	}
-	shares := doc.Mounts.VirtioFS()
-	if len(shares) != 2 {
-		t.Fatalf("virtiofs mounts = %+v, want base share plus appended extra", shares)
+	mf, err := doc.Manifest()
+	if err != nil {
+		t.Fatalf("resolve overlaid document: %v", err)
 	}
-	if shares[0].SourcePath != "/host/src" {
-		t.Errorf("base share was replaced: %+v", shares[0])
+	runs, err := mf.ResolvedRuns(3)
+	if err != nil {
+		t.Fatalf("resolve runs: %v", err)
 	}
-	if shares[1].Tag != "extra" {
-		t.Errorf("appended share = %+v", shares[1])
+	if len(runs) != 1 {
+		t.Fatalf("runs = %+v, want one virtiofs helper", runs)
+	}
+	if got, want := runs[0].Exec, []string{"/custom/virtiofsd", "--socket=/state/custom.sock", "--source=/host/new", "--tag=src"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("virtiofs helper = %#v, want %#v", got, want)
+	}
+	if got := mf.QEMU.Devices.VirtioFS; len(got) != 1 || got[0].Tag != "src" || got[0].SocketPath != "custom.sock" {
+		t.Errorf("virtiofs launch plan = %+v", got)
+	}
+	if got := doc.Mounts.VirtioFS(); len(got) != 1 || got[0].SourcePath != "/host/new" || got[0].Target != "/workspace" || !got[0].ReadOnly {
+		t.Errorf("virtiofs guest plan = %+v", got)
+	}
+	if got := mf.QEMU.Devices.NineP; len(got) != 1 || got[0].Tag != "backend-only" || got[0].SourcePath != "/host/legacy" {
+		t.Errorf("backend-only 9p launch plan = %+v", got)
+	}
+	if got := mf.ResolvedVolumes(); len(got) != 1 || got[0].ImagePath != "/work/new.qcow2" || int(got[0].Size) != 256 || got[0].FSType != "ext4" || got[0].Label != "data" || !got[0].AutoCreate {
+		t.Errorf("volume plan = %+v", got)
+	}
+	if got := mf.QEMU.Devices.Block; len(got) != 1 || got[0].ImagePath != "new.qcow2" || got[0].Format != "qcow2" || got[0].Cache != "none" || got[0].Serial != "base-serial" || !got[0].ReadOnly {
+		t.Errorf("block launch plan = %+v", got)
+	}
+	if got, want := mf.QEMU.Devices.Network[0].NetdevOptions, []string{
+		"hostfwd=udp:127.0.0.1:8080-10.0.2.15:80",
+		"guestfwd=tcp:10.0.2.15:20-cmd:nc 127.0.0.1 2000",
+	}; !reflect.DeepEqual(got, want) {
+		t.Errorf("network launch plan = %#v, want %#v", got, want)
+	}
+	if got := doc.Networks[0].Forward; len(got) != 2 || got[1].From != "guest" {
+		t.Errorf("document forwards = %+v, want replaced host forward and preserved guest forward", got)
+	}
+	files := mf.ResolvedWriteFiles()
+	if len(files) != 2 {
+		t.Fatalf("guest file plan = %+v, want one edited inline file and one backend-owned file", files)
+	}
+	if got := files[1]; got.GuestPath != "/etc/new" || got.Content.Kind != imanifest.WriteFileContentText || got.Content.Text != "new content" || got.Mode != "640" || got.Chown != "root:root" || !got.Overwrite {
+		t.Errorf("edited inline file = %+v", got)
+	}
+	if got := files[0]; got.GuestPath != "/etc/backend.conf" || got.Content.Kind != imanifest.WriteFileContentPath || got.Content.Path != "/work/host.conf" || !got.WriteBack {
+		t.Errorf("backend-owned host file = %+v", got)
 	}
 }
 

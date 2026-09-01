@@ -7,6 +7,10 @@ details.
 
 ## 2026-09-01
 
+- Editing device slices on a `Spec` loaded from a manifest now authoritatively
+  replaces the loaded shares, disks, host port forwards, and inline guest files
+  by slice position. Removing or appending entries is reflected at launch,
+  while backend-only settings and device types remain intact.
 - QEMU's public device-attacher now produces complete ad-hoc share, disk, and
   port-forward plans using the manifest's validation and defaults, allocates a
   distinct reserved PCIe port for every attached device, and generates stable

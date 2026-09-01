@@ -26,7 +26,11 @@ import (
 // backend it configures. The returned backend preserves manifest detail
 // beyond what Spec models (balloon controller, hotplug table, write-file
 // ownership, ...); the Spec is the neutral view, and edits to it are
-// overlaid when the backend starts.
+// overlaid when the backend starts. Shares, disks, host port forwards, and
+// inline files replace their corresponding loaded entries by slice position;
+// removing an entry removes it from launch, and extra entries append. Manifest
+// entries with no Spec representation remain backend-owned. Normal manifest
+// defaulting and validation still apply to the combined result.
 //
 // A relative working_dir (including the "." default) resolves against the
 // process working directory.

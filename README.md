@@ -82,18 +82,15 @@ spec := &vm.Spec{
 	Shares: []vm.Share{{Tag: "src", HostPath: ".", GuestPath: "/workspace"}},
 	Memory: 2048 * units.Mebibyte,
 }
-b, err := qemu.New(qemu.Config{
+b := &qemu.Backend{
 	RemoteControl: qemu.QGA{},
 	Logger:        slog.Default(),
-})
-if err != nil {
-	log.Fatal(err)
 }
 inst, err := b.Start(ctx, spec)
 if err != nil {
 	log.Fatal(err)
 }
-defer backend.Shutdown(ctx, inst)
+defer inst.Shutdown(ctx)
 
 g, err := inst.RemoteControl()
 if err != nil {
@@ -104,13 +101,14 @@ fmt.Printf("exit=%d\n%s", out.ExitCode, out.Stdout)
 ```
 
 Optional functionality is discovered by type assertion, as in
-`database/sql/driver`:
+`database/sql/driver`. Capabilities of a running VM are asserted on the
+instance; the capability that creates instances (resume) on the backend:
 
 ```go
-if s, ok := b.(backend.Suspender); ok {
-	err = s.Suspend(ctx, inst, "")
+if s, ok := inst.(backend.Suspender); ok {
+	err = s.Suspend(ctx)
 } else {
-	err = backend.Shutdown(ctx, inst)
+	err = inst.Shutdown(ctx)
 }
 ```
 

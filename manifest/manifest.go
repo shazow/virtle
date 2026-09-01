@@ -66,7 +66,7 @@ func Load(r io.Reader) (*vm.Spec, backend.Backend, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	return spec, qemu.NewBackendFromDocument(doc, qemu.Config{}), nil
+	return spec, qemu.NewBackendFromDocument(doc), nil
 }
 
 // specFromDocument extracts the neutral Spec view from a defaults-merged

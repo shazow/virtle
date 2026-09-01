@@ -6,6 +6,24 @@ user-visible outcomes.
 
 ## 2026-09-01
 
+- **Library API (breaking).** Capabilities of a running VM (`Suspender`,
+  `MemoryResizer`, `DeviceAttacher`) are now asserted on the `backend.Instance`
+  and take no instance or state-directory argument; the new `backend.Resumer`
+  on the backend restores suspended instances. Graceful stop is part of the
+  instance contract as `inst.Shutdown(ctx)`; `backend.Shutdown` is a deprecated
+  alias. The QEMU backend is the exported `qemu.Backend` struct (the former
+  `Config` fields, zero value usable) and `qemu.New` is gone; instances are the
+  exported `qemu.Instance`, so supported capabilities are visible in the docs.
+
+  ```go
+  b := &qemu.Backend{RemoteControl: qemu.QGA{}}
+  inst, err := b.Start(ctx, spec)
+  defer inst.Shutdown(ctx)
+  if s, ok := inst.(backend.Suspender); ok {
+  	err = s.Suspend(ctx)
+  }
+  ```
+
 - Newly created VM state directories and volume images are private by default
   (`0700` and `0600`).
 - Guest and control requests now have bounded memory use and concurrency.

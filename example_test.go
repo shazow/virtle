@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/shazow/virtle/backend"
 	"github.com/shazow/virtle/backend/qemu"
 	"github.com/shazow/virtle/units"
 	"github.com/shazow/virtle/vm"
@@ -23,18 +22,14 @@ func Example() {
 		Memory: 2048 * units.Mebibyte,
 	}
 
-	b, err := qemu.New(qemu.Config{RemoteControl: qemu.QGA{}})
-	if err != nil {
-		log.Print(err)
-		return
-	}
+	b := &qemu.Backend{RemoteControl: qemu.QGA{}}
 	inst, err := b.Start(ctx, spec)
 	if err != nil {
 		log.Print(err)
 		return
 	}
 	defer func() {
-		if err := backend.Shutdown(ctx, inst); err != nil {
+		if err := inst.Shutdown(ctx); err != nil {
 			log.Print(err)
 		}
 	}()

@@ -1,8 +1,13 @@
 // Package qemu implements a virtle backend that launches virtual machines
-// with QEMU. Config.RemoteControl selects the guest-control transport
-// wired into Instance.RemoteControl: QGA (the QEMU Guest Agent, equivalent
-// to the virtle CLI today) now, a virtle-native guest daemon transport
-// later.
+// with QEMU. Backend is the configuration and the backend.Backend in one
+// exported struct, the http.Server shape: its zero value works, defaults
+// are applied at first use, and Backend.RemoteControl selects the
+// guest-control transport wired into Instance.RemoteControl: QGA (the
+// QEMU Guest Agent, equivalent to the virtle CLI today) now, a
+// virtle-native guest daemon transport later.
+//
+//	b := &qemu.Backend{RemoteControl: qemu.QGA{}}
+//	inst, err := b.Start(ctx, spec)
 //
 // # Resource limits
 //
@@ -44,8 +49,10 @@ const (
 	ConsoleInteractive Console = "console" // interactive console on the host terminal
 )
 
-// Config holds the QEMU-only knobs. The zero value works.
-type Config struct {
+// Backend is the QEMU backend: its fields are the QEMU-only knobs, and
+// the zero value works. Fields must not be modified after Start or Resume
+// has been called, as with http.Server.
+type Backend struct {
 	Binary         string            // default: qemu-system-<arch>
 	Machine        string            // QEMU machine type; default: microvm
 	MachineOptions map[string]string // extra machine options
@@ -70,16 +77,28 @@ type Config struct {
 	// guest shutdown attempt.
 	RemoteControl RemoteControl
 
-	// Logger receives manifest, VM lifecycle, SSH, and balloon logs. The
-	// default discards logs.
+	// Logger receives manifest, VM lifecycle, SSH, and balloon logs. Nil
+	// discards logs.
 	Logger *slog.Logger
 
-	// ConsoleOutput receives explicitly requested console output. The default
-	// is os.Stderr.
+	// ConsoleOutput receives explicitly requested console output. Nil
+	// means os.Stderr.
 	ConsoleOutput io.Writer
+
+	// doc is the loaded manifest document for manifest.Load-configured
+	// backends; nil for backends constructed directly.
+	doc *imanifest.Document
 }
 
-// RemoteControl is a guest-control transport for Config.RemoteControl.
+var (
+	_ backend.Backend        = (*Backend)(nil)
+	_ backend.Resumer        = (*Backend)(nil)
+	_ backend.Suspender      = (*Instance)(nil)
+	_ backend.MemoryResizer  = (*Instance)(nil)
+	_ backend.DeviceAttacher = (*Instance)(nil)
+)
+
+// RemoteControl is a guest-control transport for Backend.RemoteControl.
 // It is sealed (unexported method): QGA today, the virtle-native guest
 // daemon later. Each transport carries its own knobs.
 type RemoteControl interface{ remoteControl() }
@@ -97,59 +116,55 @@ type QGA struct {
 
 func (QGA) remoteControl() {}
 
-// New returns a QEMU backend. Config.RemoteControl selects guest control —
-// there is no default transport, mirroring how backends themselves are
-// named explicitly:
-//
-//	b, err := qemu.New(qemu.Config{RemoteControl: qemu.QGA{}})
-func New(cfg Config) (backend.Backend, error) {
-	return newBackend(cfg, nil), nil
-}
-
-type qemuBackend struct {
-	cfg Config
-	doc *imanifest.Document // non-nil for manifest.Load-configured backends
-}
-
-func newBackend(cfg Config, doc *imanifest.Document) *qemuBackend {
-	if cfg.Logger == nil {
-		cfg.Logger = slog.New(slog.DiscardHandler)
+func (b *Backend) logger() *slog.Logger {
+	if b.Logger == nil {
+		return slog.New(slog.DiscardHandler)
 	}
-	if cfg.ConsoleOutput == nil {
-		cfg.ConsoleOutput = os.Stderr
-	}
-	return &qemuBackend{cfg: cfg, doc: doc}
+	return b.Logger
 }
 
-func (b *qemuBackend) hasRemoteControl() bool { return b.cfg.RemoteControl != nil }
+func (b *Backend) consoleOutput() io.Writer {
+	if b.ConsoleOutput == nil {
+		return os.Stderr
+	}
+	return b.ConsoleOutput
+}
 
-// StateVersion implements backend.Suspender: it reports the suspend-state
+func (b *Backend) hasRemoteControl() bool { return b.RemoteControl != nil }
+
+// StateVersion implements backend.Resumer: it reports the suspend-state
 // version this backend's machinery stamps on saves and compares on
 // resume. Only an exact match is resumable, since the saved VM state is a
 // QEMU migration stream.
-func (b *qemuBackend) StateVersion() string { return vmm.StateVersion }
+func (b *Backend) StateVersion() string { return vmm.StateVersion }
 
 // NewBackendFromDocument is the bridge for the public manifest package:
 // the returned backend starts from the loaded document, preserving
 // manifest sections that have no vm.Spec equivalent, and overlays the Spec
-// passed to Start on top. The document type is internal, so this is not
-// callable (and not supported) outside the module.
-func NewBackendFromDocument(doc imanifest.Document, cfg Config) backend.Backend {
-	// Manifests describe agent-equipped guests today, matching the CLI.
-	if cfg.RemoteControl == nil {
-		cfg.RemoteControl = QGA{}
-	}
-	return newBackend(cfg, &doc)
+// passed to Start on top. Manifests describe agent-equipped guests today,
+// matching the CLI, so the backend's RemoteControl is QGA. The document
+// type is internal, so this is not callable (and not supported) outside
+// the module.
+func NewBackendFromDocument(doc imanifest.Document) *Backend {
+	return &Backend{RemoteControl: QGA{}, doc: &doc}
 }
 
-func (b *qemuBackend) Start(ctx context.Context, spec *vm.Spec) (backend.Instance, error) {
+// Start launches a VM from spec. It implements backend.Backend.
+func (b *Backend) Start(ctx context.Context, spec *vm.Spec) (backend.Instance, error) {
 	return b.start(ctx, spec, vmm.ResumeModeNo)
+}
+
+// Resume implements backend.Resumer: it restores a previously suspended
+// instance. The spec (plus this backend's configuration) must resolve to
+// the state directory the suspend wrote to.
+func (b *Backend) Resume(ctx context.Context, spec *vm.Spec) (backend.Instance, error) {
+	return b.start(ctx, spec, vmm.ResumeModeForce)
 }
 
 // resolveSpec lowers the spec (plus any base document) through the manifest
 // resolution pipeline.
-func (b *qemuBackend) resolveSpec(spec *vm.Spec, logger *slog.Logger) (*imanifest.Manifest, error) {
-	doc, err := specDocument(spec, b.cfg, b.doc)
+func (b *Backend) resolveSpec(spec *vm.Spec, logger *slog.Logger) (*imanifest.Manifest, error) {
+	doc, err := specDocument(spec, b, b.doc)
 	if err != nil {
 		return nil, err
 	}
@@ -160,8 +175,8 @@ func (b *qemuBackend) resolveSpec(spec *vm.Spec, logger *slog.Logger) (*imanifes
 	return mf, nil
 }
 
-func (b *qemuBackend) start(ctx context.Context, spec *vm.Spec, resume vmm.ResumeMode) (backend.Instance, error) {
-	logger := b.cfg.Logger
+func (b *Backend) start(ctx context.Context, spec *vm.Spec, resume vmm.ResumeMode) (backend.Instance, error) {
+	logger := b.logger()
 	mf, err := b.resolveSpec(spec, logger)
 	if err != nil {
 		return nil, err
@@ -171,100 +186,82 @@ func (b *qemuBackend) start(ctx context.Context, spec *vm.Spec, resume vmm.Resum
 		HasRemoteControl: b.hasRemoteControl(),
 	}, vmm.Config{
 		Logger:        logger,
-		ConsoleOutput: b.cfg.ConsoleOutput,
+		ConsoleOutput: b.consoleOutput(),
 	})
 	if err != nil {
 		return nil, err
 	}
-	return &instance{vm: handle, hasRemoteControl: b.hasRemoteControl()}, nil
+	return newInstance(handle, b.hasRemoteControl()), nil
 }
 
-type instance struct {
+// Instance is a virtual machine started by a Backend. Beyond the
+// backend.Instance contract it implements the capabilities asserted
+// above: suspend (paired with Backend.Resume), memory resizing over
+// virtio-balloon, and device hotplug.
+type Instance struct {
 	vm               *vmm.VM
 	hasRemoteControl bool
 }
 
-func (i *instance) Wait(ctx context.Context) error { return i.vm.Wait(ctx) }
+func newInstance(handle *vmm.VM, hasRemoteControl bool) *Instance {
+	return &Instance{vm: handle, hasRemoteControl: hasRemoteControl}
+}
 
-func (i *instance) Kill() error { return i.vm.Kill() }
+// Wait blocks until the VM exits (or ctx is done), then releases runtime
+// state.
+func (i *Instance) Wait(ctx context.Context) error { return i.vm.Wait(ctx) }
 
-func (i *instance) RemoteControl() (vm.Guest, error) {
+// Kill hard-stops the VM immediately and releases runtime state, skipping
+// the graceful guest shutdown path.
+func (i *Instance) Kill() error { return i.vm.Kill() }
+
+// Shutdown gracefully tears the instance down: guest shutdown (when the
+// backend was configured with remote control), then QMP quit, then
+// signals, then runtime cleanup; each step escalates on its own grace
+// period. If ctx expires before teardown completes, the VM is killed
+// instead, and the kill's result is returned. Shutdown is safe to call
+// more than once and after the VM has exited.
+func (i *Instance) Shutdown(ctx context.Context) error {
+	closed := make(chan error, 1)
+	go func() { closed <- i.vm.Close() }()
+	select {
+	case err := <-closed:
+		return err
+	case <-ctx.Done():
+		// Kill waits for the in-flight Close to finish (teardown is
+		// serialized), so the goroutine cannot outlive this call.
+		return i.vm.Kill()
+	}
+}
+
+// RemoteControl returns the guest-agent-backed vm.Guest, or an error
+// wrapping errors.ErrUnsupported when the backend was configured without
+// RemoteControl.
+func (i *Instance) RemoteControl() (vm.Guest, error) {
 	if !i.hasRemoteControl {
 		return nil, fmt.Errorf("vm has no guest control agent: %w", errors.ErrUnsupported)
 	}
 	return &qgaGuest{vm: i.vm}, nil
 }
 
-// Close gracefully tears the instance down: guest shutdown, then QMP
-// quit, then signals, then runtime cleanup. The graceful guest shutdown
-// is attempted only when the backend was configured with remote control;
-// without it teardown goes straight to QMP quit. Wait and Kill already
-// release runtime state; Close covers callers abandoning a VM without
-// waiting.
-func (i *instance) Close() error { return i.vm.Close() }
-
-func (b *qemuBackend) ownInstance(inst backend.Instance) (*instance, error) {
-	i, ok := inst.(*instance)
-	if !ok {
-		return nil, fmt.Errorf("instance was not started by this backend")
-	}
-	return i, nil
-}
-
 // Suspend implements backend.Suspender: it saves the running instance's
-// state via QMP migration and stops the VM. The state lands in the
-// instance's own state directory (derived from its Spec); a differing
-// stateDir is rejected because socket paths and lock files are anchored
-// there at Start. Pass "" to use the instance's directory.
-func (b *qemuBackend) Suspend(ctx context.Context, inst backend.Instance, stateDir string) error {
-	i, err := b.ownInstance(inst)
-	if err != nil {
-		return err
-	}
-	if stateDir != "" && stateDir != i.vm.StateDir() {
-		return fmt.Errorf("suspend state dir is fixed at Start (%q): %w", i.vm.StateDir(), errors.ErrUnsupported)
-	}
-	return i.vm.Suspend(ctx)
-}
-
-// Resume implements backend.Suspender: it restores a previously suspended
-// instance. The spec (plus this backend's config) must resolve to the same
-// state directory the suspend wrote to.
-func (b *qemuBackend) Resume(ctx context.Context, spec *vm.Spec, stateDir string) (backend.Instance, error) {
-	inst, err := b.start(ctx, spec, vmm.ResumeModeForce)
-	if err != nil {
-		return nil, err
-	}
-	i := inst.(*instance)
-	if stateDir != "" && stateDir != i.vm.StateDir() {
-		return nil, errors.Join(
-			fmt.Errorf("resume state dir %q does not match the spec's state dir %q", stateDir, i.vm.StateDir()),
-			i.Kill(),
-		)
-	}
-	return inst, nil
-}
+// state via QMP migration into the state directory fixed at Start (the
+// spec's Dir), then stops the VM. Restore it with Backend.Resume and the
+// same spec.
+func (i *Instance) Suspend(ctx context.Context) error { return i.vm.Suspend(ctx) }
 
 // ResizeMemory implements backend.MemoryResizer via virtio-balloon. The
-// backend must be configured with Config.Balloon (or a manifest balloon
+// backend must be configured with Backend.Balloon (or a manifest balloon
 // device).
-func (b *qemuBackend) ResizeMemory(ctx context.Context, inst backend.Instance, size units.Bytes) error {
-	i, err := b.ownInstance(inst)
-	if err != nil {
-		return err
-	}
+func (i *Instance) ResizeMemory(ctx context.Context, size units.Bytes) error {
 	return i.vm.ResizeMemory(ctx, size.Int64())
 }
 
 // Attach implements backend.DeviceAttacher over QMP hotplug. The instance
-// must have PCIe hotplug ports reserved at Start: set Config.HotplugPorts
+// must have PCIe hotplug ports reserved at Start: set Backend.HotplugPorts
 // (or a manifest [hotplug] section / hotplug.ports for manifest.Load
 // backends).
-func (b *qemuBackend) Attach(ctx context.Context, inst backend.Instance, dev vm.Device) error {
-	i, err := b.ownInstance(inst)
-	if err != nil {
-		return err
-	}
+func (i *Instance) Attach(ctx context.Context, dev vm.Device) error {
 	hdev, err := hotplugDevice(i.vm, dev)
 	if err != nil {
 		return err
@@ -273,11 +270,7 @@ func (b *qemuBackend) Attach(ctx context.Context, inst backend.Instance, dev vm.
 }
 
 // Detach implements backend.DeviceAttacher; see Attach.
-func (b *qemuBackend) Detach(ctx context.Context, inst backend.Instance, dev vm.Device) error {
-	i, err := b.ownInstance(inst)
-	if err != nil {
-		return err
-	}
+func (i *Instance) Detach(ctx context.Context, dev vm.Device) error {
 	hdev, err := hotplugDevice(i.vm, dev)
 	if err != nil {
 		return err

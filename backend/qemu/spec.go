@@ -14,13 +14,13 @@ import (
 	"github.com/shazow/virtle/vm"
 )
 
-// specDocument lowers a neutral vm.Spec plus the backend Config onto the
+// specDocument lowers a neutral vm.Spec plus the backend's knobs onto the
 // internal manifest document, which then flows through the same defaults,
 // validation, and resolution pipeline as a TOML manifest. When base is
 // non-nil (a manifest.Load-configured backend), the spec overlays it:
 // scalar fields override, and Shares/Disks/Ports/Files replace the neutral
 // entries represented by the loaded Spec.
-func specDocument(spec *vm.Spec, cfg Config, base *imanifest.Document) (imanifest.Document, error) {
+func specDocument(spec *vm.Spec, cfg *Backend, base *imanifest.Document) (imanifest.Document, error) {
 	if spec == nil {
 		spec = &vm.Spec{}
 	}

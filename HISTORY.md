@@ -35,6 +35,12 @@ user-visible outcomes.
   out, err := vm.Output(ctx, guest, &vm.GuestCmd{Path: "uname", Args: []string{"-r"}})
   ```
 
+- **Library API (breaking).** `units.Duration` is gone from the public API:
+  durations are `time.Duration` throughout, and the manifest's duration
+  encoding is an internal detail. `units.Bytes` now round-trips through text
+  encoders (`ParseBytes`, `MarshalText`, `UnmarshalText`), so `"2GiB"` works in
+  TOML and JSON.
+
 - Newly created VM state directories and volume images are private by default
   (`0700` and `0600`).
 - Guest and control requests now have bounded memory use and concurrency.

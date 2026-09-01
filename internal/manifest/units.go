@@ -1,4 +1,4 @@
-package units
+package manifest
 
 const bytesPerMiB int64 = 1024 * 1024
 

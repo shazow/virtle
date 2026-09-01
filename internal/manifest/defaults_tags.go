@@ -4,11 +4,9 @@ import (
 	"fmt"
 	"reflect"
 	"strconv"
-
-	"github.com/shazow/virtle/internal/units"
 )
 
-var durationType = reflect.TypeOf(units.Duration(0))
+var durationType = reflect.TypeOf(Duration(0))
 
 // applyDefaultTags sets each zero scalar field to the value of its `default`
 // struct tag, recursing through nested structs. Decoding runs after it, so an
@@ -33,7 +31,7 @@ func applyDefaultTagsValue(v reflect.Value) {
 			continue
 		}
 		if field.Type == durationType {
-			value, err := units.ParseDuration(tag)
+			value, err := ParseDuration(tag)
 			if err != nil {
 				panic(fmt.Sprintf("manifest: field %s has invalid default tag %q: %v", field.Name, tag, err))
 			}

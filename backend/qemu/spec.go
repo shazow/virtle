@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	imanifest "github.com/shazow/virtle/internal/manifest"
-	iunits "github.com/shazow/virtle/internal/units"
 	"github.com/shazow/virtle/units"
 	"github.com/shazow/virtle/vm"
 )
@@ -72,7 +71,7 @@ func specDocument(spec *vm.Spec, cfg *Backend, base *imanifest.Document) (imanif
 		if memory%units.Mebibyte != 0 {
 			return imanifest.Document{}, fmt.Errorf("memory size %s is not MiB-aligned", memory)
 		}
-		doc.Machine.Memory = iunits.MiB(memory.Mebibytes())
+		doc.Machine.Memory = imanifest.MiB(memory.Mebibytes())
 	}
 
 	if spec.Kernel != (vm.Kernel{}) {
@@ -225,7 +224,7 @@ func overlayDisk(input imanifest.ImageMountInput, disk vm.Disk) (imanifest.Image
 	}
 	input.Type = imanifest.MountTypeImage
 	input.SourcePath = disk.Path
-	input.Image.Size = iunits.MiB(disk.Size.Mebibytes())
+	input.Image.Size = imanifest.MiB(disk.Size.Mebibytes())
 	input.Image.Format = disk.Format
 	input.Image.AutoCreate = disk.Size != 0
 	return input, nil

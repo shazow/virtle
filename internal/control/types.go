@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/shazow/virtle/internal/units"
+	"github.com/shazow/virtle/internal/manifest"
 )
 
 // RuntimeState is the lifecycle state reported by the control socket.
@@ -109,7 +109,7 @@ type GuestExecRequest struct {
 	Args          []string `json:"args,omitempty"`
 	CaptureOutput bool     `json:"captureOutput,omitempty"`
 	// Timeout bounds the guest command; zero or omitted waits indefinitely.
-	Timeout units.Duration `json:"timeout,omitempty"`
+	Timeout manifest.Duration `json:"timeout,omitempty"`
 }
 
 // GuestExecResponse reports the completed guest process status.

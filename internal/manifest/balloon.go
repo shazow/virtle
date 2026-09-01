@@ -3,12 +3,10 @@ package manifest
 import (
 	"fmt"
 	"time"
-
-	"github.com/shazow/virtle/internal/units"
 )
 
 const (
-	defaultBalloonControllerStep           = units.MiB(256)
+	defaultBalloonControllerStep           = MiB(256)
 	defaultBalloonControllerPollInterval   = 5 * time.Second
 	defaultBalloonControllerReclaimHoldoff = 30 * time.Second
 )
@@ -24,16 +22,16 @@ type BalloonDevice struct {
 
 // BalloonControllerConfig configures the automatic balloon controller.
 type BalloonControllerConfig struct {
-	MinActual             units.MiB     `json:"minActualMiB" toml:"minActualMiB"`
-	MaxActual             units.MiB     `json:"maxActualMiB,omitempty" toml:"maxActualMiB"`
-	GrowBelowAvailable    units.MiB     `json:"growBelowAvailableMiB" toml:"growBelowAvailableMiB"`
-	ReclaimAboveAvailable units.MiB     `json:"reclaimAboveAvailableMiB" toml:"reclaimAboveAvailableMiB"`
-	Step                  units.MiB     `json:"stepMiB,omitempty" toml:"stepMiB"`
+	MinActual             MiB           `json:"minActualMiB" toml:"minActualMiB"`
+	MaxActual             MiB           `json:"maxActualMiB,omitempty" toml:"maxActualMiB"`
+	GrowBelowAvailable    MiB           `json:"growBelowAvailableMiB" toml:"growBelowAvailableMiB"`
+	ReclaimAboveAvailable MiB           `json:"reclaimAboveAvailableMiB" toml:"reclaimAboveAvailableMiB"`
+	Step                  MiB           `json:"stepMiB,omitempty" toml:"stepMiB"`
 	PollInterval          time.Duration `json:"pollInterval,omitempty" toml:"pollInterval"`
 	ReclaimHoldoff        time.Duration `json:"reclaimHoldoff,omitempty" toml:"reclaimHoldoff"`
 }
 
-func applyBalloonDefaults(memory units.MiB, device *BalloonDevice) {
+func applyBalloonDefaults(memory MiB, device *BalloonDevice) {
 	if device == nil {
 		return
 	}
@@ -70,7 +68,7 @@ func applyBalloonDefaults(memory units.MiB, device *BalloonDevice) {
 	}
 }
 
-func defaultBalloonMinActual(maxActual units.MiB, fallback units.MiB) units.MiB {
+func defaultBalloonMinActual(maxActual MiB, fallback MiB) MiB {
 	if maxActual <= 0 {
 		maxActual = fallback
 	}
@@ -80,21 +78,21 @@ func defaultBalloonMinActual(maxActual units.MiB, fallback units.MiB) units.MiB 
 	return (maxActual + 1) / 2
 }
 
-func defaultBalloonGrowBelowAvailable(minActual units.MiB) units.MiB {
+func defaultBalloonGrowBelowAvailable(minActual MiB) MiB {
 	if minActual <= 1 {
 		return 0
 	}
 	return minActual / 2
 }
 
-func defaultBalloonReclaimAboveAvailable(minActual units.MiB) units.MiB {
+func defaultBalloonReclaimAboveAvailable(minActual MiB) MiB {
 	if minActual <= 0 {
 		return 1
 	}
 	return minActual
 }
 
-func validateBalloonDevice(memory units.MiB, device *BalloonDevice) error {
+func validateBalloonDevice(memory MiB, device *BalloonDevice) error {
 	if device == nil {
 		return nil
 	}
@@ -111,7 +109,7 @@ func validateBalloonDevice(memory units.MiB, device *BalloonDevice) error {
 	return nil
 }
 
-func validateBalloonController(memory units.MiB, controller *BalloonControllerConfig) error {
+func validateBalloonController(memory MiB, controller *BalloonControllerConfig) error {
 	if controller == nil {
 		return nil
 	}

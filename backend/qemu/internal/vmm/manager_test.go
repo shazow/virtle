@@ -35,7 +35,6 @@ import (
 	"github.com/shazow/virtle/internal/executor"
 	"github.com/shazow/virtle/internal/executor/executortest"
 	"github.com/shazow/virtle/internal/manifest"
-	"github.com/shazow/virtle/internal/units"
 )
 
 const (
@@ -787,7 +786,7 @@ func TestCreateVolumeImageCreatesNativeExt4(t *testing.T) {
 	label := "persist"
 	for _, tt := range []struct {
 		name      string
-		sizeMiB   units.MiB
+		sizeMiB   manifest.MiB
 		label     string
 		wantLabel string
 		qemuOwned bool
@@ -3804,7 +3803,7 @@ func TestLaunchRuntimeRegistersHotplugAtControlPeriphery(t *testing.T) {
 
 func TestGuestExecRejectsNegativeTimeout(t *testing.T) {
 	feature := (&manager{}).guestFeature("qga.sock", nil)
-	_, err := feature.GuestExec(context.Background(), control.GuestExecRequest{Path: "/bin/true", Timeout: units.Duration(-5 * time.Second)})
+	_, err := feature.GuestExec(context.Background(), control.GuestExecRequest{Path: "/bin/true", Timeout: manifest.Duration(-5 * time.Second)})
 	var rpcErr *control.RPCError
 	if !errors.As(err, &rpcErr) || rpcErr.Code != control.ErrInvalidParams {
 		t.Fatalf("expected invalid params error, got %v", err)
@@ -3887,7 +3886,7 @@ func TestLaunchRuntimeRegistersGuestRPCsAtControlPeriphery(t *testing.T) {
 		Path:          "/bin/sh",
 		Args:          []string{"-c", "echo hi"},
 		CaptureOutput: true,
-		Timeout:       units.Duration(300 * time.Second),
+		Timeout:       manifest.Duration(300 * time.Second),
 	})
 	if err != nil {
 		t.Fatalf("control guest exec: %v", err)

@@ -2,8 +2,6 @@ package manifest
 
 import (
 	"time"
-
-	"github.com/shazow/virtle/internal/units"
 )
 
 type QEMU struct {
@@ -38,9 +36,9 @@ type QEMUCPU struct {
 }
 
 type QEMUMemory struct {
-	Size    units.MiB `json:"sizeMiB"`
-	Backend string    `json:"backend,omitempty"`
-	Shared  bool      `json:"shared,omitempty"`
+	Size    MiB    `json:"sizeMiB"`
+	Backend string `json:"backend,omitempty"`
+	Shared  bool   `json:"shared,omitempty"`
 }
 
 type QEMUKernel struct {

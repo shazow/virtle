@@ -145,7 +145,7 @@ them the overlap period.
 Explicitly deferred, none blocking:
 
 - The control socket serves the `backend.Machine` contract
-  (improvements.md item 13): `control.Dial` returns a `Machine`, which is
+  (improvements.md Phase B): `control.Dial` returns a `Machine`, which is
   also the public control client. Once the daemon exists, the proxy's
   `RemoteControl()` hands off to a client dialed straight to the daemon,
   so `guest-*` proxying ends and the socket narrows to host-session

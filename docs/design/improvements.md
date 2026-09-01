@@ -454,26 +454,73 @@ substitutes for it:
 against ad-hoc fakes written inline; `example_test.go` cannot execute
 (it needs a kernel image); a library consumer has no way to unit-test
 code that takes a `vm.Guest` without QEMU; and a second backend would
-have no conformance check.
+have no conformance check. The repo already has one opt-in integration
+convention, `backend/qemu/internal/launch/guest_dir_install_integration_test.go`:
+a `//go:build integration` file, run locally with
+`go test -tags=integration ./...`, and run by the `integration` flake check,
+which builds the tagged test binary and executes `^TestIntegration` inside a
+small Linux VM. Nothing runs it by accident.
 
-**Proposal.**
+**Proposal.** Two tiers with opposite needs, sharing one contract.
+
+*Tier 1 — conformance (e2e, opt-in only).* A suite that boots real
+machines from whatever backend it is handed, the way `fstest.TestFS`
+reads real files and `nettest.TestConn` opens real sockets:
 
 ```go
 // backend/backendtest — the nettest.TestConn / fstest.TestFS of this API.
-func TestBackend(t *testing.T, newBackend func(t *testing.T) backend.Backend)
+// The factory returns a backend and a Spec that boots on it; each
+// sub-test starts a fresh machine, since suspend and hotplug are
+// destructive. Capabilities are discovered by assertion and skipped when
+// a machine does not implement them.
+func TestBackend(t *testing.T, start func(t *testing.T) (backend.Backend, *vm.Spec))
+```
 
+`backendtest` itself carries no build tag (it is a library). Its wiring
+to QEMU follows the existing convention exactly, so it is never run
+unless explicitly opted in:
+
+```go
+//go:build integration
+
+package qemu_test // backend/qemu/backend_integration_test.go
+
+func TestIntegrationBackend(t *testing.T) {
+	backendtest.TestBackend(t, func(t *testing.T) (backend.Backend, *vm.Spec) {
+		return &qemu.Backend{RemoteControl: qemu.QGA{}}, integrationSpec(t)
+	})
+}
+```
+
+The `integration` flake check grows a second tagged test binary
+(`backend/qemu`) plus the kernel/initrd/agent image `integrationSpec`
+boots, running under TCG where the check's VM has no KVM. Until
+`qemu.Guest{}` exists, the `RemoteControl` sub-tests run against QGA.
+
+*Tier 2 — doubles (unit, always on).* For consumers who must never boot a
+VM:
+
+```go
 // vm/vmtest — the fstest.MapFS of vm.Guest: an in-memory Guest with a
 // MapFS-backed filesystem and scripted command results.
 type Guest struct {
 	FS       fstest.MapFS
 	Commands map[string]Result // keyed by GuestCmd.Path
 }
+
+// backendtest.Backend — an in-memory backend.Backend whose machines boot
+// instantly, close Done on Kill/Shutdown, and return a vmtest.Guest from
+// RemoteControl. What the CLI's rebuilt foreground loop and downstream
+// library users test against.
+type Backend struct{ Guest *vmtest.Guest }
 ```
 
-`backendtest` exercises Start/Wait/Done/Kill/Shutdown/RemoteControl and
-each capability an implementation asserts to; `vmtest.Guest` gives
-consumers a deterministic double. Both are small and pay for themselves
-the first time a second backend or a downstream consumer appears.
+The tiers check each other, which is what makes the pattern pay:
+`backendtest`'s own untagged tests run `TestBackend` against
+`backendtest.Backend` in milliseconds — exactly how `nettest` validates
+itself against `net.Pipe` — so the suite is kept honest without a VM and
+the fake is held to the same contract as QEMU.
+
 
 ## Sequencing
 
@@ -487,6 +534,7 @@ with `go build ./... && go test ./... && nix flake check` green.
 3. Items 6–9 (units, `Accel`, `Proto`, renames) — mechanical.
 4. Item 5 (`Done`/`Err`) alongside the first step of the session rebuild
    (roadmap item 4), which is its consumer.
-5. Item 10 with roadmap item 1; item 11 whenever the first of the two
-   consumers it serves (a second backend, an external library user)
-   appears, or earlier as insurance.
+5. Item 10 with roadmap item 1. Item 11 tier 2 (the doubles) lands with
+   the session rebuild that consumes it; tier 1 (the opt-in conformance
+   run) lands with the flake integration check extension, or earlier as
+   insurance for a second backend.

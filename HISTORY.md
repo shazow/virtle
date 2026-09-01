@@ -6,6 +6,14 @@ user-visible outcomes.
 
 ## 2026-09-01
 
+- The library backend contract now exposes `Machine` handles with graceful
+  shutdown and live-object capabilities; QEMU is configured directly through
+  the exported, zero-value-usable `qemu.Backend` type.
+- `vm.Guest.Run` now writes to caller-provided streams and reports non-zero
+  command statuses as `*vm.ExitError`; `vm.Output` provides buffered stdout.
+- Unit codecs now live in the public `units` package; byte sizes support
+  unit-suffixed text, JSON, and TOML round trips. QEMU acceleration and port
+  protocols now use typed enums.
 - Newly created VM state directories and volume images are private by default
   (`0700` and `0600`).
 - Guest and control requests now have bounded memory use and concurrency.

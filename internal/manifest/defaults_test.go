@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/shazow/virtle/internal/units"
+	"github.com/shazow/virtle/units"
 )
 
 func TestDocumentWithDefaultsPreservesExplicitEmptyNetworks(t *testing.T) {

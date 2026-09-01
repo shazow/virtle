@@ -82,35 +82,31 @@ spec := &vm.Spec{
 	Shares: []vm.Share{{Tag: "src", HostPath: ".", GuestPath: "/workspace"}},
 	Memory: 2048 * units.Mebibyte,
 }
-b, err := qemu.New(qemu.Config{
+b := &qemu.Backend{
 	RemoteControl: qemu.QGA{},
 	Logger:        slog.Default(),
-})
+}
+m, err := b.Start(ctx, spec)
 if err != nil {
 	log.Fatal(err)
 }
-inst, err := b.Start(ctx, spec)
-if err != nil {
-	log.Fatal(err)
-}
-defer backend.Shutdown(ctx, inst)
+defer m.Shutdown(ctx)
 
-g, err := inst.RemoteControl()
+g, err := m.RemoteControl()
 if err != nil {
 	log.Fatal(err) // this VM has no guest agent
 }
-out, err := g.Run(ctx, &vm.GuestCmd{Path: "make", Dir: "/workspace"})
-fmt.Printf("exit=%d\n%s", out.ExitCode, out.Stdout)
+err = g.Run(ctx, &vm.GuestCmd{Path: "make", Dir: "/workspace", Stdout: os.Stdout})
 ```
 
 Optional functionality is discovered by type assertion, as in
 `database/sql/driver`:
 
 ```go
-if s, ok := b.(backend.Suspender); ok {
-	err = s.Suspend(ctx, inst, "")
+if s, ok := m.(backend.Suspender); ok {
+	err = s.Suspend(ctx)
 } else {
-	err = backend.Shutdown(ctx, inst)
+	err = m.Shutdown(ctx)
 }
 ```
 
@@ -118,7 +114,7 @@ Or drive it from a manifest, as the CLI does:
 
 ```go
 spec, b, err := manifest.Load(f)
-inst, err := b.Start(ctx, spec)
+m, err := b.Start(ctx, spec)
 ```
 
 ## License

@@ -282,11 +282,11 @@ func evaluate(
 		return 0, false, nil
 	}
 
-	minActualBytes := config.MinActual.Bytes()
-	maxActualBytes := config.MaxActual.Bytes()
-	stepBytes := config.Step.Bytes()
-	growBelowBytes := config.GrowBelowAvailable.Bytes()
-	reclaimAboveBytes := config.ReclaimAboveAvailable.Bytes()
+	minActualBytes := config.MinActual.Bytes().Int64()
+	maxActualBytes := config.MaxActual.Bytes().Int64()
+	stepBytes := config.Step.Bytes().Int64()
+	growBelowBytes := config.GrowBelowAvailable.Bytes().Int64()
+	reclaimAboveBytes := config.ReclaimAboveAvailable.Bytes().Int64()
 
 	if stats.AvailableMemoryBytes < growBelowBytes {
 		state.aboveThresholdSince = time.Time{}

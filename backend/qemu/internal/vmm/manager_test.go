@@ -35,7 +35,7 @@ import (
 	"github.com/shazow/virtle/internal/executor"
 	"github.com/shazow/virtle/internal/executor/executortest"
 	"github.com/shazow/virtle/internal/manifest"
-	"github.com/shazow/virtle/internal/units"
+	"github.com/shazow/virtle/units"
 )
 
 const (
@@ -819,7 +819,7 @@ func TestCreateVolumeImageCreatesNativeExt4(t *testing.T) {
 			if err != nil {
 				t.Fatalf("expected volume image to exist: %v", err)
 			}
-			if got, want := info.Size(), tt.sizeMiB.Bytes(); got != want {
+			if got, want := info.Size(), tt.sizeMiB.Bytes().Int64(); got != want {
 				t.Fatalf("unexpected volume size: got %d want %d", got, want)
 			}
 			if got, want := info.Mode().Perm(), os.FileMode(0o600); got != want {

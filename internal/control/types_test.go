@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/shazow/virtle/internal/units"
+	"github.com/shazow/virtle/units"
 )
 
 func TestDurationJSONRoundTrip(t *testing.T) {

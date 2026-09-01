@@ -138,7 +138,7 @@ func lookupUserIDs(name string) (int, int, error) {
 // CreateVolumeImage creates a volume image and optionally assigns the new file
 // to the host account configured for privilege-dropped QEMU.
 func CreateVolumeImage(volume manifest.Volume, runAsUser string) error {
-	sizeBytes := volume.Size.Bytes()
+	sizeBytes := volume.Size.Bytes().Int64()
 	file, err := createPrivateFile(volume.ImagePath, runAsUser)
 	if err != nil {
 		return fmt.Errorf("create volume image %q: %w", volume.ImagePath, err)

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/shazow/virtle/internal/units"
+	"github.com/shazow/virtle/units"
 )
 
 // RuntimeState is the lifecycle state reported by the control socket.

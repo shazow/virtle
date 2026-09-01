@@ -10,7 +10,7 @@ import (
 	"text/template/parse"
 	"time"
 
-	"github.com/shazow/virtle/internal/units"
+	"github.com/shazow/virtle/units"
 )
 
 const (

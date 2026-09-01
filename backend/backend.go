@@ -7,13 +7,11 @@
 //
 // There is deliberately no default backend: this package cannot import its
 // implementations without a cycle, so consumers always name their backend
-// explicitly (qemu.New(...)).
+// explicitly (for example, &qemu.Backend{}).
 package backend
 
 import (
 	"context"
-	"errors"
-
 	"github.com/shazow/virtle/units"
 	"github.com/shazow/virtle/vm"
 )
@@ -22,15 +20,18 @@ import (
 // (backend/qemu today; backend/firecracker, an in-process libkrun
 // backend, ... later).
 type Backend interface {
-	Start(ctx context.Context, spec *vm.Spec) (Instance, error)
+	Start(ctx context.Context, spec *vm.Spec) (Machine, error)
 }
 
-// Instance is a virtual machine started by a Backend. It deliberately says
+// Machine is a virtual machine started by a Backend. It deliberately says
 // nothing about processes, sockets, or protocols, so exec'd (QEMU) and
 // in-process (libkrun) backends satisfy it equally.
-type Instance interface {
+type Machine interface {
 	Wait(ctx context.Context) error // blocks until the VM exits
 	Kill() error                    // hard stop, always available
+	// Shutdown gracefully stops the machine, falling back to Kill when ctx
+	// expires. Implementations must make repeated calls safe.
+	Shutdown(ctx context.Context) error
 
 	// RemoteControl returns guest control for this instance, wired up by
 	// the backend, or an error wrapping errors.ErrUnsupported when the VM
@@ -41,11 +42,15 @@ type Instance interface {
 	RemoteControl() (vm.Guest, error)
 }
 
-// Suspender is implemented by backends that can save a running instance's
-// state to disk and later restore it.
+// Suspender is implemented by machines that can save their running state to
+// their state directory and stop.
 type Suspender interface {
-	Suspend(ctx context.Context, inst Instance, stateDir string) error
-	Resume(ctx context.Context, spec *vm.Spec, stateDir string) (Instance, error)
+	Suspend(ctx context.Context) error
+}
+
+// Resumer is implemented by backends that can restore a suspended machine.
+type Resumer interface {
+	Resume(ctx context.Context, spec *vm.Spec) (Machine, error)
 
 	// StateVersion reports the backend's suspend-state version token
 	// (e.g. "qemu-v1"). Saved state is stamped with it and compared
@@ -54,18 +59,18 @@ type Suspender interface {
 	StateVersion() string
 }
 
-// MemoryResizer is implemented by backends that can grow or shrink a
-// running instance's memory (e.g. virtio-balloon).
+// MemoryResizer is implemented by machines that can grow or shrink their
+// memory (e.g. virtio-balloon).
 type MemoryResizer interface {
-	ResizeMemory(ctx context.Context, inst Instance, size units.Bytes) error
+	ResizeMemory(ctx context.Context, size units.Bytes) error
 }
 
-// DeviceAttacher is implemented by backends that can attach and detach
-// devices on a running instance. vm.Device is the sealed union of
+// DeviceAttacher is implemented by machines that can attach and detach
+// devices. vm.Device is the sealed union of
 // vm.Share, vm.Disk, and vm.Forward — typed, not `any`.
 type DeviceAttacher interface {
-	Attach(ctx context.Context, inst Instance, dev vm.Device) error
-	Detach(ctx context.Context, inst Instance, dev vm.Device) error
+	Attach(ctx context.Context, dev vm.Device) error
+	Detach(ctx context.Context, dev vm.Device) error
 }
 
 // ConsoleProvider is implemented by instances whose backend exposes a
@@ -79,19 +84,7 @@ type ConsoleProvider interface {
 // attempted only when remote control is available (RemoteControl
 // succeeds); instances without it — and instances whose guest is
 // unreachable or whose context expires — are stopped with Kill.
-func Shutdown(ctx context.Context, inst Instance) error {
-	g, err := inst.RemoteControl()
-	if err != nil {
-		return inst.Kill()
-	}
-	if err := g.Shutdown(ctx); err != nil {
-		return inst.Kill()
-	}
-	if err := inst.Wait(ctx); err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return inst.Kill()
-		}
-		return err
-	}
-	return nil
+// Deprecated: call Machine.Shutdown directly.
+func Shutdown(ctx context.Context, m Machine) error {
+	return m.Shutdown(ctx)
 }

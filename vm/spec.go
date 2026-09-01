@@ -48,11 +48,19 @@ type Disk struct {
 	Size      units.Bytes // created at this size if the image is absent
 }
 
+// Proto is a port-forward transport protocol.
+type Proto string
+
+const (
+	TCP Proto = "tcp"
+	UDP Proto = "udp"
+)
+
 // Forward is a host<->guest port forward.
 type Forward struct {
-	HostAddr  string
-	GuestAddr string
-	Proto     string // defaults to "tcp"
+	HostAddr  string // "host:port" or ":port"; hostnames are allowed
+	GuestAddr string // "host:port" or ":port"; hostnames are allowed
+	Proto     Proto  // zero value means TCP
 }
 
 // File is a small file placed in the guest before the workload starts;
@@ -66,7 +74,7 @@ type File struct {
 }
 
 // Device is a device description that can be attached to a running
-// instance: Share, Disk, or Forward. It is sealed (unexported method) so
+// machine: Share, Disk, or Forward. It is sealed (unexported method) so
 // backend.DeviceAttacher stays typed rather than accepting `any`.
 type Device interface{ device() }
 

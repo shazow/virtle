@@ -51,6 +51,17 @@ func (d Duration) MarshalText() ([]byte, error) {
 	return []byte(time.Duration(d).String()), nil
 }
 
+// UnmarshalText decodes the duration grammar accepted by ParseDuration: a Go
+// duration string or a bare number of seconds.
+func (d *Duration) UnmarshalText(text []byte) error {
+	parsed, err := ParseDuration(string(text))
+	if err != nil {
+		return err
+	}
+	*d = parsed
+	return nil
+}
+
 func (d Duration) MarshalJSON() ([]byte, error) {
 	return json.Marshal(time.Duration(d).String())
 }

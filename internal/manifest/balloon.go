@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/shazow/virtle/internal/units"
+	"github.com/shazow/virtle/units"
 )
 
 const (

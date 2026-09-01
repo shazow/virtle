@@ -522,6 +522,96 @@ itself against `net.Pipe` — so the suite is kept honest without a VM and
 the fake is held to the same contract as QEMU.
 
 
+## 12. Cleanup while we are in there
+
+Surveyed with `golang.org/x/tools/cmd/deadcode` (with and without test
+roots), a scan for test-hygiene markers, and a read of the layering.
+Each cleanup rides with the item or roadmap step that already touches the
+same code; none is its own PR.
+
+**Dead code (analyzer-verified).**
+
+- `internal/control.Client`'s typed methods `Status`, `Methods`,
+  `Balloon`, `GuestPS`, `GuestExec`, `GuestRead`, `GuestWrite` are
+  unreachable from production: the CLI's `rpc` uses `Raw`, `vmm/control.go`
+  uses `Suspend`, and the rest are called only from `manager_test.go`'s
+  control-periphery tests. Delete them; those tests use `Raw` with the
+  request types. The roadmap's "public control client" is designed later,
+  against the `Machine` contract, not grown from these.
+- Test helpers unreachable even from tests: `manifestWritePath`,
+  `commandEnvAdditions`, `stringPtr`/`intPtr`/`boolPtr` in
+  `vmm/manager_test.go`; `commandArguments` in `qmpclient/qmp_test.go`.
+
+**Wrapper layers.**
+
+- `vmm` re-wraps `launch` for the SSH-era session: `vmm/ssh_ready.go` and
+  `vmm/ssh_autoprovision.go` sit over `launch/ssh_ready.go` and
+  `launch/ssh_autoprovision.go`, and both layers import `readiness` and
+  `sshtools`. These are exactly the files roadmap item 4 deletes with the
+  daemon; do not refactor them first. The same goes for the
+  `VIRTLE_SSH_READY_TIMEOUT` environment knob read inside library code
+  (`readiness.TimeoutFromEnv`): configuration by environment variable in
+  a library is a smell, and it becomes moot with the daemon handshake —
+  don't port it.
+- `vmm.VM` is a third handle layer (`qemu` machine → `vmm.VM` →
+  `running`/`launch`). Its QGA-specific methods, `DialGuestAgent` and
+  `ShutdownGuest`, have one caller each after item 4 (the QGA transport)
+  and belong inside it; the neutral machinery methods stay. Do not embed
+  `*vmm.VM` in the exported `qemu.Machine` (item 3): promotion would leak
+  `qga.Client` through `DialGuestAgent`.
+- Constructor and converter plumbing: `qemu.New` (item 3),
+  `NewBackendFromDocument` plus the `doc` overlay on the backend, and the
+  bidirectional converter pair `backend/qemu/spec.go` (Spec → Document,
+  249 lines) / `manifest.specFromDocument` (Document → Spec) all go with
+  manifest consolidation (item 10, roadmap item 1), which leaves one
+  lowering direction.
+- `session.Suspend`/`Hotplug`/`ExitCode` are one-line delegates to `vmm`
+  that exist only because `vmm` is internal; they go with roadmap item 4.
+  `backend.Shutdown` goes with item 2; `internal/units` with item 6.
+
+**Tests.** 19.7k test lines in the tree; `vmm/manager_test.go` (5,594
+lines, 95 tests, 14 fakes) and `internal/manifest/manifest_test.go`
+(2,777 lines) are 42% of them.
+
+- *Misplaced unit tests* in `manager_test.go`: `TestRemoveStaleSockets*`,
+  `TestCreateVolumeImage*`, `TestWaitForSockets*`, `TestAllocateCID*`
+  exercise `launch` functions and belong beside them; the twelve
+  `TestBuildQEMUCommand*` tests are argument-lowering unit tests for
+  `vmm/qemu.go` and belong in a `qemu_test.go` next to it. Move with
+  item 3, which reorganizes that package boundary.
+- *Session-layer tests the demolition deletes wholesale*: SSH readiness,
+  retry pacing, autoprovision, SIGUSR1 info, connect-hint printing
+  (`TestManagerLaunchStartsSSHOnceAfterReadiness`,
+  `…PacesSSHRetriesAndWarnsAfterFiveFailures`, `TestWaitForSSHReady*`,
+  `TestNewManagerUsesSSHReadyTimeoutEnv`,
+  `…AutoprovisionsSSHKeyAfterAuthFailure`, `…PrintsGuestInfoOnSIGUSR1`,
+  …). Delete with roadmap item 4; the rebuilt loop is tested against
+  `backendtest.Backend` (item 11), not by porting these.
+- *Bug-lock tests* that name a fixed defect rather than a behavior
+  (`TestManagerStartQEMUNilRunnerWrapsOnce`,
+  `TestNewManagerIgnoresInvalidSSHReadyTimeoutEnv`,
+  `…HandlesDuplicateSuspendDuringActiveSessionWithoutForwardingJobControl`):
+  AGENTS.md asks for evergreen tests of affirmative functionality — fold
+  each into the affirmative test of its feature, or delete it when the
+  feature goes.
+- *Duplicated fakes*: `fakeQMPDialer`, `fakeGuestAgentDialer`,
+  `fakeGuestAgentClient`, `fakeSSHReadyDialer`, and `fakePIDSignaler` are
+  each defined in both `vmm/manager_test.go` and `launch/*_test.go`;
+  `fakeControlCore` in both `internal/control` and `vmm`. Consolidate into
+  one doubles package per seam, the way `executortest` already serves the
+  process seam — the same discipline as item 11's tier 2.
+- `manifest_test.go`'s QEMU-section tests (`TestManifestValidatesQEMU*`,
+  `TestKernelSerialModesResolveToQEMUConsole`,
+  `TestDocumentImageMountFormatResolvesToQEMU`) move with the `[qemu]`
+  resolution under consolidation; note only.
+
+**Checked and kept.** `executortest` (flagged by the analyzer only because
+it is test-only; 15 test files use it); the manifest test case named
+"legacy working dir" (it covers the zero-value `RuntimeDir` mode, not a
+compatibility shim); `vmm.StartVM` (the library path's entry point,
+unreachable only from `main`).
+
+
 ## Sequencing
 
 All items are breaking, which is acceptable pre-v1; each lands separately
@@ -538,3 +628,6 @@ with `go build ./... && go test ./... && nix flake check` green.
    the session rebuild that consumes it; tier 1 (the opt-in conformance
    run) lands with the flake integration check extension, or earlier as
    insurance for a second backend.
+6. Item 12 has no step of its own: each cleanup lands inside the item or
+   roadmap step that touches the same code, and the session-era tests are
+   deleted, not ported, when roadmap item 4 removes their subject.

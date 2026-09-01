@@ -144,10 +144,12 @@ them the overlap period.
 
 Explicitly deferred, none blocking:
 
-- The control socket's `guest-*` methods duplicate what `guest.Dial`
-  offers; decide whether the socket keeps proxying guest operations or
-  narrows to host-session concerns.
-- Promotion of a public Go client for the control socket.
+- The control socket serves the `backend.Machine` contract
+  (improvements.md item 13): `control.Dial` returns a `Machine`, which is
+  also the public control client. Once the daemon exists, the proxy's
+  `RemoteControl()` hands off to a client dialed straight to the daemon,
+  so `guest-*` proxying ends and the socket narrows to host-session
+  concerns without a wire break.
 - On-disk state relocation, if any (lock and socket paths deliberately
   stayed put so concurrent old/new invocations exclude each other).
 - Hoisting a shared session/orchestration skeleton — only when a second

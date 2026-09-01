@@ -5,6 +5,13 @@ substantial internal changes get a line. Include diffs or before/after examples
 when illustrative of the change. Focus on capabilities instead of implementation
 details.
 
+## 2026-09-01
+
+- Managed QEMU and helper commands now terminate their entire process group,
+  preventing wrappers from leaving descendant processes behind during normal
+  shutdown or forced teardown. Interactive QEMU consoles retain their existing
+  foreground process-group behavior.
+
 ## 2026-08-31
 
 - QEMU guest-agent connections now synchronize the command stream before use,

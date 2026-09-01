@@ -15,8 +15,9 @@ const DefaultGracePeriod = 15 * time.Second
 
 // Process tracks a process lifecycle and caches its wait result.
 type Process struct {
-	handle RunningProcess
-	done   chan struct{}
+	handle           RunningProcess
+	done             chan struct{}
+	ownsProcessGroup bool
 
 	shutdown    func() error
 	gracePeriod time.Duration
@@ -25,9 +26,14 @@ type Process struct {
 
 // Wrap starts tracking completion for an already-running process handle.
 func Wrap(handle RunningProcess) *Process {
+	return wrap(handle, false)
+}
+
+func wrap(handle RunningProcess, ownsProcessGroup bool) *Process {
 	p := &Process{
-		handle: handle,
-		done:   make(chan struct{}),
+		handle:           handle,
+		done:             make(chan struct{}),
+		ownsProcessGroup: ownsProcessGroup,
 	}
 	go func() {
 		if handle != nil {
@@ -64,12 +70,20 @@ func (p *Process) Signal(sig os.Signal) error {
 	if p == nil || p.handle == nil {
 		return nil
 	}
+	if p.ownsProcessGroup {
+		if signal, ok := sig.(syscall.Signal); ok {
+			return SignalProcessGroup(p.PID(), signal)
+		}
+	}
 	return p.handle.Signal(sig)
 }
 
 func (p *Process) Kill() error {
 	if p == nil || p.handle == nil {
 		return nil
+	}
+	if p.ownsProcessGroup {
+		return SignalProcessGroup(p.PID(), syscall.SIGKILL)
 	}
 	return p.handle.Kill()
 }
@@ -217,12 +231,13 @@ func (p *Process) KillAndWait() error {
 	return nil
 }
 
-// SignalProcessGroup signals pid's process group, falling back to pid itself.
+// SignalProcessGroup signals pid's process group. If that group does not
+// exist, or cannot be signaled, it falls back to signaling pid itself.
 func SignalProcessGroup(pid int, sig syscall.Signal) error {
 	if pid <= 0 {
 		return nil
 	}
-	if err := syscall.Kill(-pid, sig); err == nil || errors.Is(err, syscall.ESRCH) {
+	if err := syscall.Kill(-pid, sig); err == nil {
 		return nil
 	}
 	if err := syscall.Kill(pid, sig); err != nil && !errors.Is(err, syscall.ESRCH) {

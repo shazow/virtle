@@ -73,7 +73,8 @@ func (r *Runner) Start(cmd *exec.Cmd) (*Process, error) {
 		return nil, fmt.Errorf("start %s: %w", handle.Name(), err)
 	}
 
-	return Wrap(handle), nil
+	ownsProcessGroup := cmd.SysProcAttr != nil && cmd.SysProcAttr.Setpgid && cmd.SysProcAttr.Pgid == 0
+	return wrap(handle, ownsProcessGroup), nil
 }
 
 type execCmdHandle struct {

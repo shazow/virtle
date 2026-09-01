@@ -58,6 +58,7 @@ func StartVM(ctx context.Context, mf *manifest.Manifest, options StartOptions, c
 			return nil, errors.Join(err, v.Close())
 		}
 	}
+	v.watchExit()
 	return v, nil
 }
 
@@ -152,6 +153,54 @@ type VM struct {
 
 	closeOnce sync.Once
 	closeErr  error
+
+	// Exit tracking for library starts (StartVM): done is closed once the
+	// QEMU process has exited and runtime state is released, with the
+	// outcome in exitErr. teardownMu serializes the exit watcher against
+	// Suspend, whose bookkeeping must precede the teardown it triggers.
+	done       chan struct{}
+	exitErr    error
+	teardownMu sync.Mutex
+}
+
+// watchExit reaps the QEMU process exit in the background, releasing
+// runtime state and closing Done. Session VMs (StartSessionVM) leave the
+// reaping to RunSession and do not call it.
+func (v *VM) watchExit() {
+	v.done = make(chan struct{})
+	qemu := v.running.processes.QEMU()
+	if qemu == nil {
+		v.exitErr = errors.New("vm process is not running")
+		close(v.done)
+		return
+	}
+	go func() {
+		defer close(v.done)
+		waitErr := qemu.Wait()
+		v.teardownMu.Lock()
+		defer v.teardownMu.Unlock()
+		// Teardown is once-only, so a Close, Kill, or Suspend that already
+		// ran (and may have caused this exit) is not repeated; a VM that
+		// exited by itself still needs its sockets, lock, and helper
+		// processes cleaned up.
+		v.exitErr = errors.Join(waitErr, v.close())
+	}()
+}
+
+// Done returns a channel closed once the VM has exited and its runtime
+// state is released; Err reports the outcome afterwards. Only VMs from
+// StartVM track exit this way.
+func (v *VM) Done() <-chan struct{} { return v.done }
+
+// Err returns the VM's exit error (nil for a clean exit) once Done is
+// closed, and nil before then.
+func (v *VM) Err() error {
+	select {
+	case <-v.done:
+		return v.exitErr
+	default:
+		return nil
+	}
 }
 
 // Wait blocks until the VM exits (or ctx is done), then releases runtime
@@ -159,6 +208,14 @@ type VM struct {
 // helper processes cleaned up, so Wait performs the teardown before
 // returning.
 func (v *VM) Wait(ctx context.Context) error {
+	if v.done != nil {
+		select {
+		case <-v.done:
+			return v.exitErr
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		}
+	}
 	qemu := v.running.processes.QEMU()
 	if qemu == nil {
 		return errors.New("vm process is not running")
@@ -227,6 +284,11 @@ func (v *VM) ShutdownGuest(ctx context.Context) error {
 // The VM is not usable afterwards; resume with StartVM and
 // ResumeModeForce.
 func (v *VM) Suspend(ctx context.Context) error {
+	// Hold the exit watcher off: QEMU may exit as the migration completes,
+	// and the saved-suspend mark must be in place before teardown decides
+	// whether to write guest files back.
+	v.teardownMu.Lock()
+	defer v.teardownMu.Unlock()
 	plan := v.running.plan
 	if err := v.m.saveSuspendStateConnected(ctx, plan.Paths.QMPSocket, v.running.qmp, plan.CID, plan.Notifier); err != nil {
 		return err

@@ -48,6 +48,11 @@ user-visible outcomes.
   `TermType`; `vm.CopyOptions` takes `Chown bool` with plain `UID`/`GID`
   instead of pointers.
 
+- **Library API.** `backend.Instance` exposes exit the way a `context.Context`
+  does: `Done()` is selectable and `Err()` reports the outcome once it is
+  closed, so callers can `select` over VM exit, signals, and their own events
+  without a goroutine per waiter. `Wait` remains as the blocking sugar.
+
 - Newly created VM state directories and volume images are private by default
   (`0700` and `0600`).
 - Guest and control requests now have bounded memory use and concurrency.

@@ -216,8 +216,15 @@ func newInstance(handle *vmm.VM, hasRemoteControl bool) *Instance {
 	return &Instance{vm: handle, hasRemoteControl: hasRemoteControl}
 }
 
-// Wait blocks until the VM exits (or ctx is done), then releases runtime
-// state.
+// Done returns a channel closed once the VM has exited and its runtime
+// state is released; Err reports the outcome afterwards.
+func (i *Instance) Done() <-chan struct{} { return i.vm.Done() }
+
+// Err returns the VM's exit error, valid once Done is closed: nil for a
+// clean exit, otherwise the process exit status or teardown error.
+func (i *Instance) Err() error { return i.vm.Err() }
+
+// Wait blocks until Done is closed (or ctx is done) and returns Err.
 func (i *Instance) Wait(ctx context.Context) error { return i.vm.Wait(ctx) }
 
 // Kill hard-stops the VM immediately and releases runtime state, skipping

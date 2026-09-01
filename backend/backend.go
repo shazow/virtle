@@ -31,12 +31,27 @@ type Backend interface {
 // nothing about processes, sockets, or protocols, so exec'd (QEMU) and
 // in-process (libkrun) backends satisfy it equally.
 //
-// Teardown follows net/http's Server: Shutdown is the graceful stop, Kill
-// the hard one, and both release the instance's runtime state. Wait reaps
-// an instance that exits on its own.
+// Exit is observable the way a context.Context is: Done is selectable,
+// Err reports the outcome once Done is closed, and Wait is the blocking
+// sugar over both. Teardown follows net/http's Server: Shutdown is the
+// graceful stop, Kill the hard one, and both release the instance's
+// runtime state.
+//
+//	select {
+//	case <-inst.Done():
+//		err := inst.Err()
+//	case <-sig:
+//		inst.Shutdown(ctx)
+//	}
 type Instance interface {
-	// Wait blocks until the VM exits (or ctx is done) and releases the
-	// instance's runtime state.
+	// Done returns a channel closed once the VM has exited and the
+	// instance's runtime state is released.
+	Done() <-chan struct{}
+	// Err returns the exit error, valid once Done is closed: nil for a
+	// clean exit. Before Done is closed it returns nil.
+	Err() error
+	// Wait blocks until Done is closed (or ctx is done) and returns Err,
+	// or ctx's error if ctx ended first.
 	Wait(ctx context.Context) error
 	// Kill stops the VM immediately. It is always available.
 	Kill() error

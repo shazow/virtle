@@ -13,6 +13,8 @@ type shutdownRecorder struct {
 	shutdowns int
 }
 
+func (i *shutdownRecorder) Done() <-chan struct{}            { return nil }
+func (i *shutdownRecorder) Err() error                       { return nil }
 func (i *shutdownRecorder) Wait(ctx context.Context) error   { return nil }
 func (i *shutdownRecorder) Kill() error                      { return nil }
 func (i *shutdownRecorder) RemoteControl() (vm.Guest, error) { return nil, nil }

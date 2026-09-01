@@ -1518,13 +1518,13 @@ func TestManagerMountsWorkspaceCWD(t *testing.T) {
 		{
 			path:          "install",
 			args:          []string{"-d", "/home/agent/workspace", "/home/agent/workspace/agentspace"},
-			env:           []string{guestInternalCommandPathEnv},
+			env:           []string{qga.InternalCommandPathEnv},
 			captureOutput: true,
 		},
 		{
 			path:          "mount",
 			args:          []string{"--bind", "/mnt/cwd", "/home/agent/workspace/agentspace"},
-			env:           []string{guestInternalCommandPathEnv},
+			env:           []string{qga.InternalCommandPathEnv},
 			captureOutput: true,
 		},
 	}
@@ -1612,13 +1612,13 @@ func TestManagerLaunchWritesGuestFilesBeforeSSHSession(t *testing.T) {
 		{
 			path:          guestChownPath,
 			args:          []string{"agent:users", "/etc/virtle/inline"},
-			env:           []string{guestInternalCommandPathEnv},
+			env:           []string{qga.InternalCommandPathEnv},
 			captureOutput: true,
 		},
 		{
 			path:          guestChmodPath,
 			args:          []string{"0640", "/etc/virtle/inline"},
-			env:           []string{guestInternalCommandPathEnv},
+			env:           []string{qga.InternalCommandPathEnv},
 			captureOutput: true,
 		},
 		guestDirInstallCall(t, "/var/lib/virtle", "", ""),
@@ -1990,7 +1990,7 @@ func TestManagerLaunchRunsGuestDirectoryInstallScript(t *testing.T) {
 		{
 			path:          guestChownPath,
 			args:          []string{"agent:users", "/etc/virtle/inline"},
-			env:           []string{guestInternalCommandPathEnv},
+			env:           []string{qga.InternalCommandPathEnv},
 			captureOutput: true,
 		},
 	}; !reflect.DeepEqual(got, want) {
@@ -2048,7 +2048,7 @@ func TestManagerLaunchSkipsGuestFileWhenOverwriteFalseAndPathExists(t *testing.T
 		{
 			path:          guestTestPath,
 			args:          []string{"-e", "/etc/virtle/existing"},
-			env:           []string{guestInternalCommandPathEnv},
+			env:           []string{qga.InternalCommandPathEnv},
 			captureOutput: true,
 		},
 	}; !reflect.DeepEqual(got, want) {
@@ -2113,13 +2113,13 @@ func TestManagerLaunchCreatesAllMissingGuestParentDirectoriesWithOwnerAndMode(t 
 		{
 			path:          guestChownPath,
 			args:          []string{"agent:users", "/etc/virtle/nested/new"},
-			env:           []string{guestInternalCommandPathEnv},
+			env:           []string{qga.InternalCommandPathEnv},
 			captureOutput: true,
 		},
 		{
 			path:          guestChmodPath,
 			args:          []string{"0640", "/etc/virtle/nested/new"},
-			env:           []string{guestInternalCommandPathEnv},
+			env:           []string{qga.InternalCommandPathEnv},
 			captureOutput: true,
 		},
 	}; !reflect.DeepEqual(got, want) {
@@ -2177,7 +2177,7 @@ func TestManagerLaunchWritesGuestFileWhenOverwriteFalseAndPathMissing(t *testing
 		{
 			path:          guestTestPath,
 			args:          []string{"-e", "/etc/virtle/new"},
-			env:           []string{guestInternalCommandPathEnv},
+			env:           []string{qga.InternalCommandPathEnv},
 			captureOutput: true,
 		},
 		guestDirInstallCall(t, "/etc/virtle", "", ""),
@@ -2244,7 +2244,7 @@ func TestManagerLaunchFailsOnGuestFileChownFailure(t *testing.T) {
 		{
 			path:          guestChownPath,
 			args:          []string{"agent:users", "/etc/inline"},
-			env:           []string{guestInternalCommandPathEnv},
+			env:           []string{qga.InternalCommandPathEnv},
 			captureOutput: true,
 		},
 	}; !reflect.DeepEqual(got, want) {
@@ -4886,7 +4886,7 @@ func guestDirInstallCall(t *testing.T, guestDir string, owner string, mode strin
 		call = guestExecCall{
 			path:          path,
 			args:          args,
-			env:           []string{guestInternalCommandPathEnv},
+			env:           []string{qga.InternalCommandPathEnv},
 			captureOutput: true,
 		}
 		captured = true

@@ -178,10 +178,6 @@ const (
 	guestMountPath   = "mount"
 	guestPSPath      = "ps"
 	guestTestPath    = "test"
-
-	// Default PATH to use to find the commands above, should cover common distros like busybox/alpine, debian/ubuntu, nixos/guix, etc.
-	// TODO: Add some way for users to bring their own path, or better yet: preload guest's default PATH and prefix it here.
-	guestInternalCommandPathEnv = "PATH=/bin:/usr/bin:/run/current-system/sw/bin:/run/current-system/profile/bin"
 )
 
 func (m *manager) mountWorkspaceCWD(ctx context.Context, client qga.Client) error {
@@ -213,7 +209,7 @@ func (m *manager) installGuestFileDirectory(ctx context.Context, client qga.Clie
 }
 
 func (m *manager) guestPathExists(ctx context.Context, client qga.Client, guestPath string) (bool, error) {
-	status, err := m.runGuestCommandStatus(ctx, client, "test -e", guestTestPath, []string{"-e", guestPath}, []string{guestInternalCommandPathEnv}, guestPath)
+	status, err := m.runGuestCommandStatus(ctx, client, "test -e", guestTestPath, []string{"-e", guestPath}, []string{qga.InternalCommandPathEnv}, guestPath)
 	if err != nil {
 		return false, err
 	}
@@ -244,7 +240,7 @@ func (m *manager) chmodGuestFile(ctx context.Context, client qga.Client, guestPa
 }
 
 func (m *manager) runGuestFileCommand(ctx context.Context, client qga.Client, name string, path string, args []string, guestPath string) error {
-	status, err := m.runGuestCommandStatus(ctx, client, name, path, args, []string{guestInternalCommandPathEnv}, guestPath)
+	status, err := m.runGuestCommandStatus(ctx, client, name, path, args, []string{qga.InternalCommandPathEnv}, guestPath)
 	if err != nil {
 		return err
 	}

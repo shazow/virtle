@@ -7,6 +7,9 @@ details.
 
 ## 2026-09-01
 
+- `Guest.Create` now reports guest-side mode-setting failures from `Close` and
+  resolves `chmod` through Virtle's distribution-independent guest command
+  path.
 - Updated the SSH implementation to `golang.org/x/crypto` v0.52.0, which
   bounds pathological RSA and DSA public-key parameters during parsing. CI now
   scans all Go packages for reachable known vulnerabilities on every change.

@@ -7,6 +7,9 @@ details.
 
 ## 2026-09-01
 
+- Updated the SSH implementation to `golang.org/x/crypto` v0.52.0, which
+  bounds pathological RSA and DSA public-key parameters during parsing. CI now
+  scans all Go packages for reachable known vulnerabilities on every change.
 - Editing device slices on a `Spec` loaded from a manifest now authoritatively
   replaces the loaded shares, disks, host port forwards, and inline guest files
   by slice position. Removing or appending entries is reflected at launch,

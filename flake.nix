@@ -51,7 +51,7 @@
           pkgs = nixpkgs.legacyPackages.${system};
           guestInit = pkgs.writeScript "virtle-integration-init" ''
             #!${pkgs.busybox}/bin/sh
-            export PATH=${pkgs.busybox}/bin:${pkgs.qemu}/bin
+            export PATH=${pkgs.busybox}/bin:${pkgs.qemu.ga}/bin
             mkdir -p /bin /dev /proc /sys /tmp /var/run
             mount -t devtmpfs devtmpfs /dev
             mount -t proc proc /proc
@@ -59,7 +59,10 @@
             ln -s ${pkgs.busybox}/bin/sh /bin/sh
             ln -s ${pkgs.busybox}/bin/true /bin/true
             ln -s ${pkgs.busybox}/bin/false /bin/false
-            ${pkgs.qemu}/bin/qemu-ga -m virtio-serial -p /dev/virtio-ports/org.qemu.guest_agent.0 &
+            while [ ! -e /dev/virtio-ports/org.qemu.guest_agent.0 ]; do
+              ${pkgs.busybox}/bin/sleep 0.01
+            done
+            ${pkgs.qemu.ga}/bin/qemu-ga -m virtio-serial -p /dev/virtio-ports/org.qemu.guest_agent.0 &
             while true; do
               ${pkgs.busybox}/bin/sleep 3600
             done

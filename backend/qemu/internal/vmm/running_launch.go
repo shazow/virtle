@@ -26,7 +26,7 @@ func (r *runningLaunch) Close() error {
 	if r == nil || r.runtime == nil {
 		return nil
 	}
-	return r.runtime.Close()
+	return r.runtime.Shutdown(context.Background())
 }
 
 func (m *manager) waitForRunningLaunch(ctx context.Context, running *runningLaunch, session SessionOptions) error {

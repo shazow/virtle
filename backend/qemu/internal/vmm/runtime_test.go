@@ -190,7 +190,7 @@ func TestRuntimeStartControlServesStatus(t *testing.T) {
 		t.Fatalf("start control: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := runtime.Close(); err != nil {
+		if err := runtime.Shutdown(context.Background()); err != nil {
 			t.Errorf("runtime close: %v", err)
 		}
 	})
@@ -234,7 +234,7 @@ func TestRuntimeMarkSavedSuspendSkipsCloseWriteBack(t *testing.T) {
 	})
 
 	runtime.MarkSavedSuspend()
-	if err := runtime.Close(); err != nil {
+	if err := runtime.Shutdown(context.Background()); err != nil {
 		t.Fatalf("close: %v", err)
 	}
 	if writeBackCalls != 0 {
@@ -263,10 +263,10 @@ func TestRuntimeCloseStopsProcessesAndDisconnectsQMPOnce(t *testing.T) {
 		Logger:           slog.New(slog.DiscardHandler),
 	})
 
-	if err := runtime.Close(); err != nil {
+	if err := runtime.Shutdown(context.Background()); err != nil {
 		t.Fatalf("first close: %v", err)
 	}
-	if err := runtime.Close(); err != nil {
+	if err := runtime.Shutdown(context.Background()); err != nil {
 		t.Fatalf("second close: %v", err)
 	}
 	if got, want := qmp.disconnectCalls, 1; got != want {

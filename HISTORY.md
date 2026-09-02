@@ -6,6 +6,50 @@ user-visible outcomes.
 
 ## 2026-09-01
 
+### Migrating from v0.3
+
+Construct QEMU with `&qemu.Backend{}` instead of `qemu.New(qemu.Config{})`.
+`backend.Instance` is now `backend.Machine`; shutdown and live capabilities
+such as suspend, memory resize, and device attach are methods of that machine.
+Resume remains a backend capability through `backend.Resumer`. Guest commands
+now stream through `GuestCmd` writers and return non-zero status as
+`*vm.ExitError`; use `vm.Output` when buffered stdout is more convenient.
+
+```diff
+-kvm := false
+-b, err := qemu.New(qemu.Config{
+-    Machine:       "microvm",
+-    KVM:           &kvm,
++b := &qemu.Backend{
++    MachineType:   "microvm",
++    Accel:         qemu.AccelTCG,
+     RemoteControl: qemu.QGA{},
+-})
+-inst, err := b.Start(ctx, spec)
+-defer backend.Shutdown(ctx, inst)
++}
++m, err := b.Start(ctx, spec)
++defer m.Shutdown(ctx)
+
+-guest, err := inst.RemoteControl()
+-result, err := guest.Run(ctx, &vm.GuestCmd{Path: "make"})
+-fmt.Print(result.Stdout)
++guest, err := m.RemoteControl()
++err = guest.Run(ctx, &vm.GuestCmd{Path: "make", Stdout: os.Stdout})
+
+-if s, ok := b.(backend.Suspender); ok {
+-    err = s.Suspend(ctx, inst, "")
++if s, ok := m.(backend.Suspender); ok {
++    err = s.Suspend(ctx)
+ }
+```
+
+Additional source migrations: `qemu.Config.Machine` is
+`qemu.Backend.MachineType`; `Config.KVM` is the `Backend.Accel` enum;
+`vm.Forward.Proto` is a `vm.Proto`; `vm.TermOptions.TERM` is `TermType`; and
+setting ownership in `vm.CopyOptions` now requires `Chown: true` alongside
+integer `UID` and `GID` fields.
+
 - The library backend contract now exposes `Machine` handles with graceful
   shutdown and live-object capabilities; QEMU is configured directly through
   the exported, zero-value-usable `qemu.Backend` type.

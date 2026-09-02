@@ -89,7 +89,7 @@ func (r *Core) Kill(ctx context.Context, req control.KillRequest) (control.KillR
 	if r.processes != nil && r.processes.QEMU() != nil {
 		err = r.processes.QEMU().KillAndWait()
 	}
-	return control.KillResponse{}, errors.Join(err, r.Close())
+	return control.KillResponse{}, errors.Join(err, r.Shutdown(context.Background()))
 }
 
 func (r *Core) ShutdownRPC(ctx context.Context, req control.ShutdownRequest) (control.ShutdownResponse, error) {
@@ -97,12 +97,8 @@ func (r *Core) ShutdownRPC(ctx context.Context, req control.ShutdownRequest) (co
 	return control.ShutdownResponse{}, r.Shutdown(ctx)
 }
 
-func (r *Core) Close() error {
-	return r.Shutdown(context.Background())
-}
-
 func (r *Core) Shutdown(ctx context.Context) error {
-	return r.closer.CloseContext(ctx, closeActions{
+	return r.closer.Close(ctx, closeActions{
 		shutdownResources: shutdownResources{
 			Processes: r.processes,
 			QMP:       r.qmp,

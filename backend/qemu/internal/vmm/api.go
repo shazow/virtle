@@ -61,7 +61,7 @@ func StartVM(ctx context.Context, mf *manifest.Manifest, options StartOptions, c
 	// and call CommitResume once their foreground process is established.
 	if !options.DeferResumeCommit {
 		if err := v.CommitResume(); err != nil {
-			return nil, errors.Join(err, v.Close())
+			return nil, errors.Join(err, v.Shutdown(context.Background()))
 		}
 	}
 	return v, nil
@@ -85,29 +85,6 @@ func (m *manager) startVM(ctx context.Context, spec launch.Spec) (*VM, error) {
 	return newVM(m, running), nil
 }
 
-// StartSessionVM starts a VM with CLI session semantics: the session
-// options participate in preflight validation (an --ssh launch against a
-// manifest with no ssh.exec fails before anything boots), and process
-// signal handlers are installed unless Config.Signals overrides them. It
-// is the bridge the CLI reaches through backend/qemu; pair it with
-// RunSession.
-func StartSessionVM(ctx context.Context, mf *manifest.Manifest, options StartOptions, session SessionOptions, configs ...Config) (*VM, error) {
-	config := DefaultConfig()
-	if len(configs) > 0 {
-		config = mergeConfig(config, configs[0])
-	}
-	m := newManagerFromConfig(config)
-	return m.startVM(ctx, launch.Spec{Manifest: mf, RemoteCommand: session.RemoteCommand, Options: launch.Options{
-		Resume:           options.Resume,
-		SSH:              session.SSH,
-		HasRemoteControl: true, // CLI guests are expected to run qemu-guest-agent
-	}})
-}
-
-// IsSavedSuspendExit reports whether err is the sentinel for a launch that
-// ended by saving a suspend — a success for session purposes.
-func IsSavedSuspendExit(err error) bool { return launch.IsSavedSuspendExit(err) }
-
 // SessionOptions configures the CLI foreground session on a started VM.
 type SessionOptions struct {
 	SSH           bool      // attach the interactive SSH session loop
@@ -126,7 +103,7 @@ func RunSession(ctx context.Context, v *VM, opts SessionOptions) (err error) {
 	m, running := v.m, v.running
 	plan := running.plan
 	if opts.SSH && len(plan.Manifest.SSH.Argv) == 0 {
-		return errors.Join(fmt.Errorf("--ssh requires a non-empty manifest.ssh.exec"), v.Close())
+		return errors.Join(fmt.Errorf("--ssh requires a non-empty manifest.ssh.exec"), v.Shutdown(context.Background()))
 	}
 	plan.RemoteCommand = append([]string(nil), opts.RemoteCommand...)
 	defer func() {
@@ -208,14 +185,6 @@ func (v *VM) Kill() error {
 		killErr = qemu.KillAndWait()
 	}
 	return errors.Join(killErr, v.close())
-}
-
-// Close gracefully tears the VM down: guest shutdown, then QMP quit, then
-// signals, then runtime cleanup. The graceful guest shutdown is attempted
-// only when the VM has remote control; without it teardown goes straight
-// to QMP quit. Safe to call more than once.
-func (v *VM) Close() error {
-	return v.close()
 }
 
 // Shutdown gracefully tears the VM down within ctx, escalating process

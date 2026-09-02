@@ -12,14 +12,7 @@ import (
 	"github.com/shazow/virtle/backend/qemu/internal/qga"
 	controlpkg "github.com/shazow/virtle/internal/control"
 	"github.com/shazow/virtle/internal/executor"
-	"github.com/shazow/virtle/internal/manifest"
 )
-
-func Hotplug(ctx context.Context, manifest *manifest.Manifest, id string, detach bool) error {
-	m := newManager()
-	m.launchManifest = manifest
-	return m.hotplug(ctx, id, detach)
-}
 
 func (m *manager) hotplug(ctx context.Context, id string, detach bool) error {
 	launchManifest := m.launchManifest

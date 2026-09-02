@@ -1,4 +1,5 @@
-// Package backendtest provides backend conformance tests and in-memory doubles.
+// Package backendtest provides backend conformance tests and an in-memory
+// backend factory for unit tests.
 package backendtest
 
 import (
@@ -11,30 +12,35 @@ import (
 	"github.com/shazow/virtle/vm/vmtest"
 )
 
-// Backend is an in-memory backend whose machines start immediately.
-type Backend struct {
-	Guest *vmtest.Guest
+type memoryBackend struct {
+	guest *vmtest.Guest
 }
 
-func (b *Backend) Start(ctx context.Context, spec *vm.Spec) (backend.Machine, error) {
+// NewMemoryBackend returns an in-memory backend whose machines start
+// immediately and use guest for remote control. A nil guest creates an empty
+// vmtest.Guest for each machine.
+func NewMemoryBackend(guest *vmtest.Guest) backend.Backend {
+	return &memoryBackend{guest: guest}
+}
+
+func (b *memoryBackend) Start(ctx context.Context, spec *vm.Spec) (backend.Machine, error) {
 	if err := context.Cause(ctx); err != nil {
 		return nil, err
 	}
-	g := b.Guest
+	g := b.guest
 	if g == nil {
 		g = &vmtest.Guest{}
 	}
-	return &Machine{guest: g, spec: spec, done: make(chan struct{}), state: backend.StateReady}, nil
+	return &memoryMachine{guest: g, spec: spec, done: make(chan struct{}), state: backend.StateReady}, nil
 }
 
-func (b *Backend) Resume(ctx context.Context, spec *vm.Spec) (backend.Machine, error) {
+func (b *memoryBackend) Resume(ctx context.Context, spec *vm.Spec) (backend.Machine, error) {
 	return b.Start(ctx, spec)
 }
 
-func (*Backend) StateVersion() string { return "backendtest-v1" }
+func (*memoryBackend) StateVersion() string { return "backendtest-v1" }
 
-// Machine is an in-memory backend.Machine.
-type Machine struct {
+type memoryMachine struct {
 	guest *vmtest.Guest
 	spec  *vm.Spec
 	done  chan struct{}
@@ -47,15 +53,15 @@ type Machine struct {
 	devices []vm.Device
 }
 
-func (m *Machine) Done() <-chan struct{} { return m.done }
+func (m *memoryMachine) Done() <-chan struct{} { return m.done }
 
-func (m *Machine) Err() error {
+func (m *memoryMachine) Err() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.err
 }
 
-func (m *Machine) Wait(ctx context.Context) error {
+func (m *memoryMachine) Wait(ctx context.Context) error {
 	select {
 	case <-m.done:
 		return m.Err()
@@ -64,7 +70,7 @@ func (m *Machine) Wait(ctx context.Context) error {
 	}
 }
 
-func (m *Machine) stop(err error) {
+func (m *memoryMachine) stop(err error) {
 	m.once.Do(func() {
 		m.mu.Lock()
 		m.err = err
@@ -74,12 +80,12 @@ func (m *Machine) stop(err error) {
 	})
 }
 
-func (m *Machine) Kill() error {
+func (m *memoryMachine) Kill() error {
 	m.stop(nil)
 	return nil
 }
 
-func (m *Machine) Shutdown(ctx context.Context) error {
+func (m *memoryMachine) Shutdown(ctx context.Context) error {
 	if err := context.Cause(ctx); err != nil {
 		m.stop(err)
 		return err
@@ -89,7 +95,7 @@ func (m *Machine) Shutdown(ctx context.Context) error {
 	return err
 }
 
-func (m *Machine) Suspend(ctx context.Context) error {
+func (m *memoryMachine) Suspend(ctx context.Context) error {
 	if err := context.Cause(ctx); err != nil {
 		return err
 	}
@@ -97,7 +103,7 @@ func (m *Machine) Suspend(ctx context.Context) error {
 	return nil
 }
 
-func (m *Machine) ResizeMemory(ctx context.Context, size units.Bytes) error {
+func (m *memoryMachine) ResizeMemory(ctx context.Context, size units.Bytes) error {
 	if err := context.Cause(ctx); err != nil {
 		return err
 	}
@@ -107,7 +113,7 @@ func (m *Machine) ResizeMemory(ctx context.Context, size units.Bytes) error {
 	return nil
 }
 
-func (m *Machine) Attach(ctx context.Context, dev vm.Device) error {
+func (m *memoryMachine) Attach(ctx context.Context, dev vm.Device) error {
 	if err := context.Cause(ctx); err != nil {
 		return err
 	}
@@ -117,7 +123,7 @@ func (m *Machine) Attach(ctx context.Context, dev vm.Device) error {
 	return nil
 }
 
-func (m *Machine) Detach(ctx context.Context, dev vm.Device) error {
+func (m *memoryMachine) Detach(ctx context.Context, dev vm.Device) error {
 	if err := context.Cause(ctx); err != nil {
 		return err
 	}
@@ -132,9 +138,9 @@ func (m *Machine) Detach(ctx context.Context, dev vm.Device) error {
 	return nil
 }
 
-func (m *Machine) RemoteControl() (vm.Guest, error) { return m.guest, nil }
+func (m *memoryMachine) RemoteControl() (vm.Guest, error) { return m.guest, nil }
 
-func (m *Machine) Status(ctx context.Context) (backend.Status, error) {
+func (m *memoryMachine) Status(ctx context.Context) (backend.Status, error) {
 	if err := context.Cause(ctx); err != nil {
 		return backend.Status{}, err
 	}
@@ -144,11 +150,11 @@ func (m *Machine) Status(ctx context.Context) (backend.Status, error) {
 }
 
 var (
-	_ backend.Backend        = (*Backend)(nil)
-	_ backend.Resumer        = (*Backend)(nil)
-	_ backend.Machine        = (*Machine)(nil)
-	_ backend.Suspender      = (*Machine)(nil)
-	_ backend.MemoryResizer  = (*Machine)(nil)
-	_ backend.DeviceAttacher = (*Machine)(nil)
-	_ backend.StatusReporter = (*Machine)(nil)
+	_ backend.Backend        = (*memoryBackend)(nil)
+	_ backend.Resumer        = (*memoryBackend)(nil)
+	_ backend.Machine        = (*memoryMachine)(nil)
+	_ backend.Suspender      = (*memoryMachine)(nil)
+	_ backend.MemoryResizer  = (*memoryMachine)(nil)
+	_ backend.DeviceAttacher = (*memoryMachine)(nil)
+	_ backend.StatusReporter = (*memoryMachine)(nil)
 )

@@ -15,7 +15,7 @@ func TestCloserRunsOnceAndTracksStoppedState(t *testing.T) {
 	closer := newCloser(state)
 	calls := 0
 
-	if err := closer.Close(closeActions{
+	if err := closer.Close(context.Background(), closeActions{
 		Cleanup: func() error {
 			calls++
 			if got := state.Current(); got != control.RuntimeStopping {
@@ -26,7 +26,7 @@ func TestCloserRunsOnceAndTracksStoppedState(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("first close: %v", err)
 	}
-	if err := closer.Close(closeActions{
+	if err := closer.Close(context.Background(), closeActions{
 		Cleanup: func() error {
 			calls++
 			return errors.New("second close should not run")
@@ -45,10 +45,10 @@ func TestCloserRunsOnceAndTracksStoppedState(t *testing.T) {
 func TestCloserReturnsFirstCloseError(t *testing.T) {
 	wantErr := errors.New("close failed")
 	closer := newCloser(newState(control.RuntimeReady))
-	if err := closer.Close(closeActions{Cleanup: func() error { return wantErr }}); !errors.Is(err, wantErr) {
+	if err := closer.Close(context.Background(), closeActions{Cleanup: func() error { return wantErr }}); !errors.Is(err, wantErr) {
 		t.Fatalf("close error: got %v want %v", err, wantErr)
 	}
-	if err := closer.Close(closeActions{Cleanup: func() error { return nil }}); !errors.Is(err, wantErr) {
+	if err := closer.Close(context.Background(), closeActions{Cleanup: func() error { return nil }}); !errors.Is(err, wantErr) {
 		t.Fatalf("second close error: got %v want %v", err, wantErr)
 	}
 }
@@ -74,7 +74,7 @@ func TestCloseActionsRunInShutdownOrder(t *testing.T) {
 		},
 	}
 
-	if err := actions.Run(); err != nil {
+	if err := actions.Run(context.Background()); err != nil {
 		t.Fatalf("run close actions: %v", err)
 	}
 	want := []string{"writeback", "qmp", "cleanup"}
@@ -97,7 +97,7 @@ func TestCloseActionsSkipWriteBack(t *testing.T) {
 		},
 		SkipWriteBack: true,
 	}
-	if err := actions.Run(); err != nil {
+	if err := actions.Run(context.Background()); err != nil {
 		t.Fatalf("run close actions: %v", err)
 	}
 	if called {

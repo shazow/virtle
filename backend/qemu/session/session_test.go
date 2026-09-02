@@ -19,11 +19,11 @@ import (
 )
 
 type sessionTestMachine struct {
-	*backendtest.Machine
+	backend.Machine
 	suspendRequests chan struct{}
 	handled         chan struct{}
 
-	mu        sync.Mutex
+	commitMu  sync.Mutex
 	committed bool
 	readyPath string
 }
@@ -31,7 +31,7 @@ type sessionTestMachine struct {
 func (m *sessionTestMachine) SuspendRequests() <-chan struct{} { return m.suspendRequests }
 
 func (m *sessionTestMachine) HandleSuspendRequest(ctx context.Context) error {
-	if err := m.Machine.Suspend(ctx); err != nil {
+	if err := m.Machine.(backend.Suspender).Suspend(ctx); err != nil {
 		return err
 	}
 	close(m.handled)
@@ -39,20 +39,20 @@ func (m *sessionTestMachine) HandleSuspendRequest(ctx context.Context) error {
 }
 
 func (m *sessionTestMachine) CommitResume() error {
-	m.mu.Lock()
+	m.commitMu.Lock()
 	m.committed = true
-	m.mu.Unlock()
+	m.commitMu.Unlock()
 	return nil
 }
 
 func (m *sessionTestMachine) committedResume() bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.commitMu.Lock()
+	defer m.commitMu.Unlock()
 	return m.committed
 }
 
 func (m *sessionTestMachine) Status(ctx context.Context) (backend.Status, error) {
-	status, err := m.Machine.Status(ctx)
+	status, err := m.Machine.(backend.StatusReporter).Status(ctx)
 	status.Paths.ReadySocket = m.readyPath
 	return status, err
 }
@@ -80,21 +80,34 @@ func (b *blockingBackend) Start(ctx context.Context, _ *vm.Spec) (backend.Machin
 }
 
 type notifyingBackend struct {
-	backendtest.Backend
-	started chan backend.Machine
+	delegate backend.Backend
+	started  chan backend.Machine
 }
 
 func (b *notifyingBackend) Start(ctx context.Context, spec *vm.Spec) (backend.Machine, error) {
-	m, err := b.Backend.Start(ctx, spec)
+	m, err := b.delegate.Start(ctx, spec)
 	if err == nil {
 		b.started <- m
 	}
 	return m, err
 }
 
+func newNotifyingBackend(guest *vmtest.Guest) *notifyingBackend {
+	return &notifyingBackend{delegate: backendtest.NewMemoryBackend(guest), started: make(chan backend.Machine, 1)}
+}
+
+func newMemoryMachine(t *testing.T) backend.Machine {
+	t.Helper()
+	m, err := backendtest.NewMemoryBackend(nil).Start(context.Background(), &vm.Spec{})
+	if err != nil {
+		t.Fatalf("start memory machine: %v", err)
+	}
+	return m
+}
+
 func TestRunShutsMachineDownWhenContextEnds(t *testing.T) {
 	g := &vmtest.Guest{}
-	b := &notifyingBackend{Backend: backendtest.Backend{Guest: g}, started: make(chan backend.Machine, 1)}
+	b := newNotifyingBackend(g)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
@@ -111,7 +124,7 @@ func TestRunShutsMachineDownWhenContextEnds(t *testing.T) {
 }
 
 func TestRunRejectsUnknownResumeModeBeforeStart(t *testing.T) {
-	b := &notifyingBackend{Backend: backendtest.Backend{}, started: make(chan backend.Machine, 1)}
+	b := newNotifyingBackend(nil)
 	err := Run(context.Background(), b, &vm.Spec{}, &manifest.Manifest{}, Options{Resume: "sometimes"})
 	if err == nil {
 		t.Fatal("Run unexpectedly accepted an unknown resume mode")
@@ -124,7 +137,7 @@ func TestRunRejectsUnknownResumeModeBeforeStart(t *testing.T) {
 }
 
 func TestRunValidatesSSHBeforeStart(t *testing.T) {
-	b := &notifyingBackend{Backend: backendtest.Backend{}, started: make(chan backend.Machine, 1)}
+	b := newNotifyingBackend(nil)
 	err := Run(context.Background(), b, &vm.Spec{}, &manifest.Manifest{}, Options{Resume: "no", SSH: true})
 	if err == nil {
 		t.Fatal("Run unexpectedly accepted an empty ssh.exec")
@@ -156,12 +169,8 @@ func TestRunInstallsInterruptHandlerBeforeStart(t *testing.T) {
 }
 
 func TestRunServicesQueuedSuspend(t *testing.T) {
-	base, err := (&backendtest.Backend{}).Start(context.Background(), &vm.Spec{})
-	if err != nil {
-		t.Fatalf("start test machine: %v", err)
-	}
 	m := &sessionTestMachine{
-		Machine:         base.(*backendtest.Machine),
+		Machine:         newMemoryMachine(t),
 		suspendRequests: make(chan struct{}, 1),
 		handled:         make(chan struct{}),
 	}
@@ -183,18 +192,14 @@ func TestRunServicesQueuedSuspend(t *testing.T) {
 }
 
 func TestRunPreservesResumeStateWhenSSHStartFails(t *testing.T) {
-	base, err := (&backendtest.Backend{}).Start(context.Background(), &vm.Spec{})
-	if err != nil {
-		t.Fatalf("start test machine: %v", err)
-	}
 	m := &sessionTestMachine{
-		Machine:         base.(*backendtest.Machine),
+		Machine:         newMemoryMachine(t),
 		suspendRequests: make(chan struct{}, 1),
 		handled:         make(chan struct{}),
 	}
 	b := &sessionTestBackend{machine: m, started: make(chan struct{})}
 	mf := &manifest.Manifest{SSH: manifest.SSH{Argv: []string{filepath.Join(t.TempDir(), "missing-ssh")}}}
-	err = Run(context.Background(), b, &vm.Spec{}, mf, Options{Resume: "force", SSH: true})
+	err := Run(context.Background(), b, &vm.Spec{}, mf, Options{Resume: "force", SSH: true})
 	if err == nil {
 		t.Fatal("Run unexpectedly started a missing SSH executable")
 	}
@@ -211,11 +216,7 @@ func TestWaitReadyHasDeadline(t *testing.T) {
 		t.Fatalf("listen: %v", err)
 	}
 	defer listener.Close()
-	base, err := (&backendtest.Backend{}).Start(context.Background(), &vm.Spec{})
-	if err != nil {
-		t.Fatalf("start test machine: %v", err)
-	}
-	m := &sessionTestMachine{Machine: base.(*backendtest.Machine), readyPath: path}
+	m := &sessionTestMachine{Machine: newMemoryMachine(t), readyPath: path}
 	err = waitReady(context.Background(), m, make(chan os.Signal), slog.New(slog.DiscardHandler))
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("waitReady error = %v, want context.DeadlineExceeded", err)

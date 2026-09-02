@@ -10,6 +10,6 @@ import (
 
 func TestInMemoryBackendConforms(t *testing.T) {
 	TestBackend(t, func(t *testing.T) (backend.Backend, *vm.Spec) {
-		return &Backend{Guest: &vmtest.Guest{Commands: map[string]vmtest.Result{"true": {}}}}, &vm.Spec{}
+		return NewMemoryBackend(&vmtest.Guest{Commands: map[string]vmtest.Result{"true": {}}}), &vm.Spec{}
 	})
 }

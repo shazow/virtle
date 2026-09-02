@@ -10,17 +10,9 @@ import (
 	"github.com/shazow/virtle/backend"
 	"github.com/shazow/virtle/backend/qemu/internal/launch"
 	controlpkg "github.com/shazow/virtle/internal/control"
-	"github.com/shazow/virtle/internal/manifest"
 )
 
 const defaultLaunchSignalTimeout = 5 * time.Second
-
-// Suspend saves the running VM state to disk and exits the launch process.
-func Suspend(ctx context.Context, manifest *manifest.Manifest) error {
-	m := newManager()
-	m.launchManifest = manifest
-	return m.suspend(ctx)
-}
 
 func (m *manager) suspend(ctx context.Context) error {
 	manifest := m.launchManifest

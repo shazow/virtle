@@ -23,6 +23,11 @@ type StartOptions struct {
 	// HasRemoteControl declares whether the VM image runs a guest control
 	// agent; see launch.Options.
 	HasRemoteControl bool
+
+	// DeferResumeCommit preserves restored state until CommitResume. Session
+	// callers use this so a failure to establish the foreground session remains
+	// retryable; ordinary library starts commit before StartVM returns.
+	DeferResumeCommit bool
 }
 
 // StartVM starts a VM from a resolved manifest and returns a handle without
@@ -51,11 +56,11 @@ func StartVM(ctx context.Context, mf *manifest.Manifest, options StartOptions, c
 	if err != nil {
 		return nil, err
 	}
-	// Library starts have no session phase, so a successful Start is the
-	// point the restored suspend state stops being resumable. CLI sessions
-	// remove it later, once the session is established.
-	if v.running.plan.ResumeState != nil {
-		if err := removeRestoredSuspendState(v.running.plan); err != nil {
+	// Library starts have no session phase, so a successful Start is the point
+	// the restored suspend state stops being resumable. Session starts opt out
+	// and call CommitResume once their foreground process is established.
+	if !options.DeferResumeCommit {
+		if err := v.CommitResume(); err != nil {
 			return nil, errors.Join(err, v.Close())
 		}
 	}
@@ -151,10 +156,12 @@ type VM struct {
 	m       *manager
 	running *runningLaunch
 
-	closeOnce sync.Once
-	closeErr  error
-	done      chan struct{}
-	exitErr   error
+	closeOnce  sync.Once
+	closeErr   error
+	commitOnce sync.Once
+	commitErr  error
+	done       chan struct{}
+	exitErr    error
 }
 
 func newVM(m *manager, running *runningLaunch) *VM {
@@ -229,6 +236,17 @@ func (v *VM) closeContext(ctx context.Context) error {
 	return v.closeErr
 }
 
+// CommitResume removes the state used to restore this VM. It is safe to call
+// more than once and is a no-op for a fresh boot.
+func (v *VM) CommitResume() error {
+	v.commitOnce.Do(func() {
+		if v.running.plan.ResumeState != nil {
+			v.commitErr = removeRestoredSuspendState(v.running.plan)
+		}
+	})
+	return v.commitErr
+}
+
 // StateDir returns the resolved persistence state directory.
 func (v *VM) StateDir() string { return v.running.plan.Paths.StateDir }
 
@@ -268,6 +286,22 @@ func (v *VM) Suspend(ctx context.Context) error {
 	}
 	v.running.runtime.MarkSavedSuspend()
 	return v.close()
+}
+
+// SuspendRequests reports suspend work queued by the control server.
+func (v *VM) SuspendRequests() <-chan struct{} {
+	return v.running.lifecycle.Suspend().Notify()
+}
+
+// HandleSuspendRequest services one queued suspend request and tears down the
+// runtime after the coordinator has reported the saved state to its waiter.
+func (v *VM) HandleSuspendRequest(ctx context.Context) error {
+	err := v.running.suspendHandler.Handle(ctx, v.running.lifecycle.Suspend())
+	if !launch.IsSavedSuspendExit(err) {
+		return err
+	}
+	v.running.runtime.MarkSavedSuspend()
+	return errors.Join(err, v.close())
 }
 
 // ResizeMemory sets the virtio-balloon target for the running VM, in

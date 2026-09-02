@@ -17,7 +17,8 @@ user-visible outcomes.
 - The control socket now implements `backend.Machine`, including selectable
   exit completion and typed status reporting; `virtle status` exposes it.
 - `virtle launch` now loads its machine through the public `manifest.Load`
-  path and runs its foreground lifecycle against `backend.Machine`.
+  path and runs its bounded, signal-aware foreground lifecycle against
+  `backend.Machine`, including out-of-process suspend requests.
 - Newly created VM state directories and volume images are private by default
   (`0700` and `0600`).
 - Guest and control requests now have bounded memory use and concurrency.

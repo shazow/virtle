@@ -11,6 +11,7 @@ import (
 	"io"
 	"io/fs"
 	"net"
+	"os"
 	"sync"
 	"time"
 
@@ -26,6 +27,15 @@ func Dial(ctx context.Context, path string) (backend.Machine, error) {
 	c := &client{dial: func(ctx context.Context) (net.Conn, error) {
 		var d net.Dialer
 		return d.DialContext(ctx, "unix", path)
+	}, completion: func() (bool, error) {
+		// Legacy servers have no wait RPC. Their Unix listener unlinks this
+		// endpoint during orderly teardown, while an abrupt exit leaves a stale
+		// socket behind, so disappearance is the persisted completion record.
+		_, err := os.Stat(path)
+		if errors.Is(err, os.ErrNotExist) {
+			return true, nil
+		}
+		return false, err
 	}}
 	methods, err := callTyped[MethodsRequest, MethodsResponse](c, ctx, rpcMethods, MethodsRequest{})
 	if err != nil {
@@ -87,8 +97,24 @@ func (m *machine) observeExit() {
 	for {
 		status, err := callTyped[StatusRequest, StatusResponse](m.client, context.Background(), rpcStatus, StatusRequest{})
 		if err != nil {
-			m.finish(fmt.Errorf("machine exited without status: %w", err))
-			return
+			// An older server closes its listener before it can expose stopped via
+			// status. Reconcile that EOF/dial failure with the socket record before
+			// treating it as an unreported exit.
+			completed, completionErr := m.client.completed()
+			if completionErr != nil {
+				m.finish(fmt.Errorf("machine exited without status: %w", errors.Join(err, completionErr)))
+				return
+			}
+			if completed {
+				m.finish(nil)
+				return
+			}
+			if !IsSocketUnavailable(err) && !errors.Is(err, io.EOF) {
+				m.finish(fmt.Errorf("machine exited without status: %w", err))
+				return
+			}
+			<-ticker.C
+			continue
 		}
 		if status.State == backend.StateStopped {
 			m.finish(nil)
@@ -303,7 +329,15 @@ var (
 )
 
 type client struct {
-	dial func(context.Context) (net.Conn, error)
+	dial       func(context.Context) (net.Conn, error)
+	completion func() (bool, error)
+}
+
+func (c *client) completed() (bool, error) {
+	if c == nil || c.completion == nil {
+		return false, nil
+	}
+	return c.completion()
 }
 
 func callTyped[Req any, Resp any](c *client, ctx context.Context, method rpcMethod, req Req) (Resp, error) {

@@ -146,7 +146,7 @@ func NewBackendFromDocument(doc imanifest.Document, b Backend) backend.Backend {
 }
 
 func (b *Backend) Start(ctx context.Context, spec *vm.Spec) (backend.Machine, error) {
-	return b.start(ctx, spec, vmm.ResumeModeNo)
+	return b.start(ctx, spec, vmm.ResumeModeNo, false)
 }
 
 // resolveSpec lowers the spec (plus any base document) through the manifest
@@ -163,15 +163,16 @@ func (b *Backend) resolveSpec(spec *vm.Spec, logger *slog.Logger) (*imanifest.Ma
 	return mf, nil
 }
 
-func (b *Backend) start(ctx context.Context, spec *vm.Spec, resume vmm.ResumeMode) (backend.Machine, error) {
+func (b *Backend) start(ctx context.Context, spec *vm.Spec, resume vmm.ResumeMode, deferResumeCommit bool) (backend.Machine, error) {
 	logger := b.logger()
 	mf, err := b.resolveSpec(spec, logger)
 	if err != nil {
 		return nil, err
 	}
 	handle, err := vmm.StartVM(ctx, mf, vmm.StartOptions{
-		Resume:           resume,
-		HasRemoteControl: b.hasRemoteControl(),
+		Resume:            resume,
+		HasRemoteControl:  b.hasRemoteControl(),
+		DeferResumeCommit: deferResumeCommit,
 	}, vmm.Config{
 		Logger:        logger,
 		ConsoleOutput: b.consoleOutput(),
@@ -180,6 +181,16 @@ func (b *Backend) start(ctx context.Context, spec *vm.Spec, resume vmm.ResumeMod
 		return nil, err
 	}
 	return &Machine{vm: handle, hasRemoteControl: b.hasRemoteControl()}, nil
+}
+
+// StartSession starts a machine with foreground-session resume semantics.
+// Restored state remains retryable until Machine.CommitResume is called.
+func (b *Backend) StartSession(ctx context.Context, spec *vm.Spec, resume bool) (backend.Machine, error) {
+	mode := vmm.ResumeModeNo
+	if resume {
+		mode = vmm.ResumeModeForce
+	}
+	return b.start(ctx, spec, mode, true)
 }
 
 // Machine is a QEMU virtual machine started by Backend.
@@ -227,10 +238,22 @@ func (m *Machine) Suspend(ctx context.Context) error {
 	return m.vm.Suspend(ctx)
 }
 
+// SuspendRequests reports work queued by the machine's control socket.
+func (m *Machine) SuspendRequests() <-chan struct{} { return m.vm.SuspendRequests() }
+
+// HandleSuspendRequest services a queued control-socket suspend request.
+func (m *Machine) HandleSuspendRequest(ctx context.Context) error {
+	return m.vm.HandleSuspendRequest(ctx)
+}
+
+// CommitResume removes restored state after the foreground session has been
+// established. It is a no-op for a fresh boot.
+func (m *Machine) CommitResume() error { return m.vm.CommitResume() }
+
 // Resume implements backend.Resumer: it restores a previously suspended
 // machine. The spec must resolve to the state directory containing the save.
 func (b *Backend) Resume(ctx context.Context, spec *vm.Spec) (backend.Machine, error) {
-	return b.start(ctx, spec, vmm.ResumeModeForce)
+	return b.start(ctx, spec, vmm.ResumeModeForce, false)
 }
 
 // ResizeMemory implements backend.MemoryResizer via virtio-balloon. The

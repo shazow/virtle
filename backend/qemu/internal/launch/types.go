@@ -17,9 +17,7 @@ const (
 )
 
 type Options struct {
-	Resume    ResumeMode
-	SSH       bool
-	Verbosity int
+	Resume ResumeMode
 
 	// HasRemoteControl declares whether the VM image runs a guest control
 	// agent (QGA today, the virtle guest daemon later). When false, launch
@@ -30,36 +28,9 @@ type Options struct {
 	HasRemoteControl bool
 }
 
-func (o Options) WaitMode() WaitMode {
-	if o.SSH {
-		return WaitSSH
-	}
-	return WaitVM
-}
-
-func PlanForWaitMode(plan *Plan, mode WaitMode) *Plan {
-	if plan == nil || (mode != WaitSSH && mode != WaitVM) {
-		return plan
-	}
-	copyPlan := *plan
-	copyOptions := copyPlan.Options
-	copyOptions.SSH = mode == WaitSSH
-	copyPlan.Options = copyOptions
-	return &copyPlan
-}
-
-type WaitMode string
-
-const (
-	WaitAuto WaitMode = "auto"
-	WaitSSH  WaitMode = "ssh"
-	WaitVM   WaitMode = "vm"
-)
-
 type Spec struct {
-	Manifest      *manifest.Manifest
-	RemoteCommand []string
-	Options       Options
+	Manifest *manifest.Manifest
+	Options  Options
 }
 
 type SuspendState struct {

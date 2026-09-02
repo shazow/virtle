@@ -4,10 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"os"
 	"sync"
-	"time"
 
 	"github.com/shazow/virtle/backend/qemu/internal/balloon"
 	"github.com/shazow/virtle/backend/qemu/internal/launch"
@@ -31,8 +28,8 @@ type StartOptions struct {
 }
 
 // StartVM starts a VM from a resolved manifest and returns a handle without
-// blocking on the session, unlike LaunchWithOptions. It is the seam the
-// public backend/qemu package is built on: session-layer behavior (SSH
+// blocking on a foreground session. It is the seam the public backend/qemu
+// package is built on: session-layer behavior (SSH
 // readiness gating, foreground signal waits) stays out, while process
 // supervision, QMP readiness, guest file writes, the control socket, and
 // the balloon controller run as they do for CLI launches.
@@ -40,13 +37,6 @@ func StartVM(ctx context.Context, mf *manifest.Manifest, options StartOptions, c
 	config := DefaultConfig()
 	if len(configs) > 0 {
 		config = mergeConfig(config, configs[0])
-	}
-	// Library starts install no process-global signal handlers — signal
-	// policy belongs to the embedding program. A never-firing channel
-	// keeps the launch lifecycle from claiming SIGINT/SIGTSTP/...;
-	// Config.Signals may supply a real channel to opt in.
-	if config.Signals == nil {
-		config.Signals = make(chan os.Signal)
 	}
 	m := newManagerFromConfig(config)
 	v, err := m.startVM(ctx, launch.Spec{Manifest: mf, Options: launch.Options{
@@ -67,9 +57,9 @@ func StartVM(ctx context.Context, mf *manifest.Manifest, options StartOptions, c
 	return v, nil
 }
 
-// startVM plans and starts a launch, returning the VM handle. Both the
-// library path (StartVM) and the CLI path (LaunchWithOptions) go through
-// here; queued-suspend saves surface as launch.ErrSavedSuspendExit.
+// startVM plans and starts a launch, returning the VM handle. Public backend
+// starts and CLI sessions both go through here; queued-suspend saves surface
+// as launch.ErrSavedSuspendExit.
 func (m *manager) startVM(ctx context.Context, spec launch.Spec) (*VM, error) {
 	if spec.Options.Resume == "" {
 		spec.Options.Resume = ResumeModeNo
@@ -83,47 +73,6 @@ func (m *manager) startVM(ctx context.Context, spec launch.Spec) (*VM, error) {
 		return nil, err
 	}
 	return newVM(m, running), nil
-}
-
-// SessionOptions configures the CLI foreground session on a started VM.
-type SessionOptions struct {
-	SSH           bool      // attach the interactive SSH session loop
-	RemoteCommand []string  // remote command for the SSH session
-	Stdout        io.Writer // foreground session and SSH stdout; default: discard
-	Stderr        io.Writer // foreground session and SSH stderr; default: discard
-}
-
-// RunSession runs the CLI foreground session on a started VM: the
-// ssh-ready gate on fresh boots, then either the interactive SSH attach
-// loop (with autoprovision and retries) or the connect hint plus the VM
-// wait, with suspend-on-signal handling throughout. RunSession owns the
-// VM: it is closed when the session ends, and a session that ends in a
-// saved suspend reports success.
-func RunSession(ctx context.Context, v *VM, opts SessionOptions) (err error) {
-	m, running := v.m, v.running
-	plan := running.plan
-	if opts.SSH && len(plan.Manifest.SSH.Argv) == 0 {
-		return errors.Join(fmt.Errorf("--ssh requires a non-empty manifest.ssh.exec"), v.Shutdown(context.Background()))
-	}
-	plan.RemoteCommand = append([]string(nil), opts.RemoteCommand...)
-	defer func() {
-		joinDeferredError(&err, v.close)
-	}()
-	// The readiness gate is a session concern: the session blocks here so
-	// the SSH hint (or the attach loop) lands on a reachable guest, while
-	// bare StartVM callers return as soon as the VM is up.
-	if plan.ResumeState == nil {
-		if err := m.guestReadiness().WaitReady(running.ctx, plan, running.processes.Watchers()); err != nil {
-			return err
-		}
-		m.sshLifecycleLogger().Info("guest is ready")
-		running.stats.Timer(launch.TimerSSHReady, time.Now())
-	}
-	err = m.waitForRunningLaunch(ctx, running, opts)
-	if launch.IsSavedSuspendExit(err) {
-		return nil
-	}
-	return err
 }
 
 // VM is a running virtual machine started by StartVM. It stays alive until
@@ -271,6 +220,12 @@ func (v *VM) HandleSuspendRequest(ctx context.Context) error {
 	}
 	v.running.runtime.MarkSavedSuspend()
 	return errors.Join(err, v.close())
+}
+
+// SuspendSession queues and services a foreground job-control suspend.
+func (v *VM) SuspendSession(ctx context.Context) error {
+	v.running.lifecycle.Suspend().Request()
+	return v.HandleSuspendRequest(ctx)
 }
 
 // ResizeMemory sets the virtio-balloon target for the running VM, in

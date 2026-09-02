@@ -3,7 +3,6 @@ package vmm
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/shazow/virtle/backend/qemu/internal/qga"
 	"github.com/shazow/virtle/internal/executor"
@@ -36,17 +35,4 @@ func (m *manager) collectGuestInfo(ctx context.Context, socketPath string, watch
 	}
 
 	return Info{ProcessList: qga.FormatProcessListExecData(status.OutData)}, nil
-}
-
-func (m *manager) printGuestInfo(ctx context.Context, socketPath string, watchers executor.Group) {
-	info, err := m.collectGuestInfo(ctx, socketPath, watchers)
-	if err != nil {
-		m.logger.Info("guest info failed", "err", err)
-		return
-	}
-
-	processList := strings.TrimRight(info.ProcessList, "\n")
-	if processList != "" {
-		m.logger.Debug("guest info", "processes", processList)
-	}
 }

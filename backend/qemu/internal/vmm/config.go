@@ -3,7 +3,6 @@ package vmm
 import (
 	"io"
 	"log/slog"
-	"os"
 	"time"
 
 	"github.com/shazow/virtle/backend/qemu/internal/launch"
@@ -18,22 +17,15 @@ type Config struct {
 	SocketWaiter        launch.SocketWaiter
 	QMPDialer           qmpclient.Dialer
 	GuestAgentDialer    qga.Dialer
-	SSHReadyDialer      launch.SSHReadyDialer
 	Logger              *slog.Logger
 	ConsoleOutput       io.Writer
-	SSHReadyTimeout     time.Duration
 	ShutdownDelay       time.Duration
 	QMPRetryDelay       time.Duration
 	QMPConnectTimeout   time.Duration
 	QMPQuitTimeout      time.Duration
 	QMPMigrationTimeout time.Duration
-	Signals             <-chan os.Signal
 	PIDSignaler         launch.PIDSignaler
 	Notifier            launch.NotificationSink
-	// GuestReadiness overrides the session readiness gate; nil uses the
-	// QGA-era ssh-ready socket wait. The virtle guest daemon swaps this
-	// (see GuestReadiness).
-	GuestReadiness GuestReadiness
 }
 
 // StateVersion is the qemu suspend-state version this machinery stamps on
@@ -62,17 +54,11 @@ func mergeConfig(base Config, override Config) Config {
 	if override.GuestAgentDialer != nil {
 		base.GuestAgentDialer = override.GuestAgentDialer
 	}
-	if override.SSHReadyDialer != nil {
-		base.SSHReadyDialer = override.SSHReadyDialer
-	}
 	if override.Logger != nil {
 		base.Logger = override.Logger
 	}
 	if override.ConsoleOutput != nil {
 		base.ConsoleOutput = override.ConsoleOutput
-	}
-	if override.SSHReadyTimeout != 0 {
-		base.SSHReadyTimeout = override.SSHReadyTimeout
 	}
 	if override.ShutdownDelay != 0 {
 		base.ShutdownDelay = override.ShutdownDelay
@@ -89,17 +75,11 @@ func mergeConfig(base Config, override Config) Config {
 	if override.QMPMigrationTimeout != 0 {
 		base.QMPMigrationTimeout = override.QMPMigrationTimeout
 	}
-	if override.Signals != nil {
-		base.Signals = override.Signals
-	}
 	if override.PIDSignaler != nil {
 		base.PIDSignaler = override.PIDSignaler
 	}
 	if override.Notifier != nil {
 		base.Notifier = override.Notifier
-	}
-	if override.GuestReadiness != nil {
-		base.GuestReadiness = override.GuestReadiness
 	}
 	return base
 }

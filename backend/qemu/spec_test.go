@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -150,6 +151,44 @@ func TestSpecDocumentDefaults(t *testing.T) {
 	}
 	if doc.Machine.VCPU <= 0 {
 		t.Errorf("default VCPU = %d, want > 0", doc.Machine.VCPU)
+	}
+}
+
+func TestSpecDocumentAcceleration(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		accel Accel
+		cpu   string
+		kvm   bool
+	}{
+		{name: "kvm", accel: AccelKVM, cpu: "host,+x2apic,-sgx", kvm: true},
+		{name: "tcg", accel: AccelTCG, cpu: "max,+x2apic", kvm: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			doc, err := specDocument(testSpec(), &Backend{Accel: test.accel}, nil)
+			if err != nil {
+				t.Fatalf("specDocument: %v", err)
+			}
+			doc.Host = imanifest.HostInput{OS: "linux", Arch: "x86_64", System: "x86_64-linux"}
+			mf, err := doc.Manifest()
+			if err != nil {
+				t.Fatalf("resolve: %v", err)
+			}
+			if got := mf.QEMU.CPU.Model; got != test.cpu {
+				t.Errorf("CPU model = %q, want %q", got, test.cpu)
+			}
+			if got := mf.QEMU.CPU.EnableKVM; got != test.kvm {
+				t.Errorf("KVM = %v, want %v", got, test.kvm)
+			}
+			if got := mf.QEMU.Machine.Options; !slices.Contains(got, "accel="+string(test.accel)) {
+				t.Errorf("machine options = %v, want accel=%s", got, test.accel)
+			}
+			if test.accel == AccelTCG {
+				if got := mf.QEMU.Machine.Options; !slices.Contains(got, "pic=on") || !slices.Contains(got, "pit=on") {
+					t.Errorf("TCG machine options = %v, want legacy timers enabled", got)
+				}
+			}
+		})
 	}
 }
 

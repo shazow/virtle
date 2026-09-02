@@ -26,6 +26,7 @@ import (
 	"os"
 
 	"github.com/shazow/virtle/backend"
+	"github.com/shazow/virtle/backend/qemu/internal/sessionbridge"
 	"github.com/shazow/virtle/backend/qemu/internal/vmm"
 	imanifest "github.com/shazow/virtle/internal/manifest"
 	"github.com/shazow/virtle/units"
@@ -89,6 +90,8 @@ type Backend struct {
 	ConsoleOutput io.Writer
 
 	doc *imanifest.Document // transitional manifest.Load overlay; removed with consolidation
+
+	disableVSock bool // integration-only: nested CI guests have no vhost-vsock device
 }
 
 // RemoteControl is a guest-control transport for Backend.RemoteControl.
@@ -146,7 +149,7 @@ func NewBackendFromDocument(doc imanifest.Document, b Backend) backend.Backend {
 }
 
 func (b *Backend) Start(ctx context.Context, spec *vm.Spec) (backend.Machine, error) {
-	return b.start(ctx, spec, vmm.ResumeModeNo, false)
+	return b.start(ctx, spec, vmm.ResumeModeNo)
 }
 
 // resolveSpec lowers the spec (plus any base document) through the manifest
@@ -160,10 +163,13 @@ func (b *Backend) resolveSpec(spec *vm.Spec, logger *slog.Logger) (*imanifest.Ma
 	if err != nil {
 		return nil, fmt.Errorf("resolve vm spec: %w", err)
 	}
+	if b.disableVSock {
+		mf.QEMU.Devices.VSOCK.ID = ""
+	}
 	return mf, nil
 }
 
-func (b *Backend) start(ctx context.Context, spec *vm.Spec, resume vmm.ResumeMode, deferResumeCommit bool) (backend.Machine, error) {
+func (b *Backend) start(ctx context.Context, spec *vm.Spec, resume vmm.ResumeMode) (backend.Machine, error) {
 	logger := b.logger()
 	mf, err := b.resolveSpec(spec, logger)
 	if err != nil {
@@ -172,7 +178,7 @@ func (b *Backend) start(ctx context.Context, spec *vm.Spec, resume vmm.ResumeMod
 	handle, err := vmm.StartVM(ctx, mf, vmm.StartOptions{
 		Resume:            resume,
 		HasRemoteControl:  b.hasRemoteControl(),
-		DeferResumeCommit: deferResumeCommit,
+		DeferResumeCommit: sessionbridge.FromContext(ctx) != nil,
 	}, vmm.Config{
 		Logger:        logger,
 		ConsoleOutput: b.consoleOutput(),
@@ -180,17 +186,16 @@ func (b *Backend) start(ctx context.Context, spec *vm.Spec, resume vmm.ResumeMod
 	if err != nil {
 		return nil, err
 	}
-	return &Machine{vm: handle, hasRemoteControl: b.hasRemoteControl()}, nil
-}
-
-// StartSession starts a machine with foreground-session resume semantics.
-// Restored state remains retryable until Machine.CommitResume is called.
-func (b *Backend) StartSession(ctx context.Context, spec *vm.Spec, resume bool) (backend.Machine, error) {
-	mode := vmm.ResumeModeNo
-	if resume {
-		mode = vmm.ResumeModeForce
+	machine := &Machine{vm: handle, hasRemoteControl: b.hasRemoteControl()}
+	if bridge := sessionbridge.FromContext(ctx); bridge != nil {
+		bridge.Bind(sessionbridge.Hooks{
+			SuspendRequests:      handle.SuspendRequests,
+			HandleSuspendRequest: handle.HandleSuspendRequest,
+			Suspend:              handle.SuspendSession,
+			CommitResume:         handle.CommitResume,
+		})
 	}
-	return b.start(ctx, spec, mode, true)
+	return machine, nil
 }
 
 // Machine is a QEMU virtual machine started by Backend.
@@ -238,22 +243,10 @@ func (m *Machine) Suspend(ctx context.Context) error {
 	return m.vm.Suspend(ctx)
 }
 
-// SuspendRequests reports work queued by the machine's control socket.
-func (m *Machine) SuspendRequests() <-chan struct{} { return m.vm.SuspendRequests() }
-
-// HandleSuspendRequest services a queued control-socket suspend request.
-func (m *Machine) HandleSuspendRequest(ctx context.Context) error {
-	return m.vm.HandleSuspendRequest(ctx)
-}
-
-// CommitResume removes restored state after the foreground session has been
-// established. It is a no-op for a fresh boot.
-func (m *Machine) CommitResume() error { return m.vm.CommitResume() }
-
 // Resume implements backend.Resumer: it restores a previously suspended
 // machine. The spec must resolve to the state directory containing the save.
 func (b *Backend) Resume(ctx context.Context, spec *vm.Spec) (backend.Machine, error) {
-	return b.start(ctx, spec, vmm.ResumeModeForce, false)
+	return b.start(ctx, spec, vmm.ResumeModeForce)
 }
 
 // ResizeMemory implements backend.MemoryResizer via virtio-balloon. The

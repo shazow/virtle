@@ -21,6 +21,7 @@ type SSHSession struct {
 	Plan                   *Plan
 	Runner                 Runner
 	Logger                 *slog.Logger
+	Stdin                  io.Reader
 	Stdout                 io.Writer
 	Stderr                 io.Writer
 	RetryOutputRevealDelay time.Duration
@@ -33,6 +34,7 @@ type SSHSession struct {
 	WaitForRetry  func(context.Context, executor.Group) error
 	EnsureKey     func() (SSHAutoprovisionKey, error)
 	InstallKey    func(context.Context, SSHAutoprovisionKey, executor.Group) error
+	Established   func() error
 	wrapStage     func(stage string, err error) error
 	Now           func() time.Time
 }
@@ -67,6 +69,7 @@ func RunSSHSession(ctx context.Context, session SSHSession) error {
 			return wrapSSHSessionStage(session, "active session", err)
 		}
 		sessionLogger.Info("ssh command", "command", shellquote.Join(cmd.Args...))
+		cmd.Stdin = session.Stdin
 		cmd.Stdout = stdout
 		cmd.Stderr = stderr
 		started, err := session.Runner.Start(cmd)
@@ -82,6 +85,12 @@ func RunSSHSession(ctx context.Context, session SSHSession) error {
 		}
 		if session.RecordTimer != nil {
 			session.RecordTimer(TimerSSHStarted, attemptStarted)
+		}
+		if session.Established != nil {
+			if err := session.Established(); err != nil {
+				_ = started.Stop(context.Background())
+				return wrapSSHSessionStage(session, "active session", err)
+			}
 		}
 
 		err = session.Wait(ctx, started, watchers)

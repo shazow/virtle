@@ -63,6 +63,29 @@ func TestRunSSHSessionRetriesTransientFailure(t *testing.T) {
 	}
 }
 
+func TestRunSSHSessionEstablishesEachAttempt(t *testing.T) {
+	launchManifest := testSSHSessionManifest()
+	runner := &fakeSSHSessionRunner{errs: []error{errors.New("Connection refused"), nil}}
+	established := 0
+	err := RunSSHSession(context.Background(), SSHSession{
+		Plan:   &Plan{Manifest: launchManifest, CID: 10},
+		Runner: runner,
+		Wait: func(_ context.Context, process *executor.Process, _ executor.Group) error {
+			return process.Wait()
+		},
+		Established: func() error {
+			established++
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("run ssh session: %v", err)
+	}
+	if got, want := established, 2; got != want {
+		t.Fatalf("established calls = %d, want %d", got, want)
+	}
+}
+
 func TestRunSSHSessionAutoprovisionsAfterAuthenticationFailure(t *testing.T) {
 	launchManifest := testSSHSessionManifest()
 	launchManifest.SSH.Autoprovision = true

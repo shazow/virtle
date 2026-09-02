@@ -167,7 +167,7 @@ func (d Document) resolveQEMU(host HostInput, hostName string, workingDir string
 		Name:       hostName,
 		Machine: QEMUMachine{
 			Type:    machineType,
-			Options: resolveMachineOptions(host, machineType, d.QEMU.MachineOptions, transport == "pci"),
+			Options: resolveMachineOptions(host, machineType, d.QEMU.MachineOptions, transport == "pci", d.Machine.KVM),
 		},
 		CPU: QEMUCPU{
 			Model:     cpuModel,
@@ -252,7 +252,8 @@ func qemuTransport(machineType string, mounts MountsInput, graphics QEMUGraphics
 	return "mmio"
 }
 
-func resolveMachineOptions(host HostInput, machineType string, explicit map[string]string, requirePCI bool) []string {
+func resolveMachineOptions(host HostInput, machineType string, explicit map[string]string, requirePCI bool, kvm *bool) []string {
+	usingDefaults := explicit == nil
 	options := explicit
 	if options == nil {
 		options = defaultMachineOptions(host, machineType, requirePCI)
@@ -260,6 +261,17 @@ func resolveMachineOptions(host HostInput, machineType string, explicit map[stri
 		options = cloneStringMap(explicit)
 		if requirePCI && strings.HasPrefix(machineType, "microvm") {
 			options["pcie"] = "on"
+		}
+	}
+	if kvm != nil {
+		options["accel"] = "tcg"
+		if *kvm {
+			options["accel"] = "kvm"
+		} else if usingDefaults && host.System == "x86_64-linux" && strings.HasPrefix(machineType, "microvm") {
+			// TCG has no KVM clock, so retain the legacy timers that the KVM
+			// microvm defaults can safely omit.
+			options["pic"] = "on"
+			options["pit"] = "on"
 		}
 	}
 	keys := make([]string, 0, len(options))

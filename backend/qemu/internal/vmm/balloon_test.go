@@ -5,10 +5,12 @@ import (
 	"errors"
 	"log/slog"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/shazow/virtle/backend/qemu/internal/balloon"
+	"github.com/shazow/virtle/backend/qemu/internal/launch"
 	imanifest "github.com/shazow/virtle/internal/manifest"
 )
 
@@ -26,127 +28,94 @@ func TestBuildQEMUCommandAppendsBalloonArgs(t *testing.T) {
 	}
 }
 
-func TestManagerLaunchStartsBalloonControllerAndStopsItBeforeQuit(t *testing.T) {
+func TestStartVMStopsBalloonControllerBeforeQEMU(t *testing.T) {
 	tmpDir := t.TempDir()
-	manifest := validManifestWithBalloon(tmpDir)
-	manifest.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
-	manifest.QEMU.Devices.Balloon.Controller = &imanifest.BalloonControllerConfig{
-		PollInterval:   1 * time.Second,
-		ReclaimHoldoff: 1 * time.Second,
+	launchManifest := validManifestWithBalloon(tmpDir)
+	launchManifest.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
+	launchManifest.QEMU.Devices.Balloon.Controller = &imanifest.BalloonControllerConfig{
+		PollInterval:   time.Nanosecond,
+		ReclaimHoldoff: time.Second,
 	}
 
-	cancelCtx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	runner := &launchRunner{
-		cancel:      cancel,
-		cancelDelay: 2 * time.Second,
-	}
-
-	var quitAt time.Time
+	runner := &launchRunner{}
+	readDone := make(chan struct{})
+	var readOnce sync.Once
+	var readAt, quitAt time.Time
 	qmpClient := (&fakeQMPClient{
 		onQuit: func() {
 			quitAt = time.Now()
 			runner.exitQEMU(nil)
 		},
+		onReadBalloonStats: func() {
+			readOnce.Do(func() {
+				readAt = time.Now()
+				close(readDone)
+			})
+		},
 		readBalloonStats: map[string]int64{
 			"stat-available-memory": 900 * testMiB,
 		},
-		readBalloonStatsDelay:   400 * time.Millisecond,
 		readBalloonStatsUpdated: time.Now(),
 		queryBalloonActualBytes: 512 * testMiB,
 	}).withDefaultBalloonPath("/machine/peripheral/balloon0")
 
-	waiter := &fakeSocketWaiter{
-		callback: func(paths []string) error {
-			for _, path := range paths {
-				if err := createStaleUnixSocketPath(path); err != nil {
-					return err
-				}
-			}
-			return nil
-		},
+	manager := newManagerFromConfig(Config{
+		Locker:            &fileLocker{},
+		Runner:            runner,
+		SocketWaiter:      &fakeSocketWaiter{callback: createBalloonTestSockets},
+		QMPDialer:         &fakeQMPDialer{client: qmpClient},
+		Logger:            slog.New(slog.DiscardHandler),
+		ShutdownDelay:     10 * time.Millisecond,
+		QMPConnectTimeout: time.Second,
+		QMPQuitTimeout:    time.Second,
+	})
+	v, err := manager.startVM(context.Background(), launch.Spec{Manifest: launchManifest})
+	if err != nil {
+		t.Fatalf("start VM: %v", err)
 	}
-
-	manager := &manager{
-		locker:            &fileLocker{},
-		runner:            runner,
-		socketWaiter:      waiter,
-		qmpDialer:         &fakeQMPDialer{client: qmpClient},
-		logger:            slog.New(slog.DiscardHandler),
-		shutdownDelay:     10 * time.Millisecond,
-		qmpRetryDelay:     0,
-		qmpConnectTimeout: time.Second,
-		qmpQuitTimeout:    time.Second,
+	<-readDone
+	if err := v.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown VM: %v", err)
 	}
-
-	err := manager.launch(cancelCtx, manifest, nil)
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("expected context cancellation, got %v", err)
-	}
-
-	if got, want := qmpClient.quitCount(), 1; got != want {
-		t.Fatalf("expected qmp quit to be called once, got %d", got)
-	}
-
-	readCompleted := qmpClient.readCompletionTime()
-	if readCompleted.IsZero() {
-		t.Fatal("expected balloon controller poll to run before shutdown")
-	}
-	if quitAt.Before(readCompleted) {
-		t.Fatalf("expected qmp quit after balloon controller stopped: quit=%s read-complete=%s", quitAt, readCompleted)
+	if quitAt.Before(readAt) {
+		t.Fatalf("QEMU quit before balloon controller stopped: quit=%s read=%s", quitAt, readAt)
 	}
 }
 
-func TestManagerLaunchDoesNotAbortOnBalloonControllerFailure(t *testing.T) {
+func TestStartVMContinuesWhenBalloonControllerFails(t *testing.T) {
 	tmpDir := t.TempDir()
-	manifest := validManifestWithBalloon(tmpDir)
-	manifest.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
+	launchManifest := validManifestWithBalloon(tmpDir)
+	launchManifest.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
 
-	cancelCtx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	runner := &launchRunner{cancel: cancel}
+	runner := &launchRunner{}
+	controllerStarted := make(chan struct{})
 	qmpClient := (&fakeQMPClient{
 		enableBalloonStatsErr: errors.New("guest stats unavailable"),
+		onEnableBalloonStats: func() {
+			close(controllerStarted)
+		},
 		onQuit: func() {
 			runner.exitQEMU(nil)
 		},
 	}).withDefaultBalloonPath("/machine/peripheral/balloon0")
 
-	waiter := &fakeSocketWaiter{
-		callback: func(paths []string) error {
-			for _, path := range paths {
-				if err := createStaleUnixSocketPath(path); err != nil {
-					return err
-				}
-			}
-			return nil
-		},
+	manager := newManagerFromConfig(Config{
+		Locker:            &fileLocker{},
+		Runner:            runner,
+		SocketWaiter:      &fakeSocketWaiter{callback: createBalloonTestSockets},
+		QMPDialer:         &fakeQMPDialer{client: qmpClient},
+		Logger:            slog.New(slog.DiscardHandler),
+		ShutdownDelay:     10 * time.Millisecond,
+		QMPConnectTimeout: time.Second,
+		QMPQuitTimeout:    time.Second,
+	})
+	v, err := manager.startVM(context.Background(), launch.Spec{Manifest: launchManifest})
+	if err != nil {
+		t.Fatalf("start VM: %v", err)
 	}
-
-	manager := &manager{
-		locker:            &fileLocker{},
-		runner:            runner,
-		socketWaiter:      waiter,
-		qmpDialer:         &fakeQMPDialer{client: qmpClient},
-		logger:            slog.New(slog.DiscardHandler),
-		shutdownDelay:     10 * time.Millisecond,
-		qmpRetryDelay:     0,
-		qmpConnectTimeout: time.Second,
-		qmpQuitTimeout:    time.Second,
-	}
-
-	err := manager.launch(cancelCtx, manifest, nil)
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("expected context cancellation, got %v", err)
-	}
-
-	if got, want := len(runner.sshArgs()), 1; got != want {
-		t.Fatalf("expected ssh session to start despite balloon controller failure, got %d ssh starts", got)
-	}
-	if got, want := qmpClient.quitCount(), 1; got != want {
-		t.Fatalf("expected qmp quit to still be used on teardown, got %d", got)
+	<-controllerStarted
+	if err := v.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown VM: %v", err)
 	}
 }
 
@@ -174,6 +143,15 @@ func TestBalloonControllerTaskWithNilLoggerDoesNotPanicOnFailure(t *testing.T) {
 	if err := task(context.Background()); err != nil {
 		t.Fatalf("expected nil task error, got %v", err)
 	}
+}
+
+func createBalloonTestSockets(paths []string) error {
+	for _, path := range paths {
+		if err := createStaleUnixSocketPath(path); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func TestBalloonControllerTaskWithNilLoggerDoesNotPanicOnAdjustment(t *testing.T) {

@@ -268,8 +268,10 @@ func (c *socketClient) CloseFile(ctx context.Context, handle int) error {
 func (c *socketClient) Exec(ctx context.Context, path string, args []string, env []string, captureOutput bool) (int, error) {
 	arguments := map[string]any{
 		"path":           path,
-		"arg":            args,
 		"capture-output": captureOutput,
+	}
+	if len(args) > 0 {
+		arguments["arg"] = args
 	}
 	if len(env) > 0 {
 		arguments["env"] = env

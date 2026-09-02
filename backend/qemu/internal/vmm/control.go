@@ -89,7 +89,7 @@ func (m *manager) effectiveSuspendSignalTimeout() time.Duration {
 		shutdownDelay = defaultShutdownDelay
 	}
 
-	teardownProcesses := 2 + len(m.launchManifest.Run) // qemu, active ssh session when present, plus run processes.
+	teardownProcesses := 1 + len(m.launchManifest.Run) // qemu plus run processes.
 
 	return defaultLaunchSignalTimeout +
 		m.effectiveQMPMigrationTimeout() +

@@ -1,16 +1,10 @@
 package launch
 
-import "fmt"
-
 func BuildPlan(spec Spec, resumeState *SuspendState, notifier NotificationSink) (*Plan, error) {
 	manifest := spec.Manifest
-	remoteCommand := spec.RemoteCommand
 	options := spec.Options
 	if err := manifest.Validate(); err != nil {
 		return nil, err
-	}
-	if options.SSH && len(manifest.SSH.Argv) == 0 {
-		return nil, fmt.Errorf("--ssh requires a non-empty manifest.ssh.exec")
 	}
 	virtioFSSocketPaths, err := manifest.ResolvedVirtioFSSocketPaths()
 	if err != nil {
@@ -47,7 +41,6 @@ func BuildPlan(spec Spec, resumeState *SuspendState, notifier NotificationSink) 
 	}
 	return &Plan{
 		Manifest:                    manifest,
-		RemoteCommand:               append([]string(nil), remoteCommand...),
 		Options:                     options,
 		ResumeState:                 resumeState,
 		Notifier:                    notifier,

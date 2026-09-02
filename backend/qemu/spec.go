@@ -117,6 +117,12 @@ func specDocument(spec *vm.Spec, cfg *Backend, base *imanifest.Document) (imanif
 	case AccelTCG:
 		enabled := false
 		doc.Machine.KVM = &enabled
+		if doc.Machine.CPU == "" {
+			doc.Machine.CPU = "max"
+			if doc.Host.System == "x86_64-linux" || (doc.Host.System == "" && runtime.GOARCH == "amd64") {
+				doc.Machine.CPU += ",+x2apic"
+			}
+		}
 	default:
 		return imanifest.Document{}, fmt.Errorf("unsupported QEMU accelerator %q", cfg.Accel)
 	}

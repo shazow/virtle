@@ -14,9 +14,8 @@ func TestBuildPlanResolvesRuntimeInputs(t *testing.T) {
 	cfg := validPlanManifest(tmpDir)
 	notifier := fakeNotifier{}
 	plan, err := BuildPlan(Spec{
-		Manifest:      cfg,
-		RemoteCommand: []string{"uname", "-a"},
-		Options:       Options{Resume: ResumeModeNo, SSH: true},
+		Manifest: cfg,
+		Options:  Options{Resume: ResumeModeNo},
 	}, nil, notifier)
 	if err != nil {
 		t.Fatalf("build plan: %v", err)
@@ -24,9 +23,6 @@ func TestBuildPlanResolvesRuntimeInputs(t *testing.T) {
 
 	if plan.Manifest != cfg || plan.Notifier != notifier {
 		t.Fatalf("plan did not preserve manifest/notifier")
-	}
-	if got, want := plan.RemoteCommand, []string{"uname", "-a"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
-		t.Fatalf("unexpected remote command: %#v", got)
 	}
 	if plan.Paths.QMPSocket == "" || plan.Paths.ControlSocket == "" || plan.Paths.StateDir == "" {
 		t.Fatalf("expected resolved runtime paths, got %#v", plan.Paths)

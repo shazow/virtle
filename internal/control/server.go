@@ -31,6 +31,8 @@ type Server struct {
 	listener net.Listener
 	closed   bool
 	done     chan struct{}
+	started  chan struct{}
+	start    sync.Once
 }
 
 // NewServer returns a closable control server for router.
@@ -38,7 +40,7 @@ func NewServer(h *Router) (*Server, error) {
 	if h == nil {
 		return nil, fmt.Errorf("control handler is required")
 	}
-	return &Server{handler: h}, nil
+	return &Server{handler: h, started: make(chan struct{})}, nil
 }
 
 // Listen opens a private Unix socket at path for control requests.
@@ -71,6 +73,7 @@ func (s *Server) Serve(l net.Listener) error {
 	s.done = make(chan struct{})
 	done := s.done
 	s.mu.Unlock()
+	s.start.Do(func() { close(s.started) })
 	defer func() {
 		s.mu.Lock()
 		if s.listener == l {
@@ -112,6 +115,9 @@ func (s *Server) Serve(l net.Listener) error {
 		}
 	}
 }
+
+// Started closes once Serve has registered its listener.
+func (s *Server) Started() <-chan struct{} { return s.started }
 
 // Close stops accepting new control socket connections.
 func (s *Server) Close() error {

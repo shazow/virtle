@@ -69,6 +69,8 @@ integer `UID` and `GID` fields.
   Oversized control requests return the new `resource_limit` RPC error.
 - QEMU hotplug now supports complete ad-hoc share, disk, and port-forward
   configurations using the same validation and defaults as manifests.
+- `qemu.AccelTCG` now selects a software-emulation CPU and legacy timers on
+  x86 microvm guests, so explicitly disabling KVM works on hosts without it.
 
 ## 2026-08-31
 

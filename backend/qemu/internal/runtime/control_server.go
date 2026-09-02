@@ -25,5 +25,6 @@ func StartControl(ctx context.Context, socketPath string, router *control.Router
 			logger.Warn("control socket stopped", "err", err)
 		}
 	}()
+	<-server.Started()
 	return server, nil
 }

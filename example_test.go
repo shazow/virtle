@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 
-	"github.com/shazow/virtle/backend"
 	"github.com/shazow/virtle/backend/qemu"
 	"github.com/shazow/virtle/units"
 	"github.com/shazow/virtle/vm"
@@ -23,34 +23,31 @@ func Example() {
 		Memory: 2048 * units.Mebibyte,
 	}
 
-	b, err := qemu.New(qemu.Config{RemoteControl: qemu.QGA{}})
-	if err != nil {
-		log.Print(err)
-		return
-	}
-	inst, err := b.Start(ctx, spec)
+	b := &qemu.Backend{RemoteControl: qemu.QGA{}}
+	m, err := b.Start(ctx, spec)
 	if err != nil {
 		log.Print(err)
 		return
 	}
 	defer func() {
-		if err := backend.Shutdown(ctx, inst); err != nil {
+		if err := m.Shutdown(ctx); err != nil {
 			log.Print(err)
 		}
 	}()
 
-	guest, err := inst.RemoteControl()
+	guest, err := m.RemoteControl()
 	if err != nil {
 		log.Print(err)
 		return
 	}
-	result, err := guest.Run(ctx, &vm.GuestCmd{
-		Path: "make",
-		Dir:  "/workspace",
+	err = guest.Run(ctx, &vm.GuestCmd{
+		Path:   "make",
+		Dir:    "/workspace",
+		Stdout: os.Stdout,
 	})
 	if err != nil {
 		log.Print(err)
 		return
 	}
-	fmt.Printf("exit=%d\n%s", result.ExitCode, result.Stdout)
+	fmt.Println("build completed")
 }

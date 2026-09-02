@@ -1,17 +1,94 @@
 # History
 
-This is a curated history of breaking changes and important consumer-facing
-capabilities, grouped by day, newest first. Keep entries terse and focused on
-user-visible outcomes.
+Curated newest-first history of breaking changes and important consumer-facing
+capabilities, grouped by day. Describe changes from the consumer's perspective,
+leading with the affected command or API rather than implementation details.
+Keep entries terse. When a day includes both CLI and library changes, group
+them by type, CLI first. For compatibility-breaking usage migrations, include
+compact before/after examples.
 
 ## 2026-09-01
 
+- **Breaking library changes noted below.**
+- `virtle status` now reports the running VM's lifecycle state and connection
+  details.
+- `virtle launch` now handles signals and `virtle suspend` with bounded,
+  orderly teardown.
 - Newly created VM state directories and volume images are private by default
   (`0700` and `0600`).
 - Guest and control requests now have bounded memory use and concurrency.
   Oversized control requests return the new `resource_limit` RPC error.
+
+### Library changes
+
+- The library backend contract now exposes `Machine` handles with graceful
+  shutdown and live-object capabilities; QEMU is configured directly through
+  the exported, zero-value-usable `qemu.Backend` type.
+- QEMU machines now stop when their `Start` or `Resume` context is canceled,
+  service control-socket suspend requests after library startup, and expose
+  guest RPCs only when remote control is configured.
+- `vm.Guest.Run` now writes to caller-provided streams and reports non-zero
+  command statuses as `*vm.ExitError`; `vm.Output` provides buffered stdout.
+- Unit codecs now live in the public `units` package; byte sizes support
+  unit-suffixed text, JSON, and TOML round trips. QEMU acceleration and port
+  protocols now use typed enums.
 - QEMU hotplug now supports complete ad-hoc share, disk, and port-forward
   configurations using the same validation and defaults as manifests.
+- `qemu.AccelTCG` now selects a software-emulation CPU and legacy timers on
+  x86 microvm guests, so explicitly disabling KVM works on hosts without it.
+
+Construct QEMU with `&qemu.Backend{}` instead of `qemu.New(qemu.Config{})`.
+`backend.Instance` is now `backend.Machine`; shutdown and live capabilities
+such as suspend, memory resize, and device attach are methods of that machine.
+Resume remains a backend capability through `backend.Resumer`. Guest commands
+now stream through `GuestCmd` writers and return non-zero status as
+`*vm.ExitError`; use `vm.Output` when buffered stdout is more convenient.
+
+Before:
+
+```go
+kvm := false
+b, err := qemu.New(qemu.Config{
+    Machine:       "microvm",
+    KVM:           &kvm,
+    RemoteControl: qemu.QGA{},
+})
+inst, err := b.Start(ctx, spec)
+defer backend.Shutdown(ctx, inst)
+
+guest, err := inst.RemoteControl()
+result, err := guest.Run(ctx, &vm.GuestCmd{Path: "make"})
+fmt.Print(result.Stdout)
+
+if s, ok := b.(backend.Suspender); ok {
+    err = s.Suspend(ctx, inst, "")
+}
+```
+
+After:
+
+```go
+b := &qemu.Backend{
+    MachineType:   "microvm",
+    Accel:         qemu.AccelTCG,
+    RemoteControl: qemu.QGA{},
+}
+m, err := b.Start(ctx, spec)
+defer m.Shutdown(ctx)
+
+guest, err := m.RemoteControl()
+err = guest.Run(ctx, &vm.GuestCmd{Path: "make", Stdout: os.Stdout})
+
+if s, ok := m.(backend.Suspender); ok {
+    err = s.Suspend(ctx)
+}
+```
+
+Additional source migrations: `qemu.Config.Machine` is
+`qemu.Backend.MachineType`; `Config.KVM` is the `Backend.Accel` enum;
+`vm.Forward.Proto` is a `vm.Proto`; `vm.TermOptions.TERM` is `TermType`; and
+setting ownership in `vm.CopyOptions` now requires `Chown: true` alongside
+integer `UID` and `GID` fields.
 
 ## 2026-08-31
 
@@ -34,9 +111,9 @@ user-visible outcomes.
 
   ```go
   spec, b, err := manifest.Load(r)
-  inst, err := b.Start(ctx, spec)
-  guest, err := inst.RemoteControl()
-  result, err := guest.Run(ctx, &vm.GuestCmd{Path: "make"})
+  m, err := b.Start(ctx, spec)
+  guest, err := m.RemoteControl()
+  err = guest.Run(ctx, &vm.GuestCmd{Path: "make", Stdout: os.Stdout})
   ```
 
 - Logging was overhauled: normal runs show warnings, `-v` adds useful lifecycle

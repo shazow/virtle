@@ -7,36 +7,29 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/shazow/virtle/backend"
 	"github.com/shazow/virtle/backend/qemu/internal/launch"
 	controlpkg "github.com/shazow/virtle/internal/control"
-	"github.com/shazow/virtle/internal/manifest"
 )
 
 const defaultLaunchSignalTimeout = 5 * time.Second
-
-// Suspend saves the running VM state to disk and exits the launch process.
-func Suspend(ctx context.Context, manifest *manifest.Manifest) error {
-	m := newManager()
-	m.launchManifest = manifest
-	return m.suspend(ctx)
-}
 
 func (m *manager) suspend(ctx context.Context) error {
 	manifest := m.launchManifest
 	controlSocketPath, err := manifest.ResolvedControlSocketPath()
 	if err == nil && controlSocketPath != "" {
-		resp, err := controlpkg.Dial(controlSocketPath).Suspend(ctx, controlpkg.SuspendRequest{})
+		machine, err := controlpkg.Dial(ctx, controlSocketPath)
 		if err == nil {
-			if resp.Saved {
-				timeout := m.effectiveSuspendSignalTimeout()
-				waitCtx, cancel := context.WithTimeout(ctx, timeout)
-				defer cancel()
-				if err := launch.WaitForLaunchExited(waitCtx, manifest, timeout); err != nil {
-					return err
-				}
-				return nil
+			err = machine.(backend.Suspender).Suspend(ctx)
+		}
+		if err == nil {
+			timeout := m.effectiveSuspendSignalTimeout()
+			waitCtx, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+			if err := launch.WaitForLaunchExited(waitCtx, manifest, timeout); err != nil {
+				return err
 			}
-			return &launch.StageError{Stage: "qmp suspend", Err: fmt.Errorf("launch process did not save VM state")}
+			return nil
 		}
 		if !controlpkg.IsSocketUnavailable(err) {
 			return &launch.StageError{Stage: "control suspend", Err: err}
@@ -96,7 +89,7 @@ func (m *manager) effectiveSuspendSignalTimeout() time.Duration {
 		shutdownDelay = defaultShutdownDelay
 	}
 
-	teardownProcesses := 2 + len(m.launchManifest.Run) // qemu, active ssh session when present, plus run processes.
+	teardownProcesses := 1 + len(m.launchManifest.Run) // qemu plus run processes.
 
 	return defaultLaunchSignalTimeout +
 		m.effectiveQMPMigrationTimeout() +

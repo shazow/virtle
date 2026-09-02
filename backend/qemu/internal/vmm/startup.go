@@ -28,7 +28,9 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 
 	stats := launch.NewStats(time.Now())
 	launchCtx, cancelLaunch := context.WithCancel(ctx)
-	lifecycle := launch.NewSignalLifecycle(m.signals, cancelLaunch)
+	// Signal policy belongs to the CLI session or embedding program. The
+	// lifecycle remains the coordinator for control-socket suspend requests.
+	lifecycle := launch.NewLifecycle(nil, nil, cancelLaunch)
 	if err := launch.EnsurePersistenceDirectory(filepath.Dir(plan.Manifest.ResolvedLockPath()), plan.Manifest.QEMU.RunAsUser); err != nil {
 		stopLaunchLifecycle(lifecycle, cancelLaunch)
 		return nil, &launch.StageError{Stage: "preflight", Err: fmt.Errorf("create lock directory: %w", err)}
@@ -203,7 +205,6 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 		SavedSuspendExit: launch.IsSavedSuspendExit,
 	})
 	started = &runningLaunch{
-		ctx:            launchCtx,
 		runtime:        runtime,
 		plan:           plan,
 		stats:          stats,
@@ -213,10 +214,11 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 		processes:      processes,
 	}
 	runtime.SetReady()
-	if _, err := runtime.StartControl(launchCtx, controlpkg.Handlers{
-		Guest:   m.guestFeature(plan.Paths.GuestAgentSocket, processes),
-		Hotplug: m.hotplugFeature(runtime.QMP()),
-	}); err != nil {
+	handlers := controlpkg.Handlers{Hotplug: m.hotplugFeature(runtime.QMP())}
+	if plan.Options.HasRemoteControl {
+		handlers.Guest = m.guestFeature(plan.Paths.GuestAgentSocket, processes)
+	}
+	if _, err := runtime.StartControl(launchCtx, handlers); err != nil {
 		return nil, launch.WrapFixedStage("control startup")(err)
 	}
 	if err := launch.HandleQueuedSuspend(launchCtx, lifecycle, suspendHandler.Handle); err != nil {

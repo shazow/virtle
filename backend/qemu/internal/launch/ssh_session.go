@@ -21,6 +21,7 @@ type SSHSession struct {
 	Plan                   *Plan
 	Runner                 Runner
 	Logger                 *slog.Logger
+	Stdin                  io.Reader
 	Stdout                 io.Writer
 	Stderr                 io.Writer
 	RetryOutputRevealDelay time.Duration
@@ -33,7 +34,7 @@ type SSHSession struct {
 	WaitForRetry  func(context.Context, executor.Group) error
 	EnsureKey     func() (SSHAutoprovisionKey, error)
 	InstallKey    func(context.Context, SSHAutoprovisionKey, executor.Group) error
-	wrapStage     func(stage string, err error) error
+	Established   func() error
 	Now           func() time.Time
 }
 
@@ -64,14 +65,15 @@ func RunSSHSession(ctx context.Context, session SSHSession) error {
 		}
 		cmd, err := buildSSHCommandWithArgv(launchManifest, plan.CID, plan.RemoteCommand, argv)
 		if err != nil {
-			return wrapSSHSessionStage(session, "active session", err)
+			return wrapStage("active session", err)
 		}
 		sessionLogger.Info("ssh command", "command", shellquote.Join(cmd.Args...))
+		cmd.Stdin = session.Stdin
 		cmd.Stdout = stdout
 		cmd.Stderr = stderr
 		started, err := session.Runner.Start(cmd)
 		if err != nil {
-			return wrapSSHSessionStage(session, "active session", err)
+			return wrapStage("active session", err)
 		}
 		watchers := executor.Group{}
 		if session.Watchers != nil {
@@ -82,6 +84,12 @@ func RunSSHSession(ctx context.Context, session SSHSession) error {
 		}
 		if session.RecordTimer != nil {
 			session.RecordTimer(TimerSSHStarted, attemptStarted)
+		}
+		if session.Established != nil {
+			if err := session.Established(); err != nil {
+				_ = started.Stop(context.Background())
+				return wrapStage("active session", err)
+			}
 		}
 
 		err = session.Wait(ctx, started, watchers)
@@ -111,7 +119,7 @@ func RunSSHSession(ctx context.Context, session SSHSession) error {
 			sessionLogger.Info("ssh authentication failed; autoprovisioning a key", "state_dir", launchManifest.ResolvedPersistenceStateDir(), "user", launchManifest.SSH.User)
 			key, keyErr := session.EnsureKey()
 			if keyErr != nil {
-				return wrapSSHSessionStage(session, "ssh autoprovision", keyErr)
+				return wrapStage("ssh autoprovision", keyErr)
 			}
 			if installErr := session.InstallKey(ctx, key, watchers); installErr != nil {
 				return installErr
@@ -131,11 +139,4 @@ func sshSessionNow(session SSHSession) time.Time {
 		return session.Now()
 	}
 	return time.Now()
-}
-
-func wrapSSHSessionStage(session SSHSession, stage string, err error) error {
-	if session.wrapStage != nil {
-		return session.wrapStage(stage, err)
-	}
-	return wrapStage(stage, err)
 }

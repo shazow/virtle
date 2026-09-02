@@ -2,6 +2,7 @@ package vmm
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -11,14 +12,7 @@ import (
 	"github.com/shazow/virtle/backend/qemu/internal/qga"
 	controlpkg "github.com/shazow/virtle/internal/control"
 	"github.com/shazow/virtle/internal/executor"
-	"github.com/shazow/virtle/internal/manifest"
 )
-
-func Hotplug(ctx context.Context, manifest *manifest.Manifest, id string, detach bool) error {
-	m := newManager()
-	m.launchManifest = manifest
-	return m.hotplug(ctx, id, detach)
-}
 
 func (m *manager) hotplug(ctx context.Context, id string, detach bool) error {
 	launchManifest := m.launchManifest
@@ -32,7 +26,10 @@ func (m *manager) hotplug(ctx context.Context, id string, detach bool) error {
 	if controlSocketPath == "" {
 		return &launch.StageError{Stage: "control hotplug", Err: fmt.Errorf("control socket path is not configured")}
 	}
-	_, err = controlpkg.Dial(controlSocketPath).Hotplug(ctx, controlpkg.HotplugRequest{ID: id, Detach: detach})
+	params, err := json.Marshal(controlpkg.HotplugRequest{ID: id, Detach: detach})
+	if err == nil {
+		_, err = controlpkg.Raw(ctx, controlSocketPath, "hotplug", params)
+	}
 	if err != nil {
 		return &launch.StageError{Stage: "control hotplug", Err: err}
 	}

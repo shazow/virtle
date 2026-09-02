@@ -79,6 +79,28 @@ func TestClientFileAndExecCommands(t *testing.T) {
 	assertCommand(t, commands, "guest-exec-status")
 }
 
+func TestClientExecOmitsEmptyOptionalLists(t *testing.T) {
+	client, commands, cleanup := newTestClient(t, func(message map[string]any) map[string]any {
+		return map[string]any{"return": map[string]any{"pid": 7}}
+	})
+	defer cleanup()
+
+	if _, err := client.Exec(context.Background(), "/bin/true", nil, nil, true); err != nil {
+		t.Fatalf("exec: %v", err)
+	}
+	execCommand := assertCommand(t, commands, "guest-exec")
+	arguments, ok := execCommand["arguments"].(map[string]any)
+	if !ok {
+		t.Fatalf("guest-exec arguments: got %#v", execCommand["arguments"])
+	}
+	if _, ok := arguments["arg"]; ok {
+		t.Fatalf("guest-exec empty arg must be omitted: %#v", arguments)
+	}
+	if _, ok := arguments["env"]; ok {
+		t.Fatalf("guest-exec empty env must be omitted: %#v", arguments)
+	}
+}
+
 func TestClientSynchronizeDiscardsStaleReplies(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	defer serverConn.Close()

@@ -49,11 +49,73 @@
         system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
+          guestKernelPackage = pkgs.linuxPackages.kernel;
+          guestCompressedModules = pkgs.makeModulesClosure {
+            kernel = guestKernelPackage.modules;
+            firmware = guestKernelPackage;
+            rootModules = [
+              "virtio_console"
+              "virtio_mmio"
+            ];
+          };
+          guestModules = pkgs.runCommand "virtle-integration-modules" { nativeBuildInputs = [ pkgs.xz ]; } ''
+            mkdir -p $out
+            cp -r ${guestCompressedModules}/lib $out/
+            chmod -R u+w $out
+            find $out -name '*.ko.xz' -exec unxz '{}' +
+            sed -i 's/\.ko\.xz/\.ko/g' $out/lib/modules/${guestKernelPackage.modDirVersion}/modules.dep
+            rm $out/lib/modules/${guestKernelPackage.modDirVersion}/modules.dep.bin
+          '';
+          guestInit = pkgs.writeScript "virtle-integration-init" ''
+            #!${pkgs.busybox}/bin/sh
+            export PATH=${pkgs.busybox}/bin:${pkgs.qemu.ga}/bin
+            mkdir -p /bin /dev /proc /sys /tmp /var/run
+            mount -t devtmpfs devtmpfs /dev
+            mount -t proc proc /proc
+            mount -t sysfs sysfs /sys
+            ln -s ${pkgs.busybox}/bin/sh /bin/sh
+            ln -s ${pkgs.busybox}/bin/true /bin/true
+            ln -s ${pkgs.busybox}/bin/false /bin/false
+            modprobe virtio_mmio
+            modprobe virtio_console
+            guestAgentDevice=
+            while [ -z "$guestAgentDevice" ]; do
+              for namePath in /sys/class/virtio-ports/*/name; do
+                if [ -e "$namePath" ] && [ "$(cat "$namePath")" = org.qemu.guest_agent.0 ]; then
+                  guestAgentDevice=/dev/$(basename "$(dirname "$namePath")")
+                  break
+                fi
+              done
+              ${pkgs.busybox}/bin/sleep 0.01
+            done
+            exec ${pkgs.qemu.ga}/bin/qemu-ga -m virtio-serial -p "$guestAgentDevice"
+          '';
+          guestInitrd = pkgs.makeInitrd {
+            name = "virtle-integration-initrd";
+            contents = [
+              {
+                object = guestInit;
+                symlink = "/init";
+              }
+              {
+                object = guestModules;
+                suffix = "/lib/modules";
+                symlink = "/lib/modules";
+              }
+            ];
+          };
+          guestKernel = "${guestKernelPackage}/${
+            if pkgs.stdenv.hostPlatform.isx86_64 then "bzImage" else "Image"
+          }";
+          guestMachine = if pkgs.stdenv.hostPlatform.isx86_64 then "microvm" else "virt";
           integrationTest = pkgs.buildGoModule {
             pname = "virtle-integration-test-binary";
             inherit (release) version vendorHash;
             src = ./.;
-            subPackages = [ "backend/qemu/internal/launch" ];
+            subPackages = [
+              "backend/qemu/internal/launch"
+              "backend/qemu"
+            ];
             tags = [ "integration" ];
             env.CGO_ENABLED = 0;
             buildTestBinaries = true;
@@ -65,12 +127,18 @@
           integration = pkgs.vmTools.runInLinuxVM (
             pkgs.runCommand "virtle-integration-tests-${release.version}"
               {
-                memSize = 512;
+                enableParallelBuilding = false;
+                memSize = 1024;
+                nativeBuildInputs = [ pkgs.qemu ];
               }
               ''
                 ln -sfn ${pkgs.dash}/bin/dash /bin/sh
                 test "$(readlink -f /bin/sh)" = ${pkgs.dash}/bin/dash
                 ${integrationTest}/bin/launch.test -test.run '^TestIntegration' -test.v
+                VIRTLE_INTEGRATION_KERNEL=${guestKernel} \
+                  VIRTLE_INTEGRATION_INITRD=${guestInitrd}/initrd \
+                  VIRTLE_INTEGRATION_MACHINE=${guestMachine} \
+                  ${integrationTest}/bin/qemu.test -test.run '^TestIntegrationBackend$' -test.v
                 touch $out
               ''
           );

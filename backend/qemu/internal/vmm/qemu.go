@@ -227,15 +227,17 @@ func buildQEMUArgs(qemu manifest.QEMU, cid int, incoming bool) ([]string, error)
 		args = append(args, "-device", strings.Join(deviceParams, ","))
 	}
 
-	vsockTransport, err := resolveQEMUTransport(qemu.Devices.VSOCK.Transport)
-	if err != nil {
-		return nil, err
+	if qemu.Devices.VSOCK.ID != "" {
+		vsockTransport, err := resolveQEMUTransport(qemu.Devices.VSOCK.Transport)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, govmmQemu.VSOCKDevice{
+			ID:        qemu.Devices.VSOCK.ID,
+			ContextID: uint64(cid),
+			Transport: vsockTransport,
+		}.QemuParams(config)...)
 	}
-	args = append(args, govmmQemu.VSOCKDevice{
-		ID:        qemu.Devices.VSOCK.ID,
-		ContextID: uint64(cid),
-		Transport: vsockTransport,
-	}.QemuParams(config)...)
 
 	if incoming {
 		args = append(args, "-incoming", "defer")

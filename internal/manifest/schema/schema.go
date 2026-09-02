@@ -7,18 +7,13 @@ import (
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/shazow/virtle/internal/manifest"
-	"github.com/shazow/virtle/internal/units"
+	"github.com/shazow/virtle/units"
 )
 
 // Generate returns the JSON Schema for the virtle manifest input format.
 func Generate() (*jsonschema.Schema, error) {
 	opts := &jsonschema.ForOptions{
-		TypeSchemas: map[reflect.Type]*jsonschema.Schema{
-			// Durations are documented as Go duration strings; the decoder
-			// also accepts bare numbers of seconds for backward
-			// compatibility, deliberately left out of the schema.
-			reflect.TypeOf(units.Duration(0)): {Type: "string"},
-		},
+		TypeSchemas: units.JSONSchemaTypes(),
 	}
 
 	// MountsInput is a tagged-union slice backed by the MountEntry interface.

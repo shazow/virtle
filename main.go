@@ -16,10 +16,13 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/jessevdk/go-flags"
+	"github.com/shazow/virtle/backend"
+	"github.com/shazow/virtle/backend/qemu"
 	"github.com/shazow/virtle/backend/qemu/session"
 	"github.com/shazow/virtle/internal/control"
 	"github.com/shazow/virtle/internal/manifest"
 	manifestschema "github.com/shazow/virtle/internal/manifest/schema"
+	manifestapi "github.com/shazow/virtle/manifest"
 )
 
 type Options struct {
@@ -37,6 +40,8 @@ type Options struct {
 	} `command:"launch" description:"Launch a virtiofs + ssh sandbox session" long-description:"Start configured host-side run processes, launch QEMU directly, then optionally attach over ssh."`
 
 	Suspend struct{} `command:"suspend" description:"Suspend a running sandbox session" long-description:"Save QEMU state to disk and exit the launch session."`
+
+	Status struct{} `command:"status" description:"Report the running virtual machine status"`
 
 	Hotplug struct {
 		Detach bool `long:"detach" description:"Detach the hotplug device instead of attaching it"`
@@ -76,15 +81,28 @@ func runLaunch(options *Options) error {
 	}
 
 	rootLogger.With("package", "main").Info("loading launch manifest", "path", options.Manifest)
+	resolvedPath, err := resolveManifestPath(options.Manifest)
+	if err != nil {
+		return err
+	}
+	data, err := readManifestFile(resolvedPath)
+	if err != nil {
+		return fmt.Errorf("open manifest %q: %w", resolvedPath, err)
+	}
+	spec, b, err := manifestapi.Load(bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("load manifest %q: %w", resolvedPath, err)
+	}
+	if qemuBackend, ok := b.(*qemu.Backend); ok {
+		qemuBackend.Logger = rootLogger
+		qemuBackend.ConsoleOutput = os.Stderr
+	}
 	loaded, err := loadLaunchManifest(options.Manifest, rootLogger.With("package", "manifest"))
 	if err != nil {
 		return err
 	}
 
-	// The session layer owns the whole foreground lifecycle; backend
-	// details (suspend-state versioning, readiness, guest control) live
-	// inside the machinery it wraps.
-	return session.Run(context.Background(), loaded, session.Options{
+	return session.Run(context.Background(), b, spec, loaded, session.Options{
 		Resume:        options.Launch.Resume,
 		SSH:           options.Launch.SSH,
 		RemoteCommand: options.Launch.Args.RemoteCommand,
@@ -101,11 +119,44 @@ func runSuspend(options *Options) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	if err := session.Suspend(ctx, manifest); err != nil {
+	controlSocketPath, err := manifest.ResolvedControlSocketPath()
+	if err != nil {
+		return err
+	}
+	m, err := control.Dial(ctx, controlSocketPath)
+	if err != nil {
+		return err
+	}
+	if err := m.(backend.Suspender).Suspend(ctx); err != nil {
+		return err
+	}
+	if err := m.Wait(ctx); err != nil {
 		return err
 	}
 	_, err = fmt.Fprintln(os.Stdout, "suspended vm")
 	return err
+}
+
+func runStatus(options *Options) error {
+	mf, err := loadManifest(options.Manifest)
+	if err != nil {
+		return err
+	}
+	path, err := mf.ResolvedControlSocketPath()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	m, err := control.Dial(ctx, path)
+	if err != nil {
+		return err
+	}
+	status, err := m.(backend.StatusReporter).Status(ctx)
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(os.Stdout).Encode(status)
 }
 
 func runManifestDefaults(options *Options) error {
@@ -146,7 +197,7 @@ func runManifestSchema() error {
 }
 
 func runHotplug(options *Options) error {
-	manifest, err := loadLaunchManifest(options.Manifest, rootLogger.With("package", "manifest"))
+	manifest, err := loadManifest(options.Manifest)
 	if err != nil {
 		return err
 	}
@@ -154,7 +205,15 @@ func runHotplug(options *Options) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	if err := session.Hotplug(ctx, manifest, options.Hotplug.Args.ID, options.Hotplug.Detach); err != nil {
+	controlSocketPath, err := manifest.ResolvedControlSocketPath()
+	if err != nil {
+		return err
+	}
+	params, err := json.Marshal(control.HotplugRequest{ID: options.Hotplug.Args.ID, Detach: options.Hotplug.Detach})
+	if err != nil {
+		return err
+	}
+	if _, err := control.Raw(ctx, controlSocketPath, "hotplug", params); err != nil {
 		return err
 	}
 	action := "attached"
@@ -186,7 +245,7 @@ func runRPC(options *Options) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	result, err := control.Dial(controlSocketPath).Raw(ctx, options.RPC.Args.Method, params)
+	result, err := control.Raw(ctx, controlSocketPath, options.RPC.Args.Method, params)
 	if err != nil {
 		return err
 	}
@@ -343,6 +402,8 @@ func run(args []string) error {
 		return runLaunch(opts)
 	case "suspend":
 		return runSuspend(opts)
+	case "status":
+		return runStatus(opts)
 	case "hotplug":
 		return runHotplug(opts)
 	case "rpc":

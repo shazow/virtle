@@ -18,7 +18,6 @@ import (
 	"github.com/shazow/virtle/backend"
 	"github.com/shazow/virtle/backend/qemu"
 	imanifest "github.com/shazow/virtle/internal/manifest"
-	"github.com/shazow/virtle/units"
 	"github.com/shazow/virtle/vm"
 )
 
@@ -66,7 +65,7 @@ func Load(r io.Reader) (*vm.Spec, backend.Backend, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	return spec, qemu.NewBackendFromDocument(doc, qemu.Config{}), nil
+	return spec, qemu.NewBackendFromDocument(doc, qemu.Backend{}), nil
 }
 
 // specFromDocument extracts the neutral Spec view from a defaults-merged
@@ -74,7 +73,7 @@ func Load(r io.Reader) (*vm.Spec, backend.Backend, error) {
 func specFromDocument(doc imanifest.Document) (*vm.Spec, error) {
 	spec := &vm.Spec{
 		CPUs:   doc.Machine.VCPU,
-		Memory: units.Bytes(doc.Machine.Memory.Bytes()),
+		Memory: doc.Machine.Memory.Bytes(),
 		Kernel: vm.Kernel{
 			Path:    doc.Kernel.Path,
 			Initrd:  doc.Kernel.InitrdPath,
@@ -95,7 +94,7 @@ func specFromDocument(doc imanifest.Document) (*vm.Spec, error) {
 		spec.Disks = append(spec.Disks, vm.Disk{
 			Path:   mount.SourcePath,
 			Format: mount.Image.Format,
-			Size:   units.Bytes(mount.Image.Size.Bytes()),
+			Size:   mount.Image.Size.Bytes(),
 		})
 	}
 	for _, network := range doc.Networks {
@@ -106,7 +105,7 @@ func specFromDocument(doc imanifest.Document) (*vm.Spec, error) {
 			spec.Ports = append(spec.Ports, vm.Forward{
 				HostAddr:  forward.Host,
 				GuestAddr: forward.Guest,
-				Proto:     forward.Proto,
+				Proto:     vm.Proto(forward.Proto),
 			})
 		}
 	}

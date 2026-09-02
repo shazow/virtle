@@ -3,65 +3,43 @@ package control
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"time"
 
-	"github.com/shazow/virtle/internal/units"
+	"github.com/shazow/virtle/backend"
+	"github.com/shazow/virtle/units"
+	"github.com/shazow/virtle/vm"
 )
 
 // RuntimeState is the lifecycle state reported by the control socket.
-type RuntimeState string
+type RuntimeState = backend.State
 
 const (
 	// RuntimeStarting means the manager is still preparing the VM.
-	RuntimeStarting RuntimeState = "starting"
+	RuntimeStarting RuntimeState = backend.StateStarting
 	// RuntimeReady means the runtime is available for control requests.
-	RuntimeReady RuntimeState = "ready"
+	RuntimeReady RuntimeState = backend.StateReady
 	// RuntimeSuspending means a suspend request is in progress.
-	RuntimeSuspending RuntimeState = "suspending"
+	RuntimeSuspending RuntimeState = backend.StateSuspending
 	// RuntimeSuspended means VM state has been saved.
-	RuntimeSuspended RuntimeState = "suspended"
+	RuntimeSuspended RuntimeState = backend.StateSuspended
 	// RuntimeStopping means teardown has started.
-	RuntimeStopping RuntimeState = "stopping"
+	RuntimeStopping RuntimeState = backend.StateStopping
 	// RuntimeStopped means teardown has completed.
-	RuntimeStopped RuntimeState = "stopped"
+	RuntimeStopped RuntimeState = backend.StateStopped
 )
 
 // StatusRequest asks for the current runtime status.
 type StatusRequest struct{}
 
 // StatusResponse reports runtime status and connection paths.
-type StatusResponse struct {
-	State RuntimeState `json:"state"`
-	CID   int          `json:"cid"`
-	Paths StatusPaths  `json:"paths"`
-	Stats RuntimeStats `json:"stats"`
-}
+type StatusResponse = backend.Status
 
 // StatusPaths are host-side sockets associated with the runtime.
-type StatusPaths struct {
-	ControlSocket    string `json:"controlSocket"`
-	QMPSocket        string `json:"qmpSocket"`
-	GuestAgentSocket string `json:"guestAgentSocket,omitempty"`
-	SSHReadySocket   string `json:"sshReadySocket,omitempty"`
-}
+type StatusPaths = backend.StatusPaths
 
 // RuntimeStats reports lifecycle timing captured during launch and teardown.
-type RuntimeStats struct {
-	StartedAt       time.Time `json:"startedAt,omitempty"`
-	BootStartedAt   time.Time `json:"bootStartedAt,omitempty"`
-	QMPReadyAt      time.Time `json:"qmpReadyAt,omitempty"`
-	FilesReadyAt    time.Time `json:"filesReadyAt,omitempty"`
-	SSHReadyAt      time.Time `json:"sshReadyAt,omitempty"`
-	SSHStartedAt    time.Time `json:"sshStartedAt,omitempty"`
-	CompletedAt     time.Time `json:"completedAt,omitempty"`
-	SSHAttempts     int       `json:"sshAttempts,omitempty"`
-	StartedToBoot   string    `json:"startedToBoot,omitempty"`
-	BootToQMP       string    `json:"bootToQMP,omitempty"`
-	FilesToSSH      string    `json:"filesToSSH,omitempty"`
-	BootToCompleted string    `json:"bootToCompleted,omitempty"`
-	Total           string    `json:"total,omitempty"`
-}
+type RuntimeStats = backend.RuntimeStats
 
 // SuspendRequest asks the runtime to save VM state and exit.
 type SuspendRequest struct{}
@@ -74,8 +52,16 @@ type SuspendResponse struct {
 
 // HotplugRequest asks the runtime to attach or detach a configured device.
 type HotplugRequest struct {
-	ID     string `json:"id"`
-	Detach bool   `json:"detach"`
+	ID     string         `json:"id"`
+	Detach bool           `json:"detach"`
+	Device *DeviceRequest `json:"device,omitempty"`
+}
+
+// DeviceRequest carries one neutral device over the control socket.
+type DeviceRequest struct {
+	Share   *vm.Share   `json:"share,omitempty"`
+	Disk    *vm.Disk    `json:"disk,omitempty"`
+	Forward *vm.Forward `json:"forward,omitempty"`
 }
 
 // HotplugResponse identifies the hotplug operation that completed.
@@ -107,6 +93,8 @@ type GuestPSResponse struct {
 type GuestExecRequest struct {
 	Path          string   `json:"path"`
 	Args          []string `json:"args,omitempty"`
+	Env           []string `json:"env,omitempty"`
+	Dir           string   `json:"dir,omitempty"`
 	CaptureOutput bool     `json:"captureOutput,omitempty"`
 	// Timeout bounds the guest command; zero or omitted waits indefinitely.
 	Timeout units.Duration `json:"timeout,omitempty"`
@@ -135,6 +123,7 @@ type GuestReadResponse struct {
 type GuestWriteRequest struct {
 	Path       string `json:"path"`
 	DataBase64 string `json:"data-base64"`
+	Mode       uint32 `json:"mode,omitempty"`
 }
 
 // GuestWriteResponse reports the guest file path that was written.
@@ -149,6 +138,19 @@ type MethodsRequest struct{}
 type MethodsResponse struct {
 	Methods []string `json:"methods"`
 }
+
+// WaitRequest waits for the machine runtime to finish.
+type WaitRequest struct{}
+
+// WaitResponse confirms that the machine runtime finished successfully.
+type WaitResponse struct{}
+
+type KillRequest struct{}
+type KillResponse struct{}
+type ShutdownRequest struct{}
+type ShutdownResponse struct{}
+type GuestShutdownRequest struct{}
+type GuestShutdownResponse struct{}
 
 // ErrorCode classifies a control socket RPC failure.
 type ErrorCode string
@@ -183,18 +185,26 @@ func (e *RPCError) Error() string {
 	return fmt.Sprintf("%s: %s", e.Code, e.Message)
 }
 
+func (e *RPCError) Is(target error) bool {
+	return e != nil && e.Code == ErrUnsupported && target == errors.ErrUnsupported
+}
+
 type rpcMethod string
 
 const (
-	rpcStatus     rpcMethod = "status"
-	rpcMethods    rpcMethod = "methods"
-	rpcSuspend    rpcMethod = "suspend"
-	rpcHotplug    rpcMethod = "hotplug"
-	rpcBalloon    rpcMethod = "balloon"
-	rpcGuestPS    rpcMethod = "guest-ps"
-	rpcGuestExec  rpcMethod = "guest-exec"
-	rpcGuestRead  rpcMethod = "guest-read"
-	rpcGuestWrite rpcMethod = "guest-write"
+	rpcStatus        rpcMethod = "status"
+	rpcMethods       rpcMethod = "methods"
+	rpcWait          rpcMethod = "wait"
+	rpcKill          rpcMethod = "kill"
+	rpcShutdown      rpcMethod = "shutdown"
+	rpcSuspend       rpcMethod = "suspend"
+	rpcHotplug       rpcMethod = "hotplug"
+	rpcBalloon       rpcMethod = "balloon"
+	rpcGuestPS       rpcMethod = "guest-ps"
+	rpcGuestExec     rpcMethod = "guest-exec"
+	rpcGuestRead     rpcMethod = "guest-read"
+	rpcGuestWrite    rpcMethod = "guest-write"
+	rpcGuestShutdown rpcMethod = "guest-shutdown"
 )
 
 type requestEnvelope struct {
@@ -212,6 +222,7 @@ type responseEnvelope struct {
 // RuntimeCore is the minimum runtime surface required by a control router.
 type RuntimeCore interface {
 	Status(context.Context, StatusRequest) (StatusResponse, error)
+	Wait(context.Context, WaitRequest) (WaitResponse, error)
 }
 
 // RuntimeGuest is implemented by handlers that can interact with the guest agent.
@@ -220,6 +231,15 @@ type RuntimeGuest interface {
 	GuestExec(context.Context, GuestExecRequest) (GuestExecResponse, error)
 	GuestRead(context.Context, GuestReadRequest) (GuestReadResponse, error)
 	GuestWrite(context.Context, GuestWriteRequest) (GuestWriteResponse, error)
+	GuestShutdown(context.Context, GuestShutdownRequest) (GuestShutdownResponse, error)
+}
+
+type RuntimeKill interface {
+	Kill(context.Context, KillRequest) (KillResponse, error)
+}
+
+type RuntimeShutdown interface {
+	ShutdownRPC(context.Context, ShutdownRequest) (ShutdownResponse, error)
 }
 
 // RuntimeSuspend is implemented by runtimes that can save VM state.
@@ -239,9 +259,11 @@ type RuntimeBalloon interface {
 
 // Handlers groups the runtime capabilities used by a control router.
 type Handlers struct {
-	Core    RuntimeCore
-	Guest   RuntimeGuest
-	Suspend RuntimeSuspend
-	Hotplug RuntimeHotplug
-	Balloon RuntimeBalloon
+	Core     RuntimeCore
+	Guest    RuntimeGuest
+	Suspend  RuntimeSuspend
+	Hotplug  RuntimeHotplug
+	Balloon  RuntimeBalloon
+	Kill     RuntimeKill
+	Shutdown RuntimeShutdown
 }

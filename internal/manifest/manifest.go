@@ -11,7 +11,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/shazow/virtle/internal/units"
+	"github.com/shazow/virtle/units"
 )
 
 type ResolveOptions struct {

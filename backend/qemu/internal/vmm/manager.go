@@ -4,21 +4,17 @@
 // version live here as plain constants rather than plumbed configuration.
 //
 // It takes a validated launch manifest, prepares runtime directories and
-// volume images, starts the supporting host processes, waits for QMP readiness,
-// and then either hands control to the interactive SSH session or keeps the VM
-// lifecycle in the foreground for out-of-band SSH. Teardown also
-// lives here: balloon controller tasks stop first, then any active session and
+// volume images, starts the supporting host processes, and waits for QMP
+// readiness. Teardown also lives here: balloon controller tasks stop first,
 // helper daemons are shut down, and QEMU is asked to exit through QMP before
 // any forced process cleanup is used.
 package vmm
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
-	"os"
 	"os/exec"
 	"sync"
 	"syscall"
@@ -33,8 +29,7 @@ import (
 )
 
 const (
-	defaultShutdownDelay      = 15 * time.Second
-	sshRetryOutputRevealDelay = 250 * time.Millisecond
+	defaultShutdownDelay = 15 * time.Second
 	// defaultWriteBackTimeout bounds the whole teardown write-back phase:
 	// reconnecting to the guest agent and copying changed files back to the
 	// host. Individual guest commands are bounded separately.
@@ -57,25 +52,16 @@ type manager struct {
 	socketWaiter        launch.SocketWaiter
 	qmpDialer           qmpclient.Dialer
 	guestAgentDialer    qga.Dialer
-	sshReadyDialer      launch.SSHReadyDialer
 	logger              *slog.Logger
-	sshLogger           *slog.Logger
 	balloonLogger       *slog.Logger
 	consoleOutput       io.Writer
-	sshReadyTimeout     time.Duration
 	shutdownDelay       time.Duration
 	qmpRetryDelay       time.Duration
 	qmpConnectTimeout   time.Duration
 	qmpQuitTimeout      time.Duration
 	qmpMigrationTimeout time.Duration
-	signals             <-chan os.Signal
 	pidSignaler         launch.PIDSignaler
 	notifier            launch.NotificationSink
-	readiness           GuestReadiness
-}
-
-func newManager() *manager {
-	return newManagerFromConfig(DefaultConfig())
 }
 
 func newManagerFromConfig(config Config) *manager {
@@ -95,21 +81,16 @@ func newManagerFromConfig(config Config) *manager {
 		socketWaiter:        config.SocketWaiter,
 		qmpDialer:           config.QMPDialer,
 		guestAgentDialer:    config.GuestAgentDialer,
-		sshReadyDialer:      config.SSHReadyDialer,
 		logger:              logger.With("package", "vmm"),
-		sshLogger:           logger.With("package", "ssh"),
 		balloonLogger:       logger.With("package", "balloon"),
 		consoleOutput:       config.ConsoleOutput,
-		sshReadyTimeout:     config.SSHReadyTimeout,
 		shutdownDelay:       config.ShutdownDelay,
 		qmpRetryDelay:       config.QMPRetryDelay,
 		qmpConnectTimeout:   config.QMPConnectTimeout,
 		qmpQuitTimeout:      config.QMPQuitTimeout,
 		qmpMigrationTimeout: config.QMPMigrationTimeout,
-		signals:             config.Signals,
 		pidSignaler:         config.PIDSignaler,
 		notifier:            config.Notifier,
-		readiness:           config.GuestReadiness,
 	}
 }
 
@@ -156,48 +137,6 @@ func removeRestoredSuspendState(plan *launch.Plan) error {
 		return &launch.StageError{Stage: "restore", Err: err}
 	}
 	return nil
-}
-
-func (m *manager) waitForLaunchForeground(
-	ctx context.Context,
-	plan *launch.Plan,
-	stats *launch.Stats,
-	lifecycle *launch.Lifecycle,
-	suspendHandler suspendHandler,
-	processes *launch.ProcessSet,
-	session SessionOptions,
-) error {
-	// Restored suspend state is removed only once the session is
-	// established (SSH attached, or the VM wait entered), so a failed
-	// session start leaves the state resumable.
-	if plan.Options.SSH && len(plan.Manifest.SSH.Argv) > 0 {
-		if err := m.runSSHSession(ctx, plan, stats, lifecycle, suspendHandler, processes, session); err != nil {
-			return err
-		}
-		if plan.ResumeState != nil {
-			return removeRestoredSuspendState(plan)
-		}
-		return nil
-	}
-
-	if plan.ResumeState != nil {
-		if err := removeRestoredSuspendState(plan); err != nil {
-			return err
-		}
-	}
-
-	if hint, err := launch.BuildSSHCommandHint(plan.Manifest, plan.CID); err != nil {
-		if m.logger != nil {
-			m.logger.Warn("ssh command hint template failed", "err", err)
-		}
-	} else if hint != "" && session.Stdout != nil {
-		if _, err := fmt.Fprintf(session.Stdout, "connect with ssh: %s\n", hint); err != nil {
-			return fmt.Errorf("write ssh command hint: %w", err)
-		}
-	}
-
-	vmWatchers := processes.VMWatchers()
-	return m.waitForVM(ctx, processes.QEMU(), lifecycle, suspendHandler, plan.Paths.GuestAgentSocket, vmWatchers)
 }
 
 func (m *manager) startManagedProcess(cmd *exec.Cmd) (*executor.Process, error) {
@@ -373,78 +312,6 @@ func (h *launchSuspendHandler) saveAndExit(ctx context.Context) error {
 	return h.err
 }
 
-func (m *manager) runSSHSession(
-	ctx context.Context,
-	plan *launch.Plan,
-	stats *launch.Stats,
-	lifecycle *launch.Lifecycle,
-	suspendHandler suspendHandler,
-	processes *launch.ProcessSet,
-	session SessionOptions,
-) error {
-	return launch.RunSSHSession(ctx, launch.SSHSession{
-		Plan:                   plan,
-		Runner:                 m.runner,
-		Logger:                 m.sshLifecycleLogger(),
-		Stdout:                 session.Stdout,
-		Stderr:                 session.Stderr,
-		RetryOutputRevealDelay: sshRetryOutputRevealDelay,
-		AddProcesses:           processes.Add,
-		RemoveProcess:          processes.Remove,
-		Watchers:               processes.Watchers,
-		RecordTimer:            stats.Timer,
-		Wait: func(ctx context.Context, session *executor.Process, watchers executor.Group) error {
-			return m.waitForSession(ctx, session, lifecycle, suspendHandler, plan.Paths.GuestAgentSocket, watchers)
-		},
-		WaitForRetry: func(ctx context.Context, watchers executor.Group) error {
-			return m.waitBeforeSSHRetry(ctx, lifecycle, suspendHandler, plan.Paths.GuestAgentSocket, watchers)
-		},
-		EnsureKey:  m.ensureSSHAutoprovisionKey,
-		InstallKey: m.installSSHAutoprovisionKey,
-	})
-}
-
-func (m *manager) waitBeforeSSHRetry(ctx context.Context, lifecycle *launch.Lifecycle, suspendHandler suspendHandler, guestAgentSocketPath string, watchers executor.Group) error {
-	// Validation rejects non-positive retry delays, so the manifest value is
-	// always usable directly.
-	delay := m.launchManifest.SSH.RetryDelay
-
-	return m.waitForLifecycleEvent(ctx, "active session", delay, lifecycle, suspendHandler, guestAgentSocketPath, watchers)
-}
-
-func (m *manager) waitForSession(ctx context.Context, session *executor.Process, lifecycle *launch.Lifecycle, suspendHandler suspendHandler, guestAgentSocketPath string, watchers executor.Group) error {
-	return m.waitForProcess(ctx, "active session", session, 0, lifecycle, suspendHandler, guestAgentSocketPath, watchers)
-}
-
-func (m *manager) waitForVM(ctx context.Context, qemu *executor.Process, lifecycle *launch.Lifecycle, suspendHandler suspendHandler, guestAgentSocketPath string, watchers executor.Group) error {
-	return m.waitForProcess(ctx, "vm session", qemu, 0, lifecycle, suspendHandler, guestAgentSocketPath, watchers)
-}
-
-func (m *manager) waitForProcess(ctx context.Context, stage string, process *executor.Process, delay time.Duration, lifecycle *launch.Lifecycle, suspendHandler suspendHandler, guestAgentSocketPath string, watchers executor.Group) error {
-	wait := launch.LifecycleProcessWait{
-		Stage:     stage,
-		Delay:     delay,
-		Lifecycle: lifecycle,
-		Watchers:  watchers,
-		PollDelay: defaultSocketPollInterval,
-		Suspend: func(ctx context.Context) error {
-			return suspendHandler.Handle(ctx, lifecycle.Suspend())
-		},
-		Info: func(ctx context.Context) {
-			m.printGuestInfo(ctx, guestAgentSocketPath, watchers)
-		},
-	}
-	// Keep the interface nil for delay-only waits; a typed nil Process reports done.
-	if process != nil {
-		wait.Process = process
-	}
-	return launch.WaitForLifecycleProcess(ctx, wait)
-}
-
-func (m *manager) waitForLifecycleEvent(ctx context.Context, stage string, delay time.Duration, lifecycle *launch.Lifecycle, suspendHandler suspendHandler, guestAgentSocketPath string, watchers executor.Group) error {
-	return m.waitForProcess(ctx, stage, nil, delay, lifecycle, suspendHandler, guestAgentSocketPath, watchers)
-}
-
 func (m *manager) saveSuspendStateConnected(ctx context.Context, qmpSocketPath string, client qmpclient.Client, cid int, notifier launch.NotificationSink) error {
 	manifest := m.launchManifest
 	if manifest == nil {
@@ -474,16 +341,4 @@ func (m *manager) saveSuspendStateConnected(ctx context.Context, qmpSocketPath s
 	}
 	notifyRuntimeSuspend(ctx, notifier, state)
 	return nil
-}
-
-func joinDeferredError(target *error, fn func() error) {
-	next := fn()
-	if next == nil {
-		return
-	}
-	if *target == nil {
-		*target = next
-		return
-	}
-	*target = errors.Join(*target, next)
 }

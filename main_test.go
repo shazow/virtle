@@ -330,6 +330,38 @@ func TestRunRPCStatusPrintsControlSocketResponse(t *testing.T) {
 	}
 }
 
+func TestRunStatusUsesMachineStatus(t *testing.T) {
+	tmpDir := t.TempDir()
+	manifestPath := filepath.Join(tmpDir, "manifest.json")
+	if err := os.WriteFile(manifestPath, []byte(testManifestJSON(tmpDir)), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	cfg, err := loadManifest(manifestPath)
+	if err != nil {
+		t.Fatalf("load manifest: %v", err)
+	}
+	path, err := cfg.ResolvedControlSocketPath()
+	if err != nil {
+		t.Fatalf("resolve control socket: %v", err)
+	}
+	startMainTestControlServerAt(t, path, &mainTestControlCore{status: control.StatusResponse{
+		State: control.RuntimeReady, CID: 8, PID: 99,
+	}})
+
+	output := captureStdout(t, func() {
+		if err := run([]string{"--manifest=" + manifestPath, "status"}); err != nil {
+			t.Fatalf("status: %v", err)
+		}
+	})
+	var got control.StatusResponse
+	if err := json.Unmarshal([]byte(output), &got); err != nil {
+		t.Fatalf("decode status: %v", err)
+	}
+	if got.CID != 8 || got.PID != 99 || got.State != control.RuntimeReady {
+		t.Fatalf("status = %#v", got)
+	}
+}
+
 func TestRunRPCUsesJSONParams(t *testing.T) {
 	tmpDir := t.TempDir()
 	manifestPath := filepath.Join(tmpDir, "manifest.json")
@@ -393,7 +425,7 @@ func TestRunRPCMethodsPrintsAvailableControlSocketMethods(t *testing.T) {
 	if err := json.Unmarshal([]byte(output), &got); err != nil {
 		t.Fatalf("decode rpc output %q: %v", output, err)
 	}
-	want := []string{"status", "methods", "guest-ps", "guest-exec", "guest-read", "guest-write", "hotplug"}
+	want := []string{"status", "methods", "wait", "guest-ps", "guest-exec", "guest-read", "guest-write", "guest-shutdown", "hotplug"}
 	if !reflect.DeepEqual(got.Methods, want) {
 		t.Fatalf("unexpected rpc methods output: got %#v want %#v", got.Methods, want)
 	}
@@ -588,6 +620,10 @@ func (h *mainTestControlCore) Status(context.Context, control.StatusRequest) (co
 	return h.status, nil
 }
 
+func (h *mainTestControlCore) Wait(context.Context, control.WaitRequest) (control.WaitResponse, error) {
+	return control.WaitResponse{}, nil
+}
+
 type mainTestControlHandler struct {
 	mainTestControlCore
 	hotplugReq control.HotplugRequest
@@ -609,9 +645,13 @@ func (h *mainTestControlHandler) GuestWrite(ctx context.Context, req control.Gue
 	return control.GuestWriteResponse{Path: req.Path}, nil
 }
 
+func (h *mainTestControlHandler) GuestShutdown(context.Context, control.GuestShutdownRequest) (control.GuestShutdownResponse, error) {
+	return control.GuestShutdownResponse{}, nil
+}
+
 func (h *mainTestControlHandler) Hotplug(ctx context.Context, req control.HotplugRequest) (control.HotplugResponse, error) {
 	h.hotplugReq = req
-	return control.HotplugResponse(req), nil
+	return control.HotplugResponse{ID: req.ID, Detach: req.Detach}, nil
 }
 
 func startMainTestControlServerAt(t *testing.T, path string, runtime control.RuntimeCore) {

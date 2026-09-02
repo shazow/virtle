@@ -2,90 +2,356 @@ package control
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"net"
+	"os"
+	"sync"
+	"time"
+
+	"github.com/shazow/virtle/backend"
+	"github.com/shazow/virtle/units"
+	"github.com/shazow/virtle/vm"
 )
 
-// Client sends typed requests to a control socket.
-type Client struct {
-	dial func(context.Context) (net.Conn, error)
+// Dial connects to a control socket and returns its remote machine. Dial
+// discovers server capabilities before returning and begins observing machine
+// exit immediately.
+func Dial(ctx context.Context, path string) (backend.Machine, error) {
+	c := &client{dial: func(ctx context.Context) (net.Conn, error) {
+		var d net.Dialer
+		return d.DialContext(ctx, "unix", path)
+	}, completion: func() (bool, error) {
+		// Legacy servers have no wait RPC. Their Unix listener unlinks this
+		// endpoint during orderly teardown, while an abrupt exit leaves a stale
+		// socket behind, so disappearance is the persisted completion record.
+		_, err := os.Stat(path)
+		if errors.Is(err, os.ErrNotExist) {
+			return true, nil
+		}
+		return false, err
+	}}
+	methods, err := callTyped[MethodsRequest, MethodsResponse](c, ctx, rpcMethods, MethodsRequest{})
+	if err != nil {
+		return nil, err
+	}
+	m := &machine{client: c, methods: make(map[rpcMethod]bool, len(methods.Methods)), done: make(chan struct{})}
+	for _, method := range methods.Methods {
+		m.methods[rpcMethod(method)] = true
+	}
+	go m.observeExit()
+	return m, nil
 }
 
-// Dial returns a client for the control socket at path.
-func Dial(path string) *Client {
-	return &Client{dial: func(ctx context.Context) (net.Conn, error) {
+// Raw sends a debugging request without interpreting its result.
+func Raw(ctx context.Context, path, method string, params json.RawMessage) (json.RawMessage, error) {
+	c := &client{dial: func(ctx context.Context) (net.Conn, error) {
 		var d net.Dialer
 		return d.DialContext(ctx, "unix", path)
 	}}
-}
-
-// Status sends a status request.
-func (c *Client) Status(ctx context.Context, req StatusRequest) (StatusResponse, error) {
-	return callTyped[StatusRequest, StatusResponse](c, ctx, rpcStatus, req)
-}
-
-// Methods sends a methods request.
-func (c *Client) Methods(ctx context.Context, req MethodsRequest) (MethodsResponse, error) {
-	return callTyped[MethodsRequest, MethodsResponse](c, ctx, rpcMethods, req)
-}
-
-// Suspend sends a suspend request.
-func (c *Client) Suspend(ctx context.Context, req SuspendRequest) (SuspendResponse, error) {
-	return callTyped[SuspendRequest, SuspendResponse](c, ctx, rpcSuspend, req)
-}
-
-// Balloon sends a balloon request.
-func (c *Client) Balloon(ctx context.Context, req BalloonRequest) (BalloonResponse, error) {
-	return callTyped[BalloonRequest, BalloonResponse](c, ctx, rpcBalloon, req)
-}
-
-// GuestPS sends a guest process list request.
-func (c *Client) GuestPS(ctx context.Context, req GuestPSRequest) (GuestPSResponse, error) {
-	return callTyped[GuestPSRequest, GuestPSResponse](c, ctx, rpcGuestPS, req)
-}
-
-// GuestExec sends a guest process execution request.
-func (c *Client) GuestExec(ctx context.Context, req GuestExecRequest) (GuestExecResponse, error) {
-	return callTyped[GuestExecRequest, GuestExecResponse](c, ctx, rpcGuestExec, req)
-}
-
-// GuestRead sends a guest file read request.
-func (c *Client) GuestRead(ctx context.Context, req GuestReadRequest) (GuestReadResponse, error) {
-	return callTyped[GuestReadRequest, GuestReadResponse](c, ctx, rpcGuestRead, req)
-}
-
-// GuestWrite sends a guest file write request.
-func (c *Client) GuestWrite(ctx context.Context, req GuestWriteRequest) (GuestWriteResponse, error) {
-	return callTyped[GuestWriteRequest, GuestWriteResponse](c, ctx, rpcGuestWrite, req)
-}
-
-// Hotplug sends a hotplug request.
-func (c *Client) Hotplug(ctx context.Context, req HotplugRequest) (HotplugResponse, error) {
-	return callTyped[HotplugRequest, HotplugResponse](c, ctx, rpcHotplug, req)
-}
-
-// Raw sends a request to method with raw JSON params and returns the raw JSON result.
-func (c *Client) Raw(ctx context.Context, method string, params json.RawMessage) (json.RawMessage, error) {
 	var resp json.RawMessage
 	err := c.call(ctx, rpcMethod(method), params, &resp)
 	return resp, err
 }
 
-func callTyped[Req any, Resp any](c *Client, ctx context.Context, method rpcMethod, req Req) (Resp, error) {
+type machine struct {
+	client  *client
+	methods map[rpcMethod]bool
+	done    chan struct{}
+	once    sync.Once
+	mu      sync.Mutex
+	err     error
+}
+
+func (m *machine) supports(method rpcMethod) error {
+	if m.methods[method] {
+		return nil
+	}
+	return fmt.Errorf("control method %q: %w", method, errors.ErrUnsupported)
+}
+
+func (m *machine) finish(err error) {
+	m.once.Do(func() {
+		m.mu.Lock()
+		m.err = err
+		m.mu.Unlock()
+		close(m.done)
+	})
+}
+
+func (m *machine) observeExit() {
+	if m.methods[rpcWait] {
+		_, err := callTyped[WaitRequest, WaitResponse](m.client, context.Background(), rpcWait, WaitRequest{})
+		m.finish(err)
+		return
+	}
+
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		status, err := callTyped[StatusRequest, StatusResponse](m.client, context.Background(), rpcStatus, StatusRequest{})
+		if err != nil {
+			// An older server closes its listener before it can expose stopped via
+			// status. Reconcile that EOF/dial failure with the socket record before
+			// treating it as an unreported exit.
+			completed, completionErr := m.client.completed()
+			if completionErr != nil {
+				m.finish(fmt.Errorf("machine exited without status: %w", errors.Join(err, completionErr)))
+				return
+			}
+			if completed {
+				m.finish(nil)
+				return
+			}
+			if !IsSocketUnavailable(err) && !errors.Is(err, io.EOF) {
+				m.finish(fmt.Errorf("machine exited without status: %w", err))
+				return
+			}
+			<-ticker.C
+			continue
+		}
+		if status.State == backend.StateStopped {
+			m.finish(nil)
+			return
+		}
+		<-ticker.C
+	}
+}
+
+func (m *machine) Done() <-chan struct{} { return m.done }
+
+func (m *machine) Err() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.err
+}
+
+func (m *machine) Wait(ctx context.Context) error {
+	select {
+	case <-m.done:
+		return m.Err()
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	}
+}
+
+func (m *machine) Kill() error {
+	if err := m.supports(rpcKill); err != nil {
+		return err
+	}
+	_, err := callTyped[KillRequest, KillResponse](m.client, context.Background(), rpcKill, KillRequest{})
+	return err
+}
+
+func (m *machine) Shutdown(ctx context.Context) error {
+	if m.methods[rpcShutdown] {
+		_, err := callTyped[ShutdownRequest, ShutdownResponse](m.client, ctx, rpcShutdown, ShutdownRequest{})
+		return err
+	}
+	g, err := m.RemoteControl()
+	if err != nil {
+		return m.Kill()
+	}
+	if err := g.Shutdown(ctx); err != nil {
+		return m.Kill()
+	}
+	if err := m.Wait(ctx); err != nil && ctx.Err() != nil {
+		return errors.Join(err, m.Kill())
+	} else {
+		return err
+	}
+}
+
+func (m *machine) Suspend(ctx context.Context) error {
+	if err := m.supports(rpcSuspend); err != nil {
+		return err
+	}
+	_, err := callTyped[SuspendRequest, SuspendResponse](m.client, ctx, rpcSuspend, SuspendRequest{})
+	return err
+}
+
+func (m *machine) ResizeMemory(ctx context.Context, size units.Bytes) error {
+	if err := m.supports(rpcBalloon); err != nil {
+		return err
+	}
+	_, err := callTyped[BalloonRequest, BalloonResponse](m.client, ctx, rpcBalloon, BalloonRequest{TargetBytes: size.Int64()})
+	return err
+}
+
+func deviceRequest(dev vm.Device) (*DeviceRequest, error) {
+	switch d := dev.(type) {
+	case vm.Share:
+		return &DeviceRequest{Share: &d}, nil
+	case vm.Disk:
+		return &DeviceRequest{Disk: &d}, nil
+	case vm.Forward:
+		return &DeviceRequest{Forward: &d}, nil
+	default:
+		return nil, fmt.Errorf("unsupported device type %T", dev)
+	}
+}
+
+func (m *machine) changeDevice(ctx context.Context, dev vm.Device, detach bool) error {
+	if err := m.supports(rpcHotplug); err != nil {
+		return err
+	}
+	req, err := deviceRequest(dev)
+	if err != nil {
+		return err
+	}
+	_, err = callTyped[HotplugRequest, HotplugResponse](m.client, ctx, rpcHotplug, HotplugRequest{Detach: detach, Device: req})
+	return err
+}
+
+func (m *machine) Attach(ctx context.Context, dev vm.Device) error {
+	return m.changeDevice(ctx, dev, false)
+}
+
+func (m *machine) Detach(ctx context.Context, dev vm.Device) error {
+	return m.changeDevice(ctx, dev, true)
+}
+
+func (m *machine) Status(ctx context.Context) (backend.Status, error) {
+	if err := m.supports(rpcStatus); err != nil {
+		return backend.Status{}, err
+	}
+	return callTyped[StatusRequest, StatusResponse](m.client, ctx, rpcStatus, StatusRequest{})
+}
+
+func (m *machine) RemoteControl() (vm.Guest, error) {
+	for _, method := range []rpcMethod{rpcGuestExec, rpcGuestRead, rpcGuestWrite} {
+		if err := m.supports(method); err != nil {
+			return nil, err
+		}
+	}
+	return &guest{machine: m}, nil
+}
+
+type guest struct{ machine *machine }
+
+func (g *guest) Run(ctx context.Context, cmd *vm.GuestCmd) error {
+	if cmd == nil || cmd.Path == "" {
+		return fmt.Errorf("guest command path is required")
+	}
+	if cmd.Stdin != nil {
+		return fmt.Errorf("guest command stdin over control socket: %w", errors.ErrUnsupported)
+	}
+	req := GuestExecRequest{Path: cmd.Path, Args: cmd.Args, Env: cmd.Env, Dir: cmd.Dir, CaptureOutput: true}
+	if deadline, ok := ctx.Deadline(); ok {
+		req.Timeout = units.Duration(time.Until(deadline))
+	}
+	resp, err := callTyped[GuestExecRequest, GuestExecResponse](g.machine.client, ctx, rpcGuestExec, req)
+	if err != nil {
+		return err
+	}
+	stdout, err := base64.StdEncoding.DecodeString(resp.OutData)
+	if err != nil {
+		return fmt.Errorf("decode guest stdout: %w", err)
+	}
+	stderr, err := base64.StdEncoding.DecodeString(resp.ErrData)
+	if err != nil {
+		return fmt.Errorf("decode guest stderr: %w", err)
+	}
+	if cmd.Stdout != nil {
+		if _, err := cmd.Stdout.Write(stdout); err != nil {
+			return err
+		}
+	}
+	if cmd.Stderr != nil {
+		if _, err := cmd.Stderr.Write(stderr); err != nil {
+			return err
+		}
+	}
+	if resp.ExitCode != 0 {
+		exitErr := &vm.ExitError{Code: resp.ExitCode}
+		if cmd.Stderr == nil {
+			exitErr.Stderr = stderr
+		}
+		return exitErr
+	}
+	return nil
+}
+
+func (g *guest) Open(ctx context.Context, name string) (io.ReadCloser, error) {
+	resp, err := callTyped[GuestReadRequest, GuestReadResponse](g.machine.client, ctx, rpcGuestRead, GuestReadRequest{Path: name})
+	if err != nil {
+		return nil, err
+	}
+	data, err := base64.StdEncoding.DecodeString(resp.DataBase64)
+	if err != nil {
+		return nil, fmt.Errorf("decode guest file: %w", err)
+	}
+	return io.NopCloser(bytes.NewReader(data)), nil
+}
+
+func (g *guest) Create(ctx context.Context, name string, mode fs.FileMode) (io.WriteCloser, error) {
+	return &guestWriter{ctx: ctx, guest: g, name: name, mode: mode}, nil
+}
+
+type guestWriter struct {
+	bytes.Buffer
+	ctx   context.Context
+	guest *guest
+	name  string
+	mode  fs.FileMode
+}
+
+func (w *guestWriter) Close() error {
+	_, err := callTyped[GuestWriteRequest, GuestWriteResponse](w.guest.machine.client, w.ctx, rpcGuestWrite, GuestWriteRequest{
+		Path: w.name, DataBase64: base64.StdEncoding.EncodeToString(w.Bytes()), Mode: uint32(w.mode.Perm()),
+	})
+	return err
+}
+
+func (g *guest) Shutdown(ctx context.Context) error {
+	if err := g.machine.supports(rpcGuestShutdown); err != nil {
+		return err
+	}
+	_, err := callTyped[GuestShutdownRequest, GuestShutdownResponse](g.machine.client, ctx, rpcGuestShutdown, GuestShutdownRequest{})
+	return err
+}
+
+func (*guest) Close() error { return nil }
+
+var (
+	_ backend.Machine        = (*machine)(nil)
+	_ backend.Suspender      = (*machine)(nil)
+	_ backend.MemoryResizer  = (*machine)(nil)
+	_ backend.DeviceAttacher = (*machine)(nil)
+	_ backend.StatusReporter = (*machine)(nil)
+	_ vm.Guest               = (*guest)(nil)
+)
+
+type client struct {
+	dial       func(context.Context) (net.Conn, error)
+	completion func() (bool, error)
+}
+
+func (c *client) completed() (bool, error) {
+	if c == nil || c.completion == nil {
+		return false, nil
+	}
+	return c.completion()
+}
+
+func callTyped[Req any, Resp any](c *client, ctx context.Context, method rpcMethod, req Req) (Resp, error) {
 	var resp Resp
 	err := c.call(ctx, method, req, &resp)
 	return resp, err
 }
 
-func (c *Client) call(ctx context.Context, method rpcMethod, params any, result any) error {
+func (c *client) call(ctx context.Context, method rpcMethod, params any, result any) error {
 	conn, err := c.dial(ctx)
 	if err != nil {
 		return fmt.Errorf("control dial: %w", err)
 	}
 	defer conn.Close()
-
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = conn.SetDeadline(deadline)
 	}
@@ -93,11 +359,9 @@ func (c *Client) call(ctx context.Context, method rpcMethod, params any, result 
 	if err != nil {
 		return err
 	}
-	req := requestEnvelope{ID: 1, Method: method, Params: payload}
-	if err := json.NewEncoder(conn).Encode(req); err != nil {
+	if err := json.NewEncoder(conn).Encode(requestEnvelope{ID: 1, Method: method, Params: payload}); err != nil {
 		return fmt.Errorf("control request: %w", err)
 	}
-
 	line, err := bufio.NewReader(conn).ReadBytes('\n')
 	if err != nil {
 		return fmt.Errorf("control response: %w", err)

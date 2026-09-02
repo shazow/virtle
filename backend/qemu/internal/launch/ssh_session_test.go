@@ -63,6 +63,29 @@ func TestRunSSHSessionRetriesTransientFailure(t *testing.T) {
 	}
 }
 
+func TestRunSSHSessionEstablishesEachAttempt(t *testing.T) {
+	launchManifest := testSSHSessionManifest()
+	runner := &fakeSSHSessionRunner{errs: []error{errors.New("Connection refused"), nil}}
+	established := 0
+	err := RunSSHSession(context.Background(), SSHSession{
+		Plan:   &Plan{Manifest: launchManifest, CID: 10},
+		Runner: runner,
+		Wait: func(_ context.Context, process *executor.Process, _ executor.Group) error {
+			return process.Wait()
+		},
+		Established: func() error {
+			established++
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("run ssh session: %v", err)
+	}
+	if got, want := established, 2; got != want {
+		t.Fatalf("established calls = %d, want %d", got, want)
+	}
+}
+
 func TestRunSSHSessionAutoprovisionsAfterAuthenticationFailure(t *testing.T) {
 	launchManifest := testSSHSessionManifest()
 	launchManifest.SSH.Autoprovision = true
@@ -103,26 +126,6 @@ func TestRunSSHSessionAutoprovisionsAfterAuthenticationFailure(t *testing.T) {
 	secondArgs := runner.commands[1].Args
 	if !containsString(secondArgs, "-i") || !containsString(secondArgs, "/tmp/id") || !containsString(secondArgs, "IdentitiesOnly=yes") {
 		t.Fatalf("expected identity args in retry command, got %#v", secondArgs)
-	}
-}
-
-func TestRunSSHSessionWrapsCommandBuildError(t *testing.T) {
-	launchManifest := testSSHSessionManifest()
-	launchManifest.SSH.Argv = nil
-	wrappedErr := errors.New("wrapped")
-
-	err := RunSSHSession(context.Background(), SSHSession{
-		Plan:   &Plan{Manifest: launchManifest, CID: 10},
-		Runner: &fakeSSHSessionRunner{},
-		wrapStage: func(stage string, err error) error {
-			if stage != "active session" {
-				t.Fatalf("stage: got %q want active session", stage)
-			}
-			return wrappedErr
-		},
-	})
-	if !errors.Is(err, wrappedErr) {
-		t.Fatalf("wrapped err: got %v want %v", err, wrappedErr)
 	}
 }
 

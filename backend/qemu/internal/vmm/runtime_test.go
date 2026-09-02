@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shazow/virtle/backend"
 	"github.com/shazow/virtle/backend/qemu/internal/launch"
 	runtimepkg "github.com/shazow/virtle/backend/qemu/internal/runtime"
 	control "github.com/shazow/virtle/internal/control"
@@ -41,7 +42,7 @@ func TestRuntimeStatusAndBalloonUseOwnedQMP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("status: %v", err)
 	}
-	if status.State != control.RuntimeReady || status.CID != 9 || status.Paths.ControlSocket == "" || status.Stats.BootToQMP == "" {
+	if status.State != control.RuntimeReady || status.CID != 9 || status.Paths.ControlSocket == "" || status.Stats.BootToMonitor == "" {
 		t.Fatalf("unexpected status: %#v", status)
 	}
 
@@ -189,12 +190,16 @@ func TestRuntimeStartControlServesStatus(t *testing.T) {
 		t.Fatalf("start control: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := runtime.Close(); err != nil {
+		if err := runtime.Shutdown(context.Background()); err != nil {
 			t.Errorf("runtime close: %v", err)
 		}
 	})
 
-	status, err := control.Dial(controlPath).Status(context.Background(), control.StatusRequest{})
+	machine, err := control.Dial(context.Background(), controlPath)
+	if err != nil {
+		t.Fatalf("dial control socket: %v", err)
+	}
+	status, err := machine.(backend.StatusReporter).Status(context.Background())
 	if err != nil {
 		t.Fatalf("status over control socket: %v", err)
 	}
@@ -229,7 +234,7 @@ func TestRuntimeMarkSavedSuspendSkipsCloseWriteBack(t *testing.T) {
 	})
 
 	runtime.MarkSavedSuspend()
-	if err := runtime.Close(); err != nil {
+	if err := runtime.Shutdown(context.Background()); err != nil {
 		t.Fatalf("close: %v", err)
 	}
 	if writeBackCalls != 0 {
@@ -258,10 +263,10 @@ func TestRuntimeCloseStopsProcessesAndDisconnectsQMPOnce(t *testing.T) {
 		Logger:           slog.New(slog.DiscardHandler),
 	})
 
-	if err := runtime.Close(); err != nil {
+	if err := runtime.Shutdown(context.Background()); err != nil {
 		t.Fatalf("first close: %v", err)
 	}
-	if err := runtime.Close(); err != nil {
+	if err := runtime.Shutdown(context.Background()); err != nil {
 		t.Fatalf("second close: %v", err)
 	}
 	if got, want := qmp.disconnectCalls, 1; got != want {

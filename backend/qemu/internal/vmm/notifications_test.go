@@ -189,7 +189,7 @@ func TestLaunchResumeNotifiesAfterMigrationAndContinue(t *testing.T) {
 		t.Fatalf("write suspend state: %v", err)
 	}
 
-	runner := &launchRunner{finishInteractiveSSH: true}
+	runner := &launchRunner{}
 	qmpClient := &fakeQMPClient{
 		status: "paused",
 		onQuit: func() {
@@ -218,7 +218,7 @@ func TestLaunchResumeNotifiesAfterMigrationAndContinue(t *testing.T) {
 		notifier:            notifier,
 	}
 
-	if err := manager.launchWithOptions(context.Background(), cfg, nil, LaunchOptions{Resume: ResumeModeForce, SSH: true}); err != nil {
+	if err := manager.launchWithOptions(context.Background(), cfg, LaunchOptions{Resume: ResumeModeForce}); err != nil {
 		t.Fatalf("launch resume: %v", err)
 	}
 

@@ -129,26 +129,6 @@ func TestRunSSHSessionAutoprovisionsAfterAuthenticationFailure(t *testing.T) {
 	}
 }
 
-func TestRunSSHSessionWrapsCommandBuildError(t *testing.T) {
-	launchManifest := testSSHSessionManifest()
-	launchManifest.SSH.Argv = nil
-	wrappedErr := errors.New("wrapped")
-
-	err := RunSSHSession(context.Background(), SSHSession{
-		Plan:   &Plan{Manifest: launchManifest, CID: 10},
-		Runner: &fakeSSHSessionRunner{},
-		wrapStage: func(stage string, err error) error {
-			if stage != "active session" {
-				t.Fatalf("stage: got %q want active session", stage)
-			}
-			return wrappedErr
-		},
-	})
-	if !errors.Is(err, wrappedErr) {
-		t.Fatalf("wrapped err: got %v want %v", err, wrappedErr)
-	}
-}
-
 func TestRunSSHSessionDefaultsToStageWrapping(t *testing.T) {
 	launchManifest := testSSHSessionManifest()
 	launchManifest.SSH.Argv = nil

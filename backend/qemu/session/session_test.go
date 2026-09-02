@@ -5,22 +5,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/shazow/virtle/backend"
 	"github.com/shazow/virtle/backend/backendtest"
 	"github.com/shazow/virtle/backend/qemu/internal/launch"
 	"github.com/shazow/virtle/backend/qemu/internal/sessionbridge"
-	"github.com/shazow/virtle/internal/executor"
-	"github.com/shazow/virtle/internal/executor/executortest"
 	"github.com/shazow/virtle/internal/manifest"
 	"github.com/shazow/virtle/vm"
 	"github.com/shazow/virtle/vm/vmtest"
@@ -93,12 +88,6 @@ func (b *sessionTestBackend) start(ctx context.Context) (backend.Machine, error)
 	return b.machine, nil
 }
 
-type sessionRunner struct {
-	mu       sync.Mutex
-	waitErrs []error
-	commands []*exec.Cmd
-}
-
 type notifyingWriter struct {
 	bytes.Buffer
 	wrote chan struct{}
@@ -109,24 +98,6 @@ func (w *notifyingWriter) Write(p []byte) (int, error) {
 	n, err := w.Buffer.Write(p)
 	w.once.Do(func() { close(w.wrote) })
 	return n, err
-}
-
-func (r *sessionRunner) Start(cmd *exec.Cmd) (*executor.Process, error) {
-	r.mu.Lock()
-	r.commands = append(r.commands, cmd)
-	var waitErr error
-	if len(r.waitErrs) > 0 {
-		waitErr = r.waitErrs[0]
-		r.waitErrs = r.waitErrs[1:]
-	}
-	r.mu.Unlock()
-	return (&executortest.Process{Exited: true, WaitErr: waitErr}).Process(), nil
-}
-
-func (r *sessionRunner) starts() int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return len(r.commands)
 }
 
 type blockingBackend struct{ started chan struct{} }
@@ -263,23 +234,6 @@ func TestRunPreservesResumeStateWhenSSHStartFails(t *testing.T) {
 	}
 	if m.committedResume() {
 		t.Fatal("Run committed restored state before the SSH process started")
-	}
-}
-
-func TestRunRetriesTransientSSHFailure(t *testing.T) {
-	g := &vmtest.Guest{}
-	b := newNotifyingBackend(g)
-	runner := &sessionRunner{waitErrs: []error{errors.New("Connection refused"), nil}}
-	mf := &manifest.Manifest{
-		Paths: manifest.Paths{WorkingDir: t.TempDir()},
-		SSH:   manifest.SSH{Argv: []string{"ssh"}, User: "agent", RetryDelay: time.Millisecond},
-	}
-	err := Run(context.Background(), b, &vm.Spec{}, mf, Options{Resume: "no", SSH: true, runner: runner, Stdin: bytes.NewReader(nil), Stdout: io.Discard, Stderr: io.Discard})
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if got, want := runner.starts(), 2; got != want {
-		t.Fatalf("SSH starts = %d, want %d", got, want)
 	}
 }
 

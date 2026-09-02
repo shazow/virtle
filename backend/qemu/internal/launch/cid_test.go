@@ -2,6 +2,7 @@ package launch
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -32,7 +33,9 @@ func TestAcquireCIDRejectsSavedCIDOutsideRange(t *testing.T) {
 
 func TestAcquireCIDUsesFirstAvailableCID(t *testing.T) {
 	cfg := cidManifest(3, 5)
+	var checked []int
 	cid, err := AcquireCID(cfg, nil, cidCheckerFunc(func(cid int) (bool, error) {
+		checked = append(checked, cid)
 		return cid == 4, nil
 	}))
 	if err != nil {
@@ -40,6 +43,9 @@ func TestAcquireCIDUsesFirstAvailableCID(t *testing.T) {
 	}
 	if cid != 4 {
 		t.Fatalf("cid: got %d want 4", cid)
+	}
+	if got, want := checked, []int{3, 4}; !slices.Equal(got, want) {
+		t.Fatalf("checked CIDs: got %v want %v", got, want)
 	}
 }
 

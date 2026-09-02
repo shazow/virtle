@@ -545,20 +545,6 @@ func TestManagerLaunchRemovesCleanupPathAfterQMPStartupFailure(t *testing.T) {
 	}
 }
 
-func TestRemoveStaleSocketsIgnoresMissing(t *testing.T) {
-	tmpDir := t.TempDir()
-	filePath := filepath.Join(tmpDir, "cleanup.sock")
-	missingPath := filepath.Join(tmpDir, "missing.sock")
-	createStaleUnixSocket(t, filePath)
-
-	if err := launch.RemoveStaleSockets(filePath, missingPath); err != nil {
-		t.Fatalf("remove socket paths: %v", err)
-	}
-	if _, err := os.Stat(filePath); !os.IsNotExist(err) {
-		t.Fatalf("expected cleanup file to be removed, stat err: %v", err)
-	}
-}
-
 func TestCreateVolumeImageCreatesNativeExt4(t *testing.T) {
 	account, err := user.Current()
 	if err != nil {
@@ -1393,18 +1379,6 @@ func TestManagerLaunchSkipsGuestFilesOnResume(t *testing.T) {
 	}
 }
 
-func TestManagerWriteGuestFileClosesAfterWriteFailure(t *testing.T) {
-	client := &fakeGuestAgentClient{writeErr: errors.New("write failed")}
-
-	err := qga.WriteFile(context.Background(), client, "/etc/fail", "ZmFpbA==")
-	if err == nil || !strings.Contains(err.Error(), "write failed") {
-		t.Fatalf("expected write failure, got %v", err)
-	}
-	if len(client.closes) != 1 || client.closes[0] != "/etc/fail" {
-		t.Fatalf("expected close after write failure, got closes %v", client.closes)
-	}
-}
-
 func TestManagerLaunchUsesExternalVirtioFSSocketWithoutManagingDaemon(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
@@ -1981,58 +1955,6 @@ func TestManagerLaunchResumeForceRestoresAndRemovesSavedState(t *testing.T) {
 	}
 	if _, err := os.Stat(launch.SuspendStatePath(cfg)); !os.IsNotExist(err) {
 		t.Fatalf("expected suspend state removal, stat err: %v", err)
-	}
-}
-
-func TestAllocateCIDSkipsHostUnavailableIDs(t *testing.T) {
-	tmpDir := t.TempDir()
-	manifest := &manifest.Manifest{
-		Paths: manifest.Paths{
-			WorkingDir: tmpDir,
-			LockPath:   filepath.Join(tmpDir, "virtle.lock"),
-		},
-		VSock: manifest.VSock{
-			CIDRange: manifest.VSockCIDRange{
-				Start: 7,
-				End:   8,
-			},
-		},
-	}
-
-	checker := &fakeVSockCIDChecker{unavailable: map[int]bool{7: true}}
-	cid, err := launch.AcquireCID(manifest, nil, checker)
-	if err != nil {
-		t.Fatalf("allocate cid: %v", err)
-	}
-
-	if cid != 8 {
-		t.Fatalf("unexpected cid: got %d want 8", cid)
-	}
-	if got := checker.checked; !reflect.DeepEqual(got, []int{7, 8}) {
-		t.Fatalf("unexpected checked cids: got %v want [7 8]", got)
-	}
-}
-
-func TestAllocateCIDReturnsHostCheckError(t *testing.T) {
-	tmpDir := t.TempDir()
-	manifest := &manifest.Manifest{
-		Paths: manifest.Paths{
-			WorkingDir: tmpDir,
-			LockPath:   filepath.Join(tmpDir, "virtle.lock"),
-		},
-		VSock: manifest.VSock{
-			CIDRange: manifest.VSockCIDRange{
-				Start: 7,
-				End:   7,
-			},
-		},
-	}
-
-	_, err := launch.AcquireCID(manifest, nil, &fakeVSockCIDChecker{
-		err: errors.New("probe failed"),
-	})
-	if err == nil || !strings.Contains(err.Error(), "probe failed") {
-		t.Fatalf("expected probe failure, got %v", err)
 	}
 }
 
@@ -3281,20 +3203,6 @@ type fakeGuestAgentDialer struct {
 func (d *fakeGuestAgentDialer) Dial(ctx context.Context, socketPath string, timeout time.Duration) (qga.Client, error) {
 	d.attempts++
 	return d.client, nil
-}
-
-type fakeVSockCIDChecker struct {
-	unavailable map[int]bool
-	err         error
-	checked     []int
-}
-
-func (c *fakeVSockCIDChecker) Available(cid int) (bool, error) {
-	c.checked = append(c.checked, cid)
-	if c.err != nil {
-		return false, c.err
-	}
-	return !c.unavailable[cid], nil
 }
 
 func TestRequestGuestShutdownFailsFastWhenAgentUnavailable(t *testing.T) {

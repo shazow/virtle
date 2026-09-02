@@ -16,6 +16,9 @@ func TestBytesConstants(t *testing.T) {
 	if got, want := (2 * Gibibyte).Mebibytes(), MiB(2048); got != want {
 		t.Errorf("(2*Gibibyte).Mebibytes() = %d, want %d", got, want)
 	}
+	if got := MiB(2048).Bytes(); got != 2*Gibibyte {
+		t.Errorf("MiB(2048).Bytes() = %v, want 2GiB", got)
+	}
 }
 
 func TestBytesEncodingRoundTrip(t *testing.T) {
@@ -56,15 +59,6 @@ func TestBytesEncodingRoundTrip(t *testing.T) {
 	var fromTOML document
 	if err := toml.Unmarshal(encoded.Bytes(), &fromTOML); err != nil || fromTOML.Size != want {
 		t.Fatalf("decode TOML = %v, %v", fromTOML.Size, err)
-	}
-}
-
-func TestMiBConversions(t *testing.T) {
-	if got := (2048 * Mebibyte).Mebibytes(); got != MiB(2048) {
-		t.Fatalf("Mebibytes = %v, want 2048", got)
-	}
-	if got := MiB(2048).Bytes(); got != 2*Gibibyte {
-		t.Fatalf("MiB.Bytes = %v, want 2GiB", got)
 	}
 }
 

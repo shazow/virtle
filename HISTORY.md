@@ -24,6 +24,9 @@ compact before/after examples.
 - The library backend contract now exposes `Machine` handles with graceful
   shutdown and live-object capabilities; QEMU is configured directly through
   the exported, zero-value-usable `qemu.Backend` type.
+- QEMU machines now stop when their `Start` or `Resume` context is canceled,
+  service control-socket suspend requests after library startup, and expose
+  guest RPCs only when remote control is configured.
 - `vm.Guest.Run` now writes to caller-provided streams and reports non-zero
   command statuses as `*vm.ExitError`; `vm.Output` provides buffered stdout.
 - Unit codecs now live in the public `units` package; byte sizes support

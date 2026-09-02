@@ -25,6 +25,10 @@ type StartOptions struct {
 	// callers use this so a failure to establish the foreground session remains
 	// retryable; ordinary library starts commit before StartVM returns.
 	DeferResumeCommit bool
+
+	// DeferSuspendHandling leaves control-socket suspend requests for a
+	// foreground session to coordinate with its active process.
+	DeferSuspendHandling bool
 }
 
 // StartVM starts a VM from a resolved manifest and returns a handle without
@@ -32,7 +36,8 @@ type StartOptions struct {
 // package is built on: session-layer behavior (SSH
 // readiness gating, foreground signal waits) stays out, while process
 // supervision, QMP readiness, guest file writes, the control socket, and
-// the balloon controller run as they do for CLI launches.
+// the balloon controller run as they do for CLI launches. Canceling ctx stops
+// the returned VM and releases its runtime state.
 func StartVM(ctx context.Context, mf *manifest.Manifest, options StartOptions, configs ...Config) (*VM, error) {
 	config := DefaultConfig()
 	if len(configs) > 0 {
@@ -54,6 +59,9 @@ func StartVM(ctx context.Context, mf *manifest.Manifest, options StartOptions, c
 			return nil, errors.Join(err, v.Shutdown(context.Background()))
 		}
 	}
+	if !options.DeferSuspendHandling {
+		v.serveSuspendRequests(ctx)
+	}
 	return v, nil
 }
 
@@ -72,7 +80,7 @@ func (m *manager) startVM(ctx context.Context, spec launch.Spec) (*VM, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newVM(m, running), nil
+	return newVM(ctx, m, running), nil
 }
 
 // VM is a running virtual machine started by StartVM. It stays alive until
@@ -88,23 +96,68 @@ type VM struct {
 	commitErr  error
 	done       chan struct{}
 	exitErr    error
+
+	exitCauseMu sync.Mutex
+	exitCause   error
 }
 
-func newVM(m *manager, running *runningLaunch) *VM {
+func newVM(ctx context.Context, m *manager, running *runningLaunch) *VM {
 	v := &VM{m: m, running: running, done: make(chan struct{})}
-	go v.reap()
+	go v.reap(ctx)
 	return v
 }
 
-func (v *VM) reap() {
+func (v *VM) reap(ctx context.Context) {
 	qemu := v.running.processes.QEMU()
 	if qemu == nil {
 		v.exitErr = errors.New("vm process is not running")
-	} else {
-		v.exitErr = qemu.Wait()
+		v.exitErr = errors.Join(v.exitErr, v.close())
+		close(v.done)
+		return
 	}
-	v.exitErr = errors.Join(v.exitErr, v.close())
+
+	select {
+	case <-qemu.Done():
+	case <-ctx.Done():
+		v.addExitCause(context.Cause(ctx))
+		_ = v.closeContext(ctx)
+	}
+	v.exitErr = errors.Join(qemu.Wait(), v.getExitCause(), v.close())
 	close(v.done)
+}
+
+func (v *VM) addExitCause(err error) {
+	if err == nil {
+		return
+	}
+	v.exitCauseMu.Lock()
+	v.exitCause = errors.Join(v.exitCause, err)
+	v.exitCauseMu.Unlock()
+}
+
+func (v *VM) getExitCause() error {
+	v.exitCauseMu.Lock()
+	defer v.exitCauseMu.Unlock()
+	return v.exitCause
+}
+
+// serveSuspendRequests owns control-socket suspend requests for a library
+// start. Foreground sessions service the same channel themselves so they can
+// stop an active SSH process before saving the machine.
+func (v *VM) serveSuspendRequests(ctx context.Context) {
+	go func() {
+		select {
+		case <-v.SuspendRequests():
+			err := v.HandleSuspendRequest(ctx)
+			if err == nil || launch.IsSavedSuspendExit(err) {
+				return
+			}
+			v.addExitCause(err)
+			_ = v.Shutdown(context.WithoutCancel(ctx))
+		case <-ctx.Done():
+		case <-v.Done():
+		}
+	}()
 }
 
 // Done closes after the VM has exited and runtime state has been released.

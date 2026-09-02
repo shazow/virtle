@@ -54,7 +54,8 @@ const (
 	AccelTCG  Accel = "tcg" // software emulation
 )
 
-// Backend starts QEMU virtual machines. The zero value works. Fields must not
+// Backend starts QEMU virtual machines. The zero value works. Canceling the
+// context passed to Start or Resume stops the returned machine. Fields must not
 // be modified after Start or Resume is first called.
 type Backend struct {
 	Binary         string            // default: qemu-system-<arch>
@@ -175,10 +176,12 @@ func (b *Backend) start(ctx context.Context, spec *vm.Spec, resume vmm.ResumeMod
 	if err != nil {
 		return nil, err
 	}
+	bridge := sessionbridge.FromContext(ctx)
 	handle, err := vmm.StartVM(ctx, mf, vmm.StartOptions{
-		Resume:            resume,
-		HasRemoteControl:  b.hasRemoteControl(),
-		DeferResumeCommit: sessionbridge.FromContext(ctx) != nil,
+		Resume:               resume,
+		HasRemoteControl:     b.hasRemoteControl(),
+		DeferResumeCommit:    bridge != nil,
+		DeferSuspendHandling: bridge != nil,
 	}, vmm.Config{
 		Logger:        logger,
 		ConsoleOutput: b.consoleOutput(),
@@ -187,7 +190,7 @@ func (b *Backend) start(ctx context.Context, spec *vm.Spec, resume vmm.ResumeMod
 		return nil, err
 	}
 	machine := &Machine{vm: handle, hasRemoteControl: b.hasRemoteControl()}
-	if bridge := sessionbridge.FromContext(ctx); bridge != nil {
+	if bridge != nil {
 		bridge.Bind(sessionbridge.Hooks{
 			SuspendRequests:      handle.SuspendRequests,
 			HandleSuspendRequest: handle.HandleSuspendRequest,

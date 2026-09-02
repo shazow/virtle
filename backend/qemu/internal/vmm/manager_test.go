@@ -2125,6 +2125,96 @@ func TestStartVMQueuesControlSuspendUntilGuestProvisioningCompletes(t *testing.T
 	}
 }
 
+func TestStartVMContextCancellationStopsMachine(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := validManifest(tmpDir)
+	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
+	cfg.QEMU.Devices.VirtioFS = nil
+	cfg.QEMU.Devices.Block = nil
+	cfg.QEMU.SSHReady.SocketPath = ""
+	cfg.Volumes = nil
+	cfg.Run = nil
+
+	runner := &launchRunner{}
+	ctx, cancel := context.WithCancel(context.Background())
+	v, err := StartVM(ctx, cfg, StartOptions{}, Config{
+		Locker:            &fileLocker{},
+		Runner:            runner,
+		SocketWaiter:      &fakeSocketWaiter{callback: func([]string) error { return nil }},
+		QMPDialer:         &fakeQMPDialer{client: &fakeQMPClient{}},
+		Logger:            slog.New(slog.DiscardHandler),
+		ShutdownDelay:     10 * time.Millisecond,
+		QMPConnectTimeout: time.Second,
+		QMPQuitTimeout:    time.Second,
+	})
+	if err != nil {
+		cancel()
+		t.Fatalf("start VM: %v", err)
+	}
+
+	cancel()
+	select {
+	case <-v.Done():
+	case <-time.After(time.Second):
+		t.Fatal("machine did not stop after Start context cancellation")
+	}
+	if !errors.Is(v.Err(), context.Canceled) {
+		t.Fatalf("machine error = %v, want context.Canceled", v.Err())
+	}
+}
+
+func TestStartVMServicesControlSuspendAfterStart(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := validManifest(tmpDir)
+	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
+	cfg.QEMU.Devices.VirtioFS = nil
+	cfg.QEMU.Devices.Block = nil
+	cfg.QEMU.SSHReady.SocketPath = ""
+	cfg.Volumes = nil
+	cfg.Run = nil
+
+	runner := &launchRunner{}
+	qmpClient := &fakeQMPClient{status: "running", onQuit: func() { runner.exitQEMU(nil) }}
+	v, err := StartVM(context.Background(), cfg, StartOptions{}, Config{
+		Locker:              &fileLocker{},
+		Runner:              runner,
+		SocketWaiter:        &fakeSocketWaiter{callback: func([]string) error { return nil }},
+		QMPDialer:           &fakeQMPDialer{client: qmpClient},
+		Logger:              slog.New(slog.DiscardHandler),
+		ShutdownDelay:       10 * time.Millisecond,
+		QMPConnectTimeout:   time.Second,
+		QMPQuitTimeout:      time.Second,
+		QMPMigrationTimeout: time.Second,
+	})
+	if err != nil {
+		t.Fatalf("start VM: %v", err)
+	}
+	defer v.Kill()
+
+	controlPath, err := cfg.ResolvedControlSocketPath()
+	if err != nil {
+		t.Fatalf("resolve control socket: %v", err)
+	}
+	rpcCtx, cancelRPC := context.WithTimeout(context.Background(), time.Second)
+	defer cancelRPC()
+	remote, err := control.Dial(rpcCtx, controlPath)
+	if err != nil {
+		t.Fatalf("dial control socket: %v", err)
+	}
+	if err := remote.(backend.Suspender).Suspend(rpcCtx); err != nil {
+		t.Fatalf("control suspend: %v", err)
+	}
+	if err := remote.Wait(rpcCtx); err != nil {
+		t.Fatalf("wait for remote machine: %v", err)
+	}
+	if err := v.Wait(rpcCtx); err != nil {
+		t.Fatalf("wait for local machine: %v", err)
+	}
+	if qmpClient.migrateCalls != 1 {
+		t.Fatalf("migration calls = %d, want 1", qmpClient.migrateCalls)
+	}
+}
+
 func TestStartVMSkipsVirtioFSReadinessWithoutVirtioFS(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
@@ -2426,7 +2516,7 @@ func TestLaunchRuntimeRegistersGuestRPCsAtControlPeriphery(t *testing.T) {
 		qmpRetryDelay:     time.Millisecond,
 		shutdownDelay:     time.Millisecond,
 	}
-	plan, err := manager.planLaunch(launch.Spec{Manifest: cfg, Options: LaunchOptions{Resume: ResumeModeNo}})
+	plan, err := manager.planLaunch(launch.Spec{Manifest: cfg, Options: LaunchOptions{Resume: ResumeModeNo, HasRemoteControl: true}})
 	if err != nil {
 		t.Fatalf("plan launch: %v", err)
 	}
@@ -2494,7 +2584,7 @@ func TestLaunchRuntimeRegistersGuestRPCsAtControlPeriphery(t *testing.T) {
 	}
 }
 
-func TestLaunchRuntimeGuestPSMapsFailureToFailedPrecondition(t *testing.T) {
+func TestLaunchRuntimeWithoutRemoteControlOmitsGuestRPCs(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
 	cfg.Persistence.StateDir = ".virtle"
@@ -2531,17 +2621,8 @@ func TestLaunchRuntimeGuestPSMapsFailureToFailedPrecondition(t *testing.T) {
 	if err != nil {
 		t.Fatalf("control dial: %v", err)
 	}
-	guest, err := machine.RemoteControl()
-	if err != nil {
-		t.Fatalf("remote control: %v", err)
-	}
-	err = guest.Run(context.Background(), &vm.GuestCmd{Path: "/bin/true"})
-	var rpcErr *control.RPCError
-	if !errors.As(err, &rpcErr) {
-		t.Fatalf("error type: got %T", err)
-	}
-	if rpcErr.Code != control.ErrFailedPrecondition {
-		t.Fatalf("code: got %s want %s", rpcErr.Code, control.ErrFailedPrecondition)
+	if _, err := machine.RemoteControl(); !errors.Is(err, errors.ErrUnsupported) {
+		t.Fatalf("RemoteControl error = %v, want errors.ErrUnsupported", err)
 	}
 }
 

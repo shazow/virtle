@@ -214,10 +214,11 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 		processes:      processes,
 	}
 	runtime.SetReady()
-	if _, err := runtime.StartControl(launchCtx, controlpkg.Handlers{
-		Guest:   m.guestFeature(plan.Paths.GuestAgentSocket, processes),
-		Hotplug: m.hotplugFeature(runtime.QMP()),
-	}); err != nil {
+	handlers := controlpkg.Handlers{Hotplug: m.hotplugFeature(runtime.QMP())}
+	if plan.Options.HasRemoteControl {
+		handlers.Guest = m.guestFeature(plan.Paths.GuestAgentSocket, processes)
+	}
+	if _, err := runtime.StartControl(launchCtx, handlers); err != nil {
 		return nil, launch.WrapFixedStage("control startup")(err)
 	}
 	if err := launch.HandleQueuedSuspend(launchCtx, lifecycle, suspendHandler.Handle); err != nil {

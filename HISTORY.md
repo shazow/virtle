@@ -19,8 +19,10 @@ compact before/after examples.
 - The resolved manifest (`virtle manifest resolve`) no longer carries the
   unused `MkfsExtraArgs` volume field.
 - Releases: `scripts/update-release-nix X.Y.Z` now stamps release versions
-  too, and the release workflow rejects a tag whose `release.nix` still
-  carries the development version, so Nix builds of a tag report that tag.
+  too. When a tag on the tip of `main` still carries the development version
+  in `release.nix`, the release workflow stamps it, commits to `main`, and
+  moves the tag onto that commit before publishing, so Nix builds of a tag
+  report that tag; tags elsewhere with a stale version are still rejected.
 
 ## 2026-09-01
 

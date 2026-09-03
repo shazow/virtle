@@ -24,10 +24,12 @@ changing `go.mod` or `go.sum`, run `scripts/update-release-nix` (with no
 argument it keeps the current version) to refresh the vendor hash in
 `release.nix`; otherwise the Nix job fails.
 
-To cut a release, run `scripts/update-release-nix X.Y.Z`, commit the
-`release.nix` change, and tag that commit `vX.Y.Z`. The release workflow
-rejects tags whose `release.nix` version does not match, and moves `main` back
-to `X.Y.Z-dev` afterwards.
+To cut a release, tag the tip of `main` `vX.Y.Z` and push the tag. The release
+workflow runs `scripts/update-release-nix X.Y.Z`, commits the `release.nix`
+change to `main`, moves the tag onto that commit, publishes from it, and moves
+`main` back to `X.Y.Z-dev` afterwards. A tag that is not on the tip of `main`
+must carry a matching `release.nix` version already, or the workflow rejects
+it.
 
 ## Pull Request
 - Mention any relevant issues, especially if the pull request fixes them. (Example: "Fixes #123")

@@ -81,8 +81,8 @@ func TestDocumentWithDefaultsPreservesKeyResolvedDefaults(t *testing.T) {
 	if got := manifest.QEMU.GuestAgent.SocketPath; got != "qga.sock" {
 		t.Fatalf("guest agent socket = %q, want %q", got, "qga.sock")
 	}
-	if got := manifest.QEMU.SSHReady.SocketPath; got != defaultSSHReadySocket {
-		t.Fatalf("ssh ready socket = %q, want %q", got, defaultSSHReadySocket)
+	if got := manifest.QEMU.SSHReady.SocketPath; got != "" {
+		t.Fatalf("ssh ready socket = %q, want it unset by default", got)
 	}
 	if got := manifest.SSH.User; got != "agent" {
 		t.Fatalf("ssh user = %q, want %q", got, "agent")

@@ -91,12 +91,11 @@ type templateWorkspace struct {
 }
 
 type Volume struct {
-	ImagePath     string    `json:"imagePath"`
-	Size          units.MiB `json:"sizeMiB,omitempty"`
-	FSType        string    `json:"fsType,omitempty"`
-	AutoCreate    bool      `json:"autoCreate,omitempty"`
-	Label         string    `json:"label,omitempty"`
-	MkfsExtraArgs []string  `json:"mkfsExtraArgs,omitempty"`
+	ImagePath  string    `json:"imagePath"`
+	Size       units.MiB `json:"sizeMiB,omitempty"`
+	FSType     string    `json:"fsType,omitempty"`
+	AutoCreate bool      `json:"autoCreate,omitempty"`
+	Label      string    `json:"label,omitempty"`
 }
 
 type Command struct {

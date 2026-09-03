@@ -31,9 +31,6 @@ func (d Document) ManifestWithOptions(options ResolveOptions) (*Manifest, error)
 	if d.Kernel.InitrdPath == "" {
 		return nil, fmt.Errorf("manifest.kernel.initrd_path is required")
 	}
-	retryDelay := d.SSH.RetryDelay.Duration()
-	guestDefaultTimeout := d.QEMU.GuestDefaultTimeout.Duration()
-
 	host := d.Host.withDefaults()
 	m := &Manifest{
 		Identity: Identity{
@@ -49,7 +46,7 @@ func (d Document) ManifestWithOptions(options ResolveOptions) (*Manifest, error)
 		SSH: SSH{
 			Argv:          append([]string(nil), d.SSH.Exec...),
 			User:          d.SSH.User,
-			RetryDelay:    retryDelay,
+			RetryDelay:    d.SSH.RetryDelay.Duration(),
 			Autoprovision: d.SSH.Autoprovision,
 		},
 		VSock: VSock{
@@ -70,13 +67,10 @@ func (d Document) ManifestWithOptions(options ResolveOptions) (*Manifest, error)
 		return nil, fmt.Errorf("manifest.qemu.hotplug_ports must not be negative, got %d", d.QEMU.HotplugPorts)
 	}
 	hotplugCount := d.hotplugCount()
-	qemu, err := d.resolveQEMU(host, m.Identity.HostName, m.Paths.WorkingDir, m.Persistence.StateDir, hotplugCount)
+	qemu, err := d.resolveQEMU(host, hotplugCount)
 	if err != nil {
 		return nil, err
 	}
-	qemu.GuestAgent.CommandTimeout = guestDefaultTimeout
-	qemu.GuestAgent.ShutdownExec = d.QEMU.ShutdownExec
-	qemu.GuestAgent.ShutdownTimeout = d.QEMU.ShutdownTimeout.Duration()
 	m.QEMU = qemu
 	m.Volumes = resolveVolumes(imageMounts)
 	virtioFSRuns, err := m.resolveVirtioFSRuns(virtioFSMounts, options)
@@ -110,7 +104,7 @@ func (h HostInput) withDefaults() HostInput {
 	return h
 }
 
-func (d Document) resolveQEMU(host HostInput, hostName string, workingDir string, stateDir string, hotplugCount int) (QEMU, error) {
+func (d Document) resolveQEMU(host HostInput, hotplugCount int) (QEMU, error) {
 	machineType := d.Machine.Type
 	graphics := resolveGraphics(d.Graphics)
 	transport := qemuTransport(machineType, d.Mounts, graphics, hotplugCount > 0)
@@ -126,9 +120,9 @@ func (d Document) resolveQEMU(host HostInput, hostName string, workingDir string
 		enableKVM = *d.Machine.KVM
 	}
 	qemuRenderer, err := NewTemplateRenderer(QEMUTemplateProvider{
-		HostName:   hostName,
-		WorkingDir: workingDir,
-		StateDir:   stateDir,
+		HostName:   d.HostName,
+		WorkingDir: d.WorkingDir,
+		StateDir:   d.StateDir,
 		Host:       host,
 	})
 	if err != nil {
@@ -164,7 +158,7 @@ func (d Document) resolveQEMU(host HostInput, hostName string, workingDir string
 	qemu := QEMU{
 		BinaryPath: binaryPath,
 		RunAsUser:  d.QEMU.User,
-		Name:       hostName,
+		Name:       d.HostName,
 		Machine: QEMUMachine{
 			Type:    machineType,
 			Options: resolveMachineOptions(host, machineType, d.QEMU.MachineOptions, transport == "pci", d.Machine.KVM),
@@ -181,7 +175,7 @@ func (d Document) resolveQEMU(host HostInput, hostName string, workingDir string
 		Kernel: QEMUKernel{
 			Path:       d.Kernel.Path,
 			InitrdPath: d.Kernel.InitrdPath,
-			Params:     kernelParams(host, d.Kernel),
+			Params:     kernelParams(host, serialMode, d.Kernel.Params),
 		},
 		SMP: QEMUSMP{
 			CPUs: cpus,
@@ -199,7 +193,10 @@ func (d Document) resolveQEMU(host HostInput, hostName string, workingDir string
 			SocketPath: qmpSocket,
 		},
 		GuestAgent: QEMUGuestAgent{
-			SocketPath: guestAgentSocket,
+			SocketPath:      guestAgentSocket,
+			CommandTimeout:  d.QEMU.GuestDefaultTimeout.Duration(),
+			ShutdownExec:    d.QEMU.ShutdownExec,
+			ShutdownTimeout: d.QEMU.ShutdownTimeout.Duration(),
 		},
 		SSHReady: QEMUSSHReady{
 			SocketPath: sshReadySocket,
@@ -304,7 +301,7 @@ func defaultMachineOptions(host HostInput, machineType string, requirePCI bool) 
 		if machineType == "microvm" {
 			options["pit"] = "off"
 			options["pic"] = "off"
-			options["pcie"] = boolOnOff(requirePCI)
+			options["pcie"] = OnOff(requirePCI)
 			options["rtc"] = "on"
 			options["usb"] = "off"
 		}
@@ -332,9 +329,12 @@ func memoryBackend(host HostInput, hasVirtioFS bool) string {
 	return "default"
 }
 
-func kernelParams(host HostInput, kernel KernelInput) string {
-	params := make([]string, 0, len(kernel.Params)+3)
-	if mode, _ := kernelSerialMode(kernel); mode != KernelSerialOff {
+// kernelParams assembles the kernel command line: console parameters for
+// the resolved serial mode, virtle's fixed reboot/panic policy, then the
+// manifest's own parameters.
+func kernelParams(host HostInput, serialMode string, extra []string) string {
+	params := make([]string, 0, len(extra)+3)
+	if serialMode != KernelSerialOff {
 		switch host.System {
 		case "x86_64-linux":
 			params = append(params, "earlyprintk=ttyS0 console=ttyS0")
@@ -343,7 +343,7 @@ func kernelParams(host HostInput, kernel KernelInput) string {
 		}
 	}
 	params = append(params, "reboot=t", "panic=-1")
-	params = append(params, kernel.Params...)
+	params = append(params, extra...)
 	return strings.Join(params, " ")
 }
 
@@ -372,22 +372,13 @@ func resolveVolumes(volumes []ImageMountInput) []Volume {
 	return result
 }
 
+// resolveBlocks, resolveVirtioFSMounts, and resolveNinePMounts populate the
+// per-kind device slices with the same devices Devices.Mounts carries, so
+// they reuse the single-mount resolvers.
 func resolveBlocks(volumes []ImageMountInput, host HostInput, transport string) []QEMUBlockDevice {
 	blocks := make([]QEMUBlockDevice, 0, len(volumes))
 	for i, volume := range volumes {
-		block := QEMUBlockDevice{
-			ID:        "vd" + string(rune('a'+i)),
-			ImagePath: volume.SourcePath,
-			Format:    resolveImageFormat(volume.Image.Format),
-			AIO:       aioEngine(host),
-			ReadOnly:  volume.ReadOnly,
-			Serial:    stringValue(volume.Image.Serial),
-			Transport: transport,
-		}
-		if volume.Image.Direct {
-			block.Cache = "none"
-		}
-		blocks = append(blocks, block)
+		blocks = append(blocks, *resolveQEMUImageMount(volume, i, host, transport).Block)
 	}
 	return blocks
 }
@@ -486,12 +477,7 @@ func resolveWorkspace(workspace WorkspaceInput) Workspace {
 func resolveVirtioFSMounts(mounts []VirtioFSMountInput, transport string) []QEMUVirtioFSShare {
 	shares := make([]QEMUVirtioFSShare, 0, len(mounts))
 	for i, mount := range mounts {
-		shares = append(shares, QEMUVirtioFSShare{
-			ID:         "fs" + strconv.Itoa(i),
-			SocketPath: mount.VirtioFS.Socket,
-			Tag:        mount.Tag,
-			Transport:  transport,
-		})
+		shares = append(shares, *resolveQEMUVirtioFSMount(mount, i, transport).VirtioFS)
 	}
 	return shares
 }
@@ -499,18 +485,7 @@ func resolveVirtioFSMounts(mounts []VirtioFSMountInput, transport string) []QEMU
 func resolveNinePMounts(mounts []NinePMountInput, transport string) []QEMUNinePShare {
 	shares := make([]QEMUNinePShare, 0, len(mounts))
 	for i, mount := range mounts {
-		securityModel := mount.NineP.SecurityModel
-		if securityModel == "" {
-			securityModel = "mapped"
-		}
-		shares = append(shares, QEMUNinePShare{
-			ID:            "fs9p" + strconv.Itoa(i),
-			SourcePath:    mount.SourcePath,
-			Tag:           mount.Tag,
-			SecurityModel: securityModel,
-			ReadOnly:      mount.ReadOnly,
-			Transport:     transport,
-		})
+		shares = append(shares, *resolveQEMUNinePMount(mount, i, transport).NineP)
 	}
 	return shares
 }
@@ -523,10 +498,6 @@ func (m *Manifest) resolveVirtioFSRuns(mounts []VirtioFSMountInput, options Reso
 		}
 		if mount.VirtioFS.Bin == "" && len(mount.VirtioFS.Args) == 0 {
 			continue
-		}
-		bin := mount.VirtioFS.Bin
-		if bin == "" {
-			bin = "virtiofsd"
 		}
 		socketPath, err := m.resolveSocketPath(mount.VirtioFS.Socket)
 		if err != nil {
@@ -565,7 +536,7 @@ func (m *Manifest) resolveVirtioFSRuns(mounts []VirtioFSMountInput, options Reso
 			}
 		}
 		runs = append(runs, Run{
-			Exec: append([]string{m.resolveOptionalBin(bin, "virtiofsd")}, args...),
+			Exec: append([]string{m.resolveOptionalBin(mount.VirtioFS.Bin, defaultVirtioFSBin)}, args...),
 			Env:  []string{"VIRTIOFSD_SOCKET={{.Socket}}"},
 			Vars: VirtioFSTemplateProvider{
 				SocketPath: socketPath,
@@ -616,22 +587,33 @@ func (m *Manifest) ResolveHotplugMount(entry MountEntry) (HotplugDevice, error) 
 	if err != nil {
 		return HotplugDevice{}, err
 	}
-	if err := validateHotplug(0, device); err != nil {
+	if err := validateHotplug("hotplug", device); err != nil {
 		return HotplugDevice{}, err
 	}
 	return device, nil
 }
 
 func (m *Manifest) resolveImageHotplug(entry ImageMountInput) (HotplugDevice, error) {
+	// The image serial doubles as the hotplug id and may itself be a template.
 	serial := stringValue(entry.Image.Serial)
+	if serial == "" {
+		return HotplugDevice{}, fmt.Errorf("id is required")
+	}
 	format := resolveImageFormat(entry.Image.Format)
-	id, err := renderHotplugID(serial, "{{.Serial}}", StaticTemplateContext(executor.Context{
+	renderer, err := NewTemplateRenderer(StaticTemplateContext(executor.Context{
 		"Serial": serial,
 		"Source": entry.SourcePath,
 		"Format": format,
 	}))
 	if err != nil {
 		return HotplugDevice{}, err
+	}
+	id, err := renderer.RenderString(serial)
+	if err != nil {
+		return HotplugDevice{}, err
+	}
+	if id == "" {
+		return HotplugDevice{}, fmt.Errorf("id is required")
 	}
 	return HotplugDevice{
 		Kind: HotplugKindBlock,
@@ -655,10 +637,6 @@ func (m *Manifest) resolveVirtioFSHotplug(mount VirtioFSMountInput) (HotplugDevi
 	if err != nil {
 		return HotplugDevice{}, err
 	}
-	bin := mount.VirtioFS.Bin
-	if bin == "" {
-		bin = "virtiofsd"
-	}
 	source := m.resolvePath(mount.SourcePath)
 	args := append([]string(nil), mount.VirtioFS.Args...)
 	if len(args) == 0 {
@@ -677,11 +655,15 @@ func (m *Manifest) resolveVirtioFSHotplug(mount VirtioFSMountInput) (HotplugDevi
 			Source:     source,
 			Target:     mount.Target,
 			SocketPath: socketPath,
-			Bin:        m.resolveOptionalBin(bin, "virtiofsd"),
+			Bin:        m.resolveOptionalBin(mount.VirtioFS.Bin, defaultVirtioFSBin),
 			Args:       args,
 		},
 	}, nil
 }
+
+// defaultVirtioFSBin is the virtiofsd binary used when a mount names none;
+// it is left unresolved so the host PATH supplies it.
+const defaultVirtioFSBin = "virtiofsd"
 
 func (m *Manifest) resolveOptionalBin(bin string, defaultBin string) string {
 	if bin == "" || bin == defaultBin {
@@ -737,28 +719,10 @@ func (m *Manifest) ResolveHotplugNetwork(entry NetworkInput) (HotplugDevice, err
 	if err != nil {
 		return HotplugDevice{}, err
 	}
-	if err := validateHotplug(0, device); err != nil {
+	if err := validateHotplug("hotplug", device); err != nil {
 		return HotplugDevice{}, err
 	}
 	return device, nil
-}
-
-func renderHotplugID(id string, defaultID string, provider TemplateProvider) (string, error) {
-	if id == "" {
-		id = defaultID
-	}
-	renderer, err := NewTemplateRenderer(provider)
-	if err != nil {
-		return "", err
-	}
-	rendered, err := renderer.RenderString(id)
-	if err != nil {
-		return "", err
-	}
-	if rendered == "" {
-		return "", fmt.Errorf("id is required")
-	}
-	return rendered, nil
 }
 
 func staleUnixSocket(path string) (bool, error) {
@@ -904,11 +868,11 @@ func resolveForwardPorts(ports []ForwardPort, fwdTunnelExec []string, networkInd
 			options = append(options, fmt.Sprintf("hostfwd=%s:%s:%d-%s:%d", normalized.Proto, normalized.Host.Address, normalized.Host.Port, normalized.Guest.Address, normalized.Guest.Port))
 		} else {
 			if err := rejectLegacyFwdTunnelExecEnv(fwdTunnelExec); err != nil {
-				return nil, fmt.Errorf("manifest.networks[%d].forward[%d].fwd_tunnel_exec: %w", networkIndex, i, err)
+				return nil, fmt.Errorf("manifest.qemu.fwd_tunnel_exec (manifest.networks[%d].forward[%d]): %w", networkIndex, i, err)
 			}
 			command, err := renderFwdTunnelExec(fwdTunnelExec, normalized.Host)
 			if err != nil {
-				return nil, fmt.Errorf("manifest.networks[%d].forward[%d].fwd_tunnel_exec: %w", networkIndex, i, err)
+				return nil, fmt.Errorf("manifest.qemu.fwd_tunnel_exec (manifest.networks[%d].forward[%d]): %w", networkIndex, i, err)
 			}
 			options = append(options, fmt.Sprintf("guestfwd=%s:%s:%d-cmd:%s", normalized.Proto, normalized.Guest.Address, normalized.Guest.Port, shellquote.Join(command...)))
 		}
@@ -1022,14 +986,10 @@ func resolveGraphics(graphics *GraphicsInput) QEMUGraphics {
 }
 
 func resolveNotifications(notifications NotificationsInput) Notifications {
-	result := Notifications{
-		States: append([]string(nil), notifications.States...),
+	return Notifications{
+		States:  append([]string(nil), notifications.States...),
+		Command: commandFromExec(notifications.Exec),
 	}
-	if len(notifications.Exec) > 0 {
-		command := commandFromExec(notifications.Exec)
-		result.Command = command
-	}
-	return result
 }
 
 func resolveRun(runs []RunInput) []Run {
@@ -1130,7 +1090,8 @@ func qemuArch(goArch string) string {
 	}
 }
 
-func boolOnOff(value bool) string {
+// OnOff renders value as the "on"/"off" text QEMU option strings expect.
+func OnOff(value bool) string {
 	if value {
 		return "on"
 	}

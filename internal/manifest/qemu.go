@@ -62,13 +62,6 @@ func ExplicitCPUs(value int) CPUCount {
 	return CPUCount{Value: value, Set: true}
 }
 
-func (c CPUCount) QEMUValue() int {
-	if c.Set {
-		return c.Value
-	}
-	return 0
-}
-
 type QEMUConsole string
 
 const (

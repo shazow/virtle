@@ -1,3 +1,6 @@
+// Command virtle launches and controls QEMU sandbox VMs described by a
+// manifest. Run virtle --help for the command list; see README.md for the
+// manifest format.
 package main
 
 import (
@@ -6,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -80,16 +82,12 @@ func runLaunch(options *Options) error {
 		return fmt.Errorf("remote command arguments require --ssh")
 	}
 
-	rootLogger.With("package", "main").Info("loading launch manifest", "path", options.Manifest)
-	resolvedPath, err := resolveManifestPath(options.Manifest)
+	doc, resolvedPath, err := loadManifestDocument(options.Manifest)
 	if err != nil {
 		return err
 	}
-	data, err := readManifestFile(resolvedPath)
-	if err != nil {
-		return fmt.Errorf("open manifest %q: %w", resolvedPath, err)
-	}
-	spec, b, err := manifestapi.Load(bytes.NewReader(data))
+	rootLogger.With("package", "main").Info("loading launch manifest", "path", resolvedPath)
+	spec, b, err := manifestapi.LoadDocument(doc)
 	if err != nil {
 		return fmt.Errorf("load manifest %q: %w", resolvedPath, err)
 	}
@@ -97,9 +95,9 @@ func runLaunch(options *Options) error {
 		qemuBackend.Logger = rootLogger
 		qemuBackend.ConsoleOutput = os.Stderr
 	}
-	loaded, err := loadLaunchManifest(options.Manifest, rootLogger.With("package", "manifest"))
+	loaded, err := doc.ManifestWithOptions(manifest.ResolveOptions{Logger: rootLogger.With("package", "manifest")})
 	if err != nil {
-		return err
+		return fmt.Errorf("load manifest %q: %w", resolvedPath, err)
 	}
 
 	return session.Run(context.Background(), b, spec, loaded, session.Options{
@@ -110,24 +108,36 @@ func runLaunch(options *Options) error {
 	})
 }
 
-func runSuspend(options *Options) error {
-	manifest, err := loadManifest(options.Manifest)
+// controlSession loads the manifest, resolves its control socket, and returns
+// a signal-aware context for one command against a running VM.
+func controlSession(manifestPath string) (context.Context, context.CancelFunc, string, error) {
+	mf, err := loadManifest(manifestPath)
 	if err != nil {
-		return err
+		return nil, nil, "", err
 	}
-
+	socketPath, err := mf.ResolvedControlSocketPath()
+	if err != nil {
+		return nil, nil, "", err
+	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
+	return ctx, cancel, socketPath, nil
+}
 
-	controlSocketPath, err := manifest.ResolvedControlSocketPath()
+func runSuspend(options *Options) error {
+	ctx, cancel, socketPath, err := controlSession(options.Manifest)
 	if err != nil {
 		return err
 	}
-	m, err := control.Dial(ctx, controlSocketPath)
+	defer cancel()
+	m, err := control.Dial(ctx, socketPath)
 	if err != nil {
 		return err
 	}
-	if err := m.(backend.Suspender).Suspend(ctx); err != nil {
+	suspender, ok := m.(backend.Suspender)
+	if !ok {
+		return fmt.Errorf("control socket machine cannot suspend: %w", errors.ErrUnsupported)
+	}
+	if err := suspender.Suspend(ctx); err != nil {
 		return err
 	}
 	if err := m.Wait(ctx); err != nil {
@@ -138,21 +148,20 @@ func runSuspend(options *Options) error {
 }
 
 func runStatus(options *Options) error {
-	mf, err := loadManifest(options.Manifest)
+	ctx, cancel, socketPath, err := controlSession(options.Manifest)
 	if err != nil {
 		return err
 	}
-	path, err := mf.ResolvedControlSocketPath()
-	if err != nil {
-		return err
-	}
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	m, err := control.Dial(ctx, path)
+	m, err := control.Dial(ctx, socketPath)
 	if err != nil {
 		return err
 	}
-	status, err := m.(backend.StatusReporter).Status(ctx)
+	reporter, ok := m.(backend.StatusReporter)
+	if !ok {
+		return fmt.Errorf("control socket machine cannot report status: %w", errors.ErrUnsupported)
+	}
+	status, err := reporter.Status(ctx)
 	if err != nil {
 		return err
 	}
@@ -171,20 +180,19 @@ func runManifestDefaults(options *Options) error {
 }
 
 func runManifestResolve(options *Options) error {
-	manifest, err := loadManifest(options.Manifest)
+	mf, err := loadManifest(options.Manifest)
 	if err != nil {
 		return err
 	}
-	return toml.NewEncoder(os.Stdout).Encode(manifest)
+	return toml.NewEncoder(os.Stdout).Encode(mf)
 }
 
 func runManifestValidate(options *Options) error {
-	_, err := loadManifest(options.Manifest)
-	if err != nil {
+	if _, err := loadManifest(options.Manifest); err != nil {
 		return err
 	}
-	fmt.Fprintln(os.Stdout, "manifest is valid")
-	return nil
+	_, err := fmt.Fprintln(os.Stdout, "manifest is valid")
+	return err
 }
 
 func runManifestSchema() error {
@@ -197,23 +205,16 @@ func runManifestSchema() error {
 }
 
 func runHotplug(options *Options) error {
-	manifest, err := loadManifest(options.Manifest)
+	ctx, cancel, socketPath, err := controlSession(options.Manifest)
 	if err != nil {
 		return err
 	}
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-
-	controlSocketPath, err := manifest.ResolvedControlSocketPath()
-	if err != nil {
-		return err
-	}
 	params, err := json.Marshal(control.HotplugRequest{ID: options.Hotplug.Args.ID, Detach: options.Hotplug.Detach})
 	if err != nil {
 		return err
 	}
-	if _, err := control.Raw(ctx, controlSocketPath, "hotplug", params); err != nil {
+	if _, err := control.Raw(ctx, socketPath, "hotplug", params); err != nil {
 		return err
 	}
 	action := "attached"
@@ -225,14 +226,11 @@ func runHotplug(options *Options) error {
 }
 
 func runRPC(options *Options) error {
-	manifest, err := loadManifest(options.Manifest)
+	ctx, cancel, socketPath, err := controlSession(options.Manifest)
 	if err != nil {
 		return err
 	}
-	controlSocketPath, err := manifest.ResolvedControlSocketPath()
-	if err != nil {
-		return err
-	}
+	defer cancel()
 
 	params := json.RawMessage("{}")
 	if options.RPC.Args.Params != "" {
@@ -242,27 +240,12 @@ func runRPC(options *Options) error {
 		}
 	}
 
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
-
-	result, err := control.Raw(ctx, controlSocketPath, options.RPC.Args.Method, params)
+	result, err := control.Raw(ctx, socketPath, options.RPC.Args.Method, params)
 	if err != nil {
 		return err
 	}
 	_, err = fmt.Fprintln(os.Stdout, string(result))
 	return err
-}
-
-func loadLaunchManifest(path string, logger *slog.Logger) (*manifest.Manifest, error) {
-	doc, resolvedPath, err := loadManifestDocument(path)
-	if err != nil {
-		return nil, err
-	}
-	loaded, err := doc.ManifestWithOptions(manifest.ResolveOptions{Logger: logger})
-	if err != nil {
-		return nil, fmt.Errorf("load manifest %q: %w", resolvedPath, err)
-	}
-	return loaded, nil
 }
 
 func loadManifest(path string) (*manifest.Manifest, error) {
@@ -283,7 +266,9 @@ func loadManifestDocument(path string) (manifest.Document, string, error) {
 		return manifest.Document{}, "", fmt.Errorf("resolve manifest path %q: %w", path, err)
 	}
 
-	data, err := readManifestFile(resolvedPath)
+	// The manifest is an input virtle must never modify: os.ReadFile opens it
+	// without write intent and nothing writes it back.
+	data, err := os.ReadFile(resolvedPath)
 	if err != nil {
 		return manifest.Document{}, "", fmt.Errorf("open manifest %q: %w", resolvedPath, err)
 	}
@@ -294,36 +279,12 @@ func loadManifestDocument(path string) (manifest.Document, string, error) {
 
 	// A relative working_dir, including the "." default, resolves against the
 	// process working directory, so running virtle from different directories
-	// takes different relative paths into effect. This is resolved in memory
-	// only; the manifest file is never written back.
-	workingDir := doc.WorkingDir
-	if workingDir == "" {
-		workingDir = "."
+	// takes different relative paths into effect. This happens in memory only.
+	if err := doc.ResolveWorkingDir(); err != nil {
+		return manifest.Document{}, "", err
 	}
-	if !filepath.IsAbs(workingDir) {
-		resolvedWorkingDir, err := filepath.Abs(workingDir)
-		if err != nil {
-			return manifest.Document{}, "", fmt.Errorf("resolve manifest working directory %q: %w", workingDir, err)
-		}
-		workingDir = resolvedWorkingDir
-	}
-	doc.WorkingDir = workingDir
 
 	return doc, resolvedPath, nil
-}
-
-// readManifestFile opens the manifest strictly read-only. virtle treats the
-// manifest as an input it must never modify, so the descriptor carries no
-// write intent even transiently.
-func readManifestFile(path string) ([]byte, error) {
-	file, err := os.OpenFile(path, os.O_RDONLY, 0)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		_ = file.Close()
-	}()
-	return io.ReadAll(file)
 }
 
 func resolveManifestPath(path string) (string, error) {

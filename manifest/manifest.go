@@ -2,16 +2,17 @@
 // to a neutral vm.Spec plus the backend they configure. It is one Spec
 // source among many — Specs constructed in Go are equally valid.
 //
-// CLI-only manifest concerns — host [run] helper commands, [ssh] session
-// handling, [notifications] — configure session orchestration, not the
-// VM, and stay with the virtle CLI.
+// Manifest sections with no vm.Spec representation — host [run] helper
+// commands, [notifications] hooks, [ssh] settings — stay attached to the
+// returned backend, which starts the helpers and runs the hooks itself. The
+// interactive SSH session is driven by backend/qemu/session, as the virtle
+// CLI does.
 package manifest
 
 import (
 	"fmt"
 	"io"
 	"io/fs"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -42,25 +43,21 @@ func Load(r io.Reader) (*vm.Spec, backend.Backend, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-
-	workingDir := doc.WorkingDir
-	if workingDir == "" {
-		workingDir = "."
+	if err := doc.ResolveWorkingDir(); err != nil {
+		return nil, nil, err
 	}
-	if !filepath.IsAbs(workingDir) {
-		resolved, err := filepath.Abs(workingDir)
-		if err != nil {
-			return nil, nil, fmt.Errorf("resolve manifest working directory %q: %w", workingDir, err)
-		}
-		workingDir = resolved
-	}
-	doc.WorkingDir = workingDir
+	return LoadDocument(doc)
+}
 
-	// Resolve early so invalid manifests fail at Load, not at Start.
+// LoadDocument lowers an already-decoded manifest document exactly as Load
+// does, for callers that also need the document itself (the virtle CLI
+// decodes once and reuses it). The document type is internal, so this is
+// not callable (and not supported) outside the module.
+func LoadDocument(doc imanifest.Document) (*vm.Spec, backend.Backend, error) {
+	// Resolve early so invalid manifests fail at load, not at Start.
 	if _, err := doc.Manifest(); err != nil {
 		return nil, nil, err
 	}
-
 	spec, err := specFromDocument(imanifest.DocumentWithDefaults(doc))
 	if err != nil {
 		return nil, nil, err

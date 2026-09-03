@@ -145,11 +145,22 @@ type WaitRequest struct{}
 // WaitResponse confirms that the machine runtime finished successfully.
 type WaitResponse struct{}
 
+// KillRequest asks the runtime to hard-stop the VM and release its state.
 type KillRequest struct{}
+
+// KillResponse confirms the kill completed.
 type KillResponse struct{}
+
+// ShutdownRequest asks the runtime for an orderly teardown.
 type ShutdownRequest struct{}
+
+// ShutdownResponse confirms the teardown completed.
 type ShutdownResponse struct{}
+
+// GuestShutdownRequest asks the guest agent to power the guest off.
 type GuestShutdownRequest struct{}
+
+// GuestShutdownResponse confirms the shutdown request was issued.
 type GuestShutdownResponse struct{}
 
 // ErrorCode classifies a control socket RPC failure.
@@ -234,10 +245,14 @@ type RuntimeGuest interface {
 	GuestShutdown(context.Context, GuestShutdownRequest) (GuestShutdownResponse, error)
 }
 
+// RuntimeKill is implemented by runtimes that can hard-stop the VM.
 type RuntimeKill interface {
 	Kill(context.Context, KillRequest) (KillResponse, error)
 }
 
+// RuntimeShutdown is implemented by runtimes that can tear down gracefully.
+// The method is named ShutdownRPC so implementers keep Shutdown(ctx) free
+// for their own teardown entry point.
 type RuntimeShutdown interface {
 	ShutdownRPC(context.Context, ShutdownRequest) (ShutdownResponse, error)
 }

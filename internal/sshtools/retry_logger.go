@@ -1,12 +1,20 @@
 package sshtools
 
-import "log/slog"
+import (
+	"fmt"
+	"log/slog"
+)
 
+// retryWarnThreshold is the number of transient SSH failures after which a
+// single warning points the user at guest reachability and credentials.
+const retryWarnThreshold = 5
+
+// RetryLogger reports SSH connection retries once per phase, plus one warning
+// once the retries stop looking like ordinary boot latency.
 type RetryLogger struct {
 	logger            *slog.Logger
 	seen              map[RetryPhase]bool
 	transientFailures int
-	warned            bool
 }
 
 func NewRetryLogger(logger *slog.Logger) *RetryLogger {
@@ -28,10 +36,9 @@ func (l *RetryLogger) Log(err error, stderr string) {
 		return
 	}
 	l.transientFailures++
-	if l.transientFailures == 5 && !l.warned {
-		l.warned = true
+	if l.transientFailures == retryWarnThreshold {
 		l.logger.Warn(
-			"ssh exec failed 5 times; ensure the guest is reachable and credentials are configured",
+			fmt.Sprintf("ssh exec failed %d times; ensure the guest is reachable and credentials are configured", retryWarnThreshold),
 			"ssh_failures",
 			l.transientFailures,
 		)

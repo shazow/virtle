@@ -7,7 +7,6 @@ import (
 	"reflect"
 	"syscall"
 	"testing"
-	"time"
 
 	"github.com/shazow/virtle/internal/executor"
 )
@@ -84,10 +83,7 @@ func TestRunnerOnStartCanCustomizeProcess(t *testing.T) {
 	runner.OnStart = func(start Start) (*Process, error) {
 		process := ProcessFor(start.Name)
 		process.IgnoreSignals = true
-		go func() {
-			time.Sleep(time.Millisecond)
-			process.Complete(os.ErrClosed)
-		}()
+		process.Complete(os.ErrClosed)
 		return process, nil
 	}
 

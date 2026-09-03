@@ -22,10 +22,7 @@ type fakeControlCore struct {
 type wireClient struct{ client *client }
 
 func dialWire(path string) *wireClient {
-	return &wireClient{client: &client{dial: func(ctx context.Context) (net.Conn, error) {
-		var d net.Dialer
-		return d.DialContext(ctx, "unix", path)
-	}}}
+	return &wireClient{client: &client{dial: unixDialer(path)}}
 }
 
 func (c *wireClient) Status(ctx context.Context, req StatusRequest) (StatusResponse, error) {

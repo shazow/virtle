@@ -24,13 +24,14 @@ import (
 // discovers server capabilities before returning and begins observing machine
 // exit immediately.
 func Dial(ctx context.Context, path string) (backend.Machine, error) {
-	c := &client{dial: func(ctx context.Context) (net.Conn, error) {
-		var d net.Dialer
-		return d.DialContext(ctx, "unix", path)
-	}, completion: func() (bool, error) {
-		// Legacy servers have no wait RPC. Their Unix listener unlinks this
-		// endpoint during orderly teardown, while an abrupt exit leaves a stale
-		// socket behind, so disappearance is the persisted completion record.
+	c := &client{dial: unixDialer(path), completion: func() (bool, error) {
+		// Servers from v0.3.3 and earlier have no wait RPC, and virtle suspend
+		// or status may still talk to a VM launched by such a binary. Their
+		// Unix listener unlinks this endpoint during orderly teardown, while an
+		// abrupt exit leaves a stale socket behind, so disappearance is the
+		// persisted completion record. This fallback, the status polling in
+		// observeExit, and TestLegacyMachineTreatsRemovedSocketAsCompletion
+		// go together once pre-wait servers are out of support.
 		_, err := os.Stat(path)
 		if errors.Is(err, os.ErrNotExist) {
 			return true, nil
@@ -49,15 +50,21 @@ func Dial(ctx context.Context, path string) (backend.Machine, error) {
 	return m, nil
 }
 
-// Raw sends a debugging request without interpreting its result.
+// Raw sends one untyped control request and returns its undecoded result. It
+// serves the CLI's rpc command and manifest-id hotplug requests, which have
+// no backend.Machine equivalent.
 func Raw(ctx context.Context, path, method string, params json.RawMessage) (json.RawMessage, error) {
-	c := &client{dial: func(ctx context.Context) (net.Conn, error) {
-		var d net.Dialer
-		return d.DialContext(ctx, "unix", path)
-	}}
+	c := &client{dial: unixDialer(path)}
 	var resp json.RawMessage
 	err := c.call(ctx, rpcMethod(method), params, &resp)
 	return resp, err
+}
+
+func unixDialer(path string) func(context.Context) (net.Conn, error) {
+	return func(ctx context.Context) (net.Conn, error) {
+		var d net.Dialer
+		return d.DialContext(ctx, "unix", path)
+	}
 }
 
 type machine struct {
@@ -97,9 +104,9 @@ func (m *machine) observeExit() {
 	for {
 		status, err := callTyped[StatusRequest, StatusResponse](m.client, context.Background(), rpcStatus, StatusRequest{})
 		if err != nil {
-			// An older server closes its listener before it can expose stopped via
-			// status. Reconcile that EOF/dial failure with the socket record before
-			// treating it as an unreported exit.
+			// A v0.3.3-or-earlier server closes its listener before it can expose
+			// stopped via status. Reconcile that EOF/dial failure with the socket
+			// record before treating it as an unreported exit.
 			completed, completionErr := m.client.completed()
 			if completionErr != nil {
 				m.finish(fmt.Errorf("machine exited without status: %w", errors.Join(err, completionErr)))
@@ -150,8 +157,18 @@ func (m *machine) Kill() error {
 }
 
 func (m *machine) Shutdown(ctx context.Context) error {
+	select {
+	case <-m.done:
+		return nil // already stopped; the contract makes repeated calls safe
+	default:
+	}
 	if m.methods[rpcShutdown] {
 		_, err := callTyped[ShutdownRequest, ShutdownResponse](m.client, ctx, rpcShutdown, ShutdownRequest{})
+		if err != nil && ctx.Err() != nil {
+			// The graceful request did not complete within ctx; fall back to
+			// the hard stop the Machine contract promises.
+			return errors.Join(err, m.Kill())
+		}
 		return err
 	}
 	g, err := m.RemoteControl()

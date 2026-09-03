@@ -50,14 +50,14 @@ ready
 Warnings would still be visible:
 
 ```text
-2026/08/20 00:01:02 WARN notification hook failed package=vmm state=ready err="exit status 1"
+2026/08/20 00:01:02 WARN notification hook failed package=vmm state=runtime:resume err="exit status 1"
 ```
 
 With `-v`, the same result is accompanied by useful lifecycle information:
 
 ```console
 $ virtle -v launch --ssh -- echo ready
-2026/08/20 00:01:02 INFO loading launch manifest package=main path=manifest.toml
+2026/08/20 00:01:02 INFO loading launch manifest package=main path=/home/user/project/manifest.toml
 2026/08/20 00:01:02 INFO starting vm session package=session resume=auto ssh=true
 2026/08/20 00:01:03 INFO waiting for guest agent readiness package=vmm
 2026/08/20 00:01:03 INFO waiting for ssh readiness package=ssh
@@ -73,7 +73,7 @@ background process streams added:
 
 ```console
 $ virtle -vv launch --ssh -- echo ready
-2026/08/20 00:01:02 INFO loading launch manifest package=main path=manifest.toml
+2026/08/20 00:01:02 INFO loading launch manifest package=main path=/home/user/project/manifest.toml
 2026/08/20 00:01:02 INFO starting vm session package=session resume=auto ssh=true
 2026/08/20 00:01:02 DEBUG allocated vsock cid package=vmm cid=7
 2026/08/20 00:01:02 DEBUG starting run package=vmm index=0

@@ -7,15 +7,16 @@ generated="$root/release.nix"
 version="${1:-}"
 
 if (( $# > 1 )); then
-  echo "usage: $0 [development-version]" >&2
+  echo "usage: $0 [version]" >&2
+  echo "  version is 1.2.3 for a release commit or 1.2.3-dev for development; the current value is kept when omitted" >&2
   exit 2
 fi
 
 if [[ -z "$version" ]]; then
   version="$(sed -n 's/^  version = "\([^"]*\)";$/\1/p' "$generated")"
 fi
-if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-dev$ ]]; then
-  echo "Development version must look like 1.2.3-dev; got: $version" >&2
+if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-dev)?$ ]]; then
+  echo "Version must look like 1.2.3 or 1.2.3-dev; got: $version" >&2
   exit 2
 fi
 

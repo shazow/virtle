@@ -41,8 +41,10 @@ func secondsDuration(seconds float64) (Duration, error) {
 	return Duration(nanos), nil
 }
 
+// Duration returns d as a time.Duration.
 func (d Duration) Duration() time.Duration { return time.Duration(d) }
 
+// String formats d like time.Duration.String.
 func (d Duration) String() string { return time.Duration(d).String() }
 
 // MarshalText encodes the duration in Go's duration-string form so text-based
@@ -62,10 +64,13 @@ func (d *Duration) UnmarshalText(text []byte) error {
 	return nil
 }
 
+// MarshalJSON encodes the duration as a Go duration string, like MarshalText.
 func (d Duration) MarshalJSON() ([]byte, error) {
 	return json.Marshal(time.Duration(d).String())
 }
 
+// UnmarshalJSON accepts a duration string such as "30s" or a bare JSON
+// number of seconds.
 func (d *Duration) UnmarshalJSON(data []byte) error {
 	var seconds float64
 	if err := json.Unmarshal(data, &seconds); err == nil {

@@ -21,11 +21,18 @@ type Result struct {
 	Err            error
 }
 
-// Guest is an in-memory vm.Guest backed by MapFS and scripted commands.
+// Guest is an in-memory vm.Guest backed by MapFS and scripted commands. The
+// zero value is ready to use.
 type Guest struct {
-	FS       fstest.MapFS
+	// FS backs Open and receives files written through Create when the
+	// writer is closed. It is created on first write when nil.
+	FS fstest.MapFS
+	// Commands scripts Run results by GuestCmd.Path; Args, Env, Dir, and
+	// Stdin are ignored. An unscripted path returns an error wrapping
+	// errors.ErrUnsupported.
 	Commands map[string]Result
 
+	// ShutdownErr is returned by every Shutdown call after it is counted.
 	ShutdownErr error
 	mu          sync.Mutex
 	shutdowns   int

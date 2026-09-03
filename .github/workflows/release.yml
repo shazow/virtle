@@ -54,6 +54,7 @@ jobs:
           persist-credentials: false
 
       - name: Verify checked-out release tag
+        id: verify
         env:
           TAG: ${{ inputs.tag || github.ref_name }}
         shell: bash
@@ -66,12 +67,24 @@ jobs:
           fi
           # flake.nix stamps the binary and store path from release.nix, so a
           # tag whose release.nix still carries the development version would
-          # publish a Nix package that reports the previous release.
+          # publish a Nix package that reports the previous release. When the
+          # tag sits on the tip of main, the steps below stamp release.nix,
+          # commit it to main, and move the tag onto that commit instead of
+          # failing; anywhere else the fix would need history rewriting or a
+          # release that includes commits the tag never had, so fail instead.
           nix_version="$(sed -n 's/^  version = "\([^"]*\)";$/\1/p' release.nix)"
-          if [[ "$nix_version" != "${TAG#v}" ]]; then
-            echo "release.nix version is $nix_version, but the tag is $TAG; run scripts/update-release-nix ${TAG#v} and commit before tagging" >&2
+          if [[ "$nix_version" == "${TAG#v}" ]]; then
+            echo "stamp=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          main_commit="$(git ls-remote --exit-code origin refs/heads/main | cut -f1)"
+          if [[ "$tag_commit" != "$main_commit" ]]; then
+            echo "release.nix version is $nix_version, but the tag is $TAG, and $TAG ($tag_commit) is not the tip of main ($main_commit), so it cannot be stamped automatically; run scripts/update-release-nix ${TAG#v}, commit, and re-tag" >&2
             exit 1
           fi
+          echo "release.nix version is $nix_version, but the tag is $TAG; stamping release.nix and moving $TAG"
+          echo "stamp=true" >> "$GITHUB_OUTPUT"
 
       - name: Set up Go
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
@@ -81,6 +94,62 @@ jobs:
 
       - name: Set up Nix
         uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+
+      - name: Stamp release version
+        if: steps.verify.outputs.stamp == 'true'
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: ./scripts/update-release-nix "$VERSION"
+
+      - name: Commit stamped package metadata to main
+        if: steps.verify.outputs.stamp == 'true'
+        id: stamp
+        uses: planetscale/ghcommit-action@a6b150b81dca5dd027baa898604418eec9e11465 # v0.2.22
+        with:
+          repo: ${{ github.repository }}
+          branch: main
+          file_pattern: release.nix
+          commit_message: |
+            nix: stamp package metadata for v${{ steps.tag.outputs.version }}
+
+            Set the release version and Go module vendor hash for the tagged release.
+
+            Assisted-by: github-actions:release-workflow
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Move release tag to the stamped commit
+        if: steps.verify.outputs.stamp == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+          COMMIT: ${{ steps.stamp.outputs.commit-hash }}
+        shell: bash
+        run: |
+          if [[ ! "$COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Commit step did not report a commit hash; got: $COMMIT" >&2
+            exit 1
+          fi
+          # Pushes made with the workflow token do not trigger another release
+          # run, so this run carries on and publishes from the moved tag.
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG" \
+            -f sha="$COMMIT" -F force=true > /dev/null
+
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" \
+            fetch --no-tags --depth=1 origin "+refs/tags/$TAG:refs/tags/$TAG"
+          git checkout --force "refs/tags/$TAG"
+
+          if [[ "$(git rev-parse HEAD)" != "$COMMIT" ]]; then
+            echo "Checked out $(git rev-parse HEAD), but $TAG should now point to $COMMIT" >&2
+            exit 1
+          fi
+          nix_version="$(sed -n 's/^  version = "\([^"]*\)";$/\1/p' release.nix)"
+          if [[ "$nix_version" != "${TAG#v}" ]]; then
+            echo "release.nix version is $nix_version after stamping, but the tag is $TAG" >&2
+            exit 1
+          fi
+          echo "Moved $TAG to $COMMIT"
 
       - name: Validate Nix package
         run: nix build .#virtle --no-link

@@ -211,7 +211,7 @@ func decodeParams(data json.RawMessage, dst any) error {
 		data = []byte("{}")
 	}
 	if err := json.Unmarshal(data, dst); err != nil {
-		return &RPCError{Code: ErrInvalidParams, Message: err.Error()}
+		return InvalidParams(err.Error())
 	}
 	return nil
 }

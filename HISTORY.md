@@ -7,6 +7,21 @@ Keep entries terse. When a day includes both CLI and library changes, group
 them by type, CLI first. For compatibility-breaking usage migrations, include
 compact before/after examples.
 
+## 2026-09-03
+
+- `virtle launch --ssh` now exits 1, not 255, when the SSH client is killed by
+  a signal; ordinary SSH exit statuses still pass through unchanged.
+- The published manifest JSON Schema no longer requires `proto` and `from` on
+  port forwards, matching the loader defaults (`tcp` and `host`).
+- Validation errors for `[qemu] fwd_tunnel_exec`, and for devices attached ad
+  hoc through the library or control socket, now name the setting that was
+  actually given instead of a fictitious manifest path.
+- The resolved manifest (`virtle manifest resolve`) no longer carries the
+  unused `MkfsExtraArgs` volume field.
+- Releases: `scripts/update-release-nix X.Y.Z` now stamps release versions
+  too, and the release workflow rejects a tag whose `release.nix` still
+  carries the development version, so Nix builds of a tag report that tag.
+
 ## 2026-09-01
 
 - **Breaking library changes noted below.**

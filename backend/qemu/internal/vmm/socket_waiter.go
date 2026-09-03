@@ -9,17 +9,11 @@ import (
 
 const defaultSocketPollInterval = 100 * time.Millisecond
 
-type pollingSocketWaiter struct {
-	PollInterval time.Duration
-}
+// pollingSocketWaiter reports readiness once every socket path exists.
+type pollingSocketWaiter struct{}
 
 func (w *pollingSocketWaiter) Wait(ctx context.Context, socketPaths []string) error {
-	interval := w.PollInterval
-	if interval <= 0 {
-		interval = defaultSocketPollInterval
-	}
-
-	ticker := time.NewTicker(interval)
+	ticker := time.NewTicker(defaultSocketPollInterval)
 	defer ticker.Stop()
 
 	for {

@@ -138,10 +138,8 @@ type ConsoleProvider interface {
 	Console(ctx context.Context) (vm.Term, error)
 }
 
-// Shutdown stops a machine gracefully. The graceful guest shutdown is
-// attempted only when remote control is available (RemoteControl
-// succeeds); instances without it — and instances whose guest is
-// unreachable or whose context expires — are stopped with Kill.
+// Shutdown stops a machine gracefully by calling m.Shutdown.
+//
 // Deprecated: call Machine.Shutdown directly.
 func Shutdown(ctx context.Context, m Machine) error {
 	return m.Shutdown(ctx)

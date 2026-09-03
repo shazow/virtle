@@ -39,7 +39,7 @@ func TestReadFileReadsChunksAndClosesHandle(t *testing.T) {
 			{payload: "bG8=", eof: true},
 		},
 	}
-	data, err := ReadFile(context.Background(), client, "/tmp/file", 2)
+	data, err := ReadFile(context.Background(), client, "/tmp/file", 2, 0)
 	if err != nil {
 		t.Fatalf("read file: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestReadFileClosesHandleOnDecodeError(t *testing.T) {
 			{payload: "not base64", eof: true},
 		},
 	}
-	_, err := ReadFile(context.Background(), client, "/tmp/file", 1024)
+	_, err := ReadFile(context.Background(), client, "/tmp/file", 1024, 0)
 	if err == nil {
 		t.Fatalf("expected decode error")
 	}
@@ -78,7 +78,7 @@ func TestReadFileLimitRejectsOversizedFileAndClosesHandle(t *testing.T) {
 			{payload: "bG8=", eof: true},
 		},
 	}
-	_, err := ReadFileLimit(context.Background(), client, "/tmp/file", 2, 4)
+	_, err := ReadFile(context.Background(), client, "/tmp/file", 2, 4)
 	if !errors.Is(err, limits.ErrExceeded) {
 		t.Fatalf("expected file limit error, got %v", err)
 	}

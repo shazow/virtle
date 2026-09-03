@@ -14,10 +14,6 @@ import (
 	"github.com/shazow/virtle/backend/qemu/limits"
 )
 
-// DefaultRPCTimeout bounds a single guest-agent round trip when the dialer
-// does not configure one.
-const DefaultRPCTimeout = qmpwire.DefaultRPCTimeout
-
 // Pinger checks whether the guest agent is accepting commands.
 type Pinger interface {
 	Ping(ctx context.Context) error
@@ -74,7 +70,7 @@ type Dialer interface {
 type SocketDialer struct {
 	// RPCTimeout bounds each guest-agent round trip regardless of the caller's
 	// ctx deadline, so a wedged agent fails fast even when the command itself
-	// has no time limit. Zero uses DefaultRPCTimeout.
+	// has no time limit. Zero uses qmpwire.DefaultRPCTimeout.
 	RPCTimeout time.Duration
 	// MaxFrameSize bounds one guest-agent response. Zero uses
 	// limits.DefaultMaxFrameSize.
@@ -108,7 +104,7 @@ func (d *SocketDialer) Dial(ctx context.Context, socketPath string, timeout time
 
 	rpcTimeout := d.RPCTimeout
 	if rpcTimeout <= 0 {
-		rpcTimeout = DefaultRPCTimeout
+		rpcTimeout = qmpwire.DefaultRPCTimeout
 	}
 	reader := bufio.NewReader(conn)
 	maxFrameSize := d.MaxFrameSize
@@ -392,7 +388,9 @@ func (c *socketClient) wireError(ctx context.Context, err error) error {
 		return context.Cause(ctx)
 	}
 	if qmpwire.IsTimeout(err) {
-		return fmt.Errorf("guest agent unresponsive after %s", c.session.RPCTimeout)
+		// Keep the cause in the chain so callers such as Shutdown can still
+		// classify the failure as a timeout.
+		return fmt.Errorf("guest agent unresponsive after %s: %w", c.session.RPCTimeout, err)
 	}
 	return err
 }

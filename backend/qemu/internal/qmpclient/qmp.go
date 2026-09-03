@@ -13,10 +13,6 @@ import (
 	"github.com/shazow/virtle/backend/qemu/internal/qmpwire"
 )
 
-// DefaultRPCTimeout bounds a single QMP operation when the dialer does not
-// configure one.
-const DefaultRPCTimeout = qmpwire.DefaultRPCTimeout
-
 // RawRunner runs raw QMP monitor commands.
 type RawRunner interface {
 	WithRaw(ctx context.Context, fn func(*rawQMP.Monitor) error) error
@@ -67,7 +63,7 @@ type Dialer interface {
 // SocketMonitorDialer opens QMP monitor connections over Unix sockets.
 type SocketMonitorDialer struct {
 	// RPCTimeout bounds each QMP operation regardless of the caller's ctx
-	// deadline. Zero uses DefaultRPCTimeout.
+	// deadline. Zero uses qmpwire.DefaultRPCTimeout.
 	RPCTimeout time.Duration
 	// MaxFrameSize bounds one QMP response. Zero uses the backend default.
 	MaxFrameSize int64
@@ -103,7 +99,7 @@ func (d *SocketMonitorDialer) Dial(ctx context.Context, socketPath string, timeo
 
 	session.RPCTimeout = d.RPCTimeout
 	if session.RPCTimeout <= 0 {
-		session.RPCTimeout = DefaultRPCTimeout
+		session.RPCTimeout = qmpwire.DefaultRPCTimeout
 	}
 	return &socketMonitorClient{
 		monitor: monitor,
@@ -112,7 +108,14 @@ func (d *SocketMonitorDialer) Dial(ctx context.Context, socketPath string, timeo
 	}, nil
 }
 
+// WithRaw runs fn against the raw monitor inside the session. Failures are
+// classified like every other operation, so a canceled ctx surfaces as its
+// cause rather than as the interrupted read's i/o timeout.
 func (c *socketMonitorClient) WithRaw(ctx context.Context, fn func(*rawQMP.Monitor) error) error {
+	return c.opError(ctx, "qmp", c.withRaw(ctx, fn))
+}
+
+func (c *socketMonitorClient) withRaw(ctx context.Context, fn func(*rawQMP.Monitor) error) error {
 	return c.session.Do(ctx, func() error {
 		return fn(c.raw)
 	})
@@ -149,39 +152,33 @@ func (c *socketMonitorClient) DeviceDelAndWait(ctx context.Context, id string) e
 	return c.opError(ctx, fmt.Sprintf("qmp device_del %q", id), err)
 }
 
-func (c *socketMonitorClient) Quit(ctx context.Context) error {
-	err := c.WithRaw(ctx, func(monitor *rawQMP.Monitor) error {
-		if err := monitor.Quit(); err != nil {
-			return fmt.Errorf("qmp quit: %w", err)
+// rawCommand runs one argument-less raw monitor command, labeling failures
+// with name.
+func (c *socketMonitorClient) rawCommand(ctx context.Context, name string, run func(*rawQMP.Monitor) error) error {
+	err := c.withRaw(ctx, func(monitor *rawQMP.Monitor) error {
+		if err := run(monitor); err != nil {
+			return fmt.Errorf("%s: %w", name, err)
 		}
 		return nil
 	})
-	return c.opError(ctx, "qmp quit", err)
+	return c.opError(ctx, name, err)
+}
+
+func (c *socketMonitorClient) Quit(ctx context.Context) error {
+	return c.rawCommand(ctx, "qmp quit", (*rawQMP.Monitor).Quit)
 }
 
 func (c *socketMonitorClient) Stop(ctx context.Context) error {
-	err := c.WithRaw(ctx, func(monitor *rawQMP.Monitor) error {
-		if err := monitor.Stop(); err != nil {
-			return fmt.Errorf("qmp stop: %w", err)
-		}
-		return nil
-	})
-	return c.opError(ctx, "qmp stop", err)
+	return c.rawCommand(ctx, "qmp stop", (*rawQMP.Monitor).Stop)
 }
 
 func (c *socketMonitorClient) Cont(ctx context.Context) error {
-	err := c.WithRaw(ctx, func(monitor *rawQMP.Monitor) error {
-		if err := monitor.Cont(); err != nil {
-			return fmt.Errorf("qmp cont: %w", err)
-		}
-		return nil
-	})
-	return c.opError(ctx, "qmp cont", err)
+	return c.rawCommand(ctx, "qmp cont", (*rawQMP.Monitor).Cont)
 }
 
 func (c *socketMonitorClient) QueryStatus(ctx context.Context) (string, error) {
 	var status string
-	err := c.WithRaw(ctx, func(monitor *rawQMP.Monitor) error {
+	err := c.withRaw(ctx, func(monitor *rawQMP.Monitor) error {
 		info, err := monitor.QueryStatus()
 		if err != nil {
 			return fmt.Errorf("qmp query-status: %w", err)
@@ -225,7 +222,7 @@ func (c *socketMonitorClient) MigrateIncoming(ctx context.Context, path string) 
 
 func (c *socketMonitorClient) QueryMigrate(ctx context.Context) (string, error) {
 	var status string
-	err := c.WithRaw(ctx, func(monitor *rawQMP.Monitor) error {
+	err := c.withRaw(ctx, func(monitor *rawQMP.Monitor) error {
 		info, err := monitor.QueryMigrate()
 		if err != nil {
 			return fmt.Errorf("qmp query-migrate: %w", err)

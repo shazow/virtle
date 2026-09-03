@@ -11,16 +11,10 @@ import (
 	"github.com/shazow/virtle/internal/manifest"
 )
 
-func sessionFromMonitor(session MonitorSession) session {
-	if session == nil {
-		return nil
-	}
-	return newQMPSession(session)
-}
-
+// AppendQEMUArgs appends the virtio-balloon device arguments for device,
+// or returns args unchanged when the manifest configures no balloon.
 func AppendQEMUArgs(
 	args []string,
-	config *govmmQemu.Config,
 	resolveTransport func(string) (govmmQemu.VirtioTransport, error),
 	device *manifest.BalloonDevice,
 ) ([]string, error) {
@@ -36,8 +30,8 @@ func AppendQEMUArgs(
 	deviceParams := []string{
 		driver,
 		fmt.Sprintf("id=%s", device.ID),
-		fmt.Sprintf("deflate-on-oom=%s", onOff(device.DeflateOnOOM)),
-		fmt.Sprintf("free-page-reporting=%s", onOff(device.FreePageReporting)),
+		fmt.Sprintf("deflate-on-oom=%s", manifest.OnOff(device.DeflateOnOOM)),
+		fmt.Sprintf("free-page-reporting=%s", manifest.OnOff(device.FreePageReporting)),
 	}
 
 	return append(args, "-device", strings.Join(deviceParams, ",")), nil
@@ -52,7 +46,7 @@ func ControllerTask(session MonitorSession, device *manifest.BalloonDevice, noti
 	}
 
 	controller := &controller{
-		Session:  sessionFromMonitor(session),
+		Session:  newQMPSession(session),
 		Logger:   logger,
 		DeviceID: device.ID,
 		Config:   *device.Controller,
@@ -66,11 +60,4 @@ func ControllerTask(session MonitorSession, device *manifest.BalloonDevice, noti
 		}
 		return nil
 	}
-}
-
-func onOff(v bool) string {
-	if v {
-		return "on"
-	}
-	return "off"
 }

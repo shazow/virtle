@@ -564,3 +564,11 @@ func TestRenderRejectsInvalidTemplate(t *testing.T) {
 		t.Fatalf("expected template parse error, got %v", err)
 	}
 }
+
+// TestMain drops the race detector's one-second exit sleep for the helper
+// processes these tests spawn from the test binary (GORACE is read at process
+// start, so the parent binary keeps its own).
+func TestMain(m *testing.M) {
+	os.Setenv("GORACE", "atexit_sleep_ms=0")
+	os.Exit(m.Run())
+}

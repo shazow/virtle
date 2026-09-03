@@ -16,8 +16,8 @@ import (
 	"github.com/shazow/virtle/internal/manifest"
 )
 
-func buildQEMUCommand(manifest *manifest.Manifest, cid int, incoming bool, consoleOutput io.Writer) (*exec.Cmd, error) {
-	qemu, err := manifest.ResolvedQEMU()
+func buildQEMUCommand(mf *manifest.Manifest, cid int, incoming bool, consoleOutput io.Writer) (*exec.Cmd, error) {
+	qemu, err := mf.ResolvedQEMU()
 	if err != nil {
 		return nil, err
 	}
@@ -28,7 +28,7 @@ func buildQEMUCommand(manifest *manifest.Manifest, cid int, incoming bool, conso
 	}
 
 	cmd := executor.Command(qemu.BinaryPath, args, nil)
-	cmd.Dir = manifest.Paths.WorkingDir
+	cmd.Dir = mf.Paths.WorkingDir
 	// An interactive console must stay in the foreground process group to read the terminal.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: !qemu.Console.Interactive()}
 	if qemu.Console.Interactive() {
@@ -130,27 +130,17 @@ func buildQEMUArgs(qemu manifest.QEMU, cid int, incoming bool) ([]string, error)
 	args = append(args, "-qmp", fmt.Sprintf("unix:%s,server,nowait", qemu.QMP.SocketPath))
 
 	if qemu.GuestAgent.SocketPath != "" {
-		serialDriver, err := guestAgentSerialDriver(qemu.Devices.VSOCK.Transport)
+		args, err = appendVirtioSerialSocket(args, qemu.Devices.VSOCK.Transport, qemu.GuestAgent.SocketPath, "qga0", "qga0-serial", "org.qemu.guest_agent.0")
 		if err != nil {
 			return nil, err
 		}
-		args = append(args,
-			"-chardev", fmt.Sprintf("socket,path=%s,server=on,wait=off,id=qga0", qemu.GuestAgent.SocketPath),
-			"-device", fmt.Sprintf("%s,id=qga0-serial", serialDriver),
-			"-device", "virtserialport,chardev=qga0,name=org.qemu.guest_agent.0",
-		)
 	}
 
 	if qemu.SSHReady.SocketPath != "" {
-		serialDriver, err := guestAgentSerialDriver(qemu.Devices.VSOCK.Transport)
+		args, err = appendVirtioSerialSocket(args, qemu.Devices.VSOCK.Transport, qemu.SSHReady.SocketPath, "ready_char", "ready-serial", "virtle.ready")
 		if err != nil {
 			return nil, err
 		}
-		args = append(args,
-			"-chardev", fmt.Sprintf("socket,path=%s,server=on,wait=off,id=ready_char", qemu.SSHReady.SocketPath),
-			"-device", fmt.Sprintf("%s,id=ready-serial", serialDriver),
-			"-device", "virtserialport,chardev=ready_char,name=virtle.ready",
-		)
 	}
 
 	switch qemu.Memory.Backend {
@@ -158,12 +148,12 @@ func buildQEMUArgs(qemu manifest.QEMU, cid int, incoming bool) ([]string, error)
 		// No extra memory object required.
 	case "memfd":
 		args = append(args, "-numa", "node,memdev=mem")
-		args = append(args, "-object", fmt.Sprintf("memory-backend-memfd,id=mem,size=%dM,share=%s", qemu.Memory.Size, onOff(qemu.Memory.Shared)))
+		args = append(args, "-object", fmt.Sprintf("memory-backend-memfd,id=mem,size=%dM,share=%s", qemu.Memory.Size, manifest.OnOff(qemu.Memory.Shared)))
 	default:
 		return nil, fmt.Errorf("unsupported qemu memory backend %q", qemu.Memory.Backend)
 	}
 
-	args, err = balloon.AppendQEMUArgs(args, config, resolveQEMUTransport, qemu.Devices.Balloon)
+	args, err = balloon.AppendQEMUArgs(args, resolveQEMUTransport, qemu.Devices.Balloon)
 	if err != nil {
 		return nil, err
 	}
@@ -294,7 +284,7 @@ func appendNinePArgs(args []string, share manifest.QEMUNinePShare) ([]string, er
 		fmt.Sprintf("id=%s", share.ID),
 		fmt.Sprintf("path=%s", share.SourcePath),
 		fmt.Sprintf("security_model=%s", share.SecurityModel),
-		fmt.Sprintf("readonly=%s", onOff(share.ReadOnly)),
+		fmt.Sprintf("readonly=%s", manifest.OnOff(share.ReadOnly)),
 	}
 	deviceParams := []string{
 		driver,
@@ -330,7 +320,7 @@ func appendBlockArgs(args []string, block manifest.QEMUBlockDevice) ([]string, e
 	if block.Cache != "" {
 		driveParams = append(driveParams, fmt.Sprintf("cache=%s", block.Cache))
 	}
-	driveParams = append(driveParams, fmt.Sprintf("read-only=%s", onOff(block.ReadOnly)))
+	driveParams = append(driveParams, fmt.Sprintf("read-only=%s", manifest.OnOff(block.ReadOnly)))
 
 	deviceParams := []string{
 		driver,
@@ -413,9 +403,17 @@ func resolveQEMUTransport(value string) (govmmQemu.VirtioTransport, error) {
 	}
 }
 
-func onOff(v bool) string {
-	if v {
-		return "on"
+// appendVirtioSerialSocket exposes a host Unix socket to the guest as a
+// virtio-serial port, the transport shared by the guest agent and the
+// readiness channel.
+func appendVirtioSerialSocket(args []string, transport, socketPath, chardevID, serialID, portName string) ([]string, error) {
+	driver, err := guestAgentSerialDriver(transport)
+	if err != nil {
+		return nil, err
 	}
-	return "off"
+	return append(args,
+		"-chardev", fmt.Sprintf("socket,path=%s,server=on,wait=off,id=%s", socketPath, chardevID),
+		"-device", fmt.Sprintf("%s,id=%s", driver, serialID),
+		"-device", fmt.Sprintf("virtserialport,chardev=%s,name=%s", chardevID, portName),
+	), nil
 }

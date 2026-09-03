@@ -24,7 +24,9 @@ type Process struct {
 	waitErr     error
 }
 
-// Wrap starts tracking completion for an already-running process handle.
+// Wrap starts tracking completion for an already-running process handle. It
+// is the constructor executortest uses to build a *Process around a fake
+// handle; production processes are created by Runner.Start.
 func Wrap(handle RunningProcess) *Process {
 	return wrap(handle, false)
 }

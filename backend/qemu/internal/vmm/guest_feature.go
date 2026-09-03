@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"time"
 
-	shellquote "github.com/kballard/go-shellquote"
 	"github.com/shazow/virtle/backend/qemu/internal/launch"
 	"github.com/shazow/virtle/backend/qemu/internal/qga"
 	"github.com/shazow/virtle/backend/qemu/limits"
@@ -26,8 +25,7 @@ func (m *manager) guestFeature(socketPath string, processes *launch.ProcessSet) 
 	return managerGuestFeature{manager: m, socketPath: socketPath, processes: processes}
 }
 
-func (f managerGuestFeature) GuestPS(ctx context.Context, req controlpkg.GuestPSRequest) (controlpkg.GuestPSResponse, error) {
-	_ = req
+func (f managerGuestFeature) GuestPS(ctx context.Context, _ controlpkg.GuestPSRequest) (controlpkg.GuestPSResponse, error) {
 	watchers := executor.Group{}
 	if f.processes != nil {
 		watchers = f.processes.Watchers()
@@ -41,28 +39,17 @@ func (f managerGuestFeature) GuestPS(ctx context.Context, req controlpkg.GuestPS
 
 func (f managerGuestFeature) GuestExec(ctx context.Context, req controlpkg.GuestExecRequest) (controlpkg.GuestExecResponse, error) {
 	if req.Path == "" {
-		return controlpkg.GuestExecResponse{}, &controlpkg.RPCError{Code: controlpkg.ErrInvalidParams, Message: "guest exec path is required"}
+		return controlpkg.GuestExecResponse{}, controlpkg.InvalidParams("guest exec path is required")
 	}
 	if req.Timeout < 0 {
-		return controlpkg.GuestExecResponse{}, &controlpkg.RPCError{Code: controlpkg.ErrInvalidParams, Message: "guest exec timeout must not be negative"}
+		return controlpkg.GuestExecResponse{}, controlpkg.InvalidParams("guest exec timeout must not be negative")
 	}
 	client, err := f.guestClient(ctx)
 	if err != nil {
 		return controlpkg.GuestExecResponse{}, guestFeatureError(err)
 	}
 	defer client.Disconnect()
-	path, args := req.Path, req.Args
-	if req.Dir != "" || len(req.Env) > 0 {
-		script := ""
-		if req.Dir != "" {
-			script += "cd " + shellquote.Join(req.Dir) + " && "
-		}
-		script += "exec " + shellquote.Join(append([]string{req.Path}, req.Args...)...)
-		if len(req.Env) > 0 {
-			script = "export " + shellquote.Join(req.Env...) + " && " + script
-		}
-		path, args = "/bin/sh", []string{"-c", script}
-	}
+	path, args := qga.ShellCommand(req.Path, req.Args, req.Env, req.Dir)
 
 	ctx, cancel := manifest.GuestCommandContext(ctx, time.Duration(req.Timeout))
 	defer cancel()
@@ -86,7 +73,7 @@ func (f managerGuestFeature) GuestExec(ctx context.Context, req controlpkg.Guest
 
 func (f managerGuestFeature) GuestRead(ctx context.Context, req controlpkg.GuestReadRequest) (controlpkg.GuestReadResponse, error) {
 	if req.Path == "" {
-		return controlpkg.GuestReadResponse{}, &controlpkg.RPCError{Code: controlpkg.ErrInvalidParams, Message: "guest read path is required"}
+		return controlpkg.GuestReadResponse{}, controlpkg.InvalidParams("guest read path is required")
 	}
 	client, err := f.guestClient(ctx)
 	if err != nil {
@@ -103,10 +90,10 @@ func (f managerGuestFeature) GuestRead(ctx context.Context, req controlpkg.Guest
 
 func (f managerGuestFeature) GuestWrite(ctx context.Context, req controlpkg.GuestWriteRequest) (controlpkg.GuestWriteResponse, error) {
 	if req.Path == "" {
-		return controlpkg.GuestWriteResponse{}, &controlpkg.RPCError{Code: controlpkg.ErrInvalidParams, Message: "guest write path is required"}
+		return controlpkg.GuestWriteResponse{}, controlpkg.InvalidParams("guest write path is required")
 	}
 	if _, err := base64.StdEncoding.DecodeString(req.DataBase64); err != nil {
-		return controlpkg.GuestWriteResponse{}, &controlpkg.RPCError{Code: controlpkg.ErrInvalidParams, Message: fmt.Sprintf("guest write data must be base64: %v", err)}
+		return controlpkg.GuestWriteResponse{}, controlpkg.InvalidParams(fmt.Sprintf("guest write data must be base64: %v", err))
 	}
 	client, err := f.guestClient(ctx)
 	if err != nil {
@@ -125,8 +112,7 @@ func (f managerGuestFeature) GuestWrite(ctx context.Context, req controlpkg.Gues
 	return controlpkg.GuestWriteResponse{Path: req.Path}, nil
 }
 
-func (f managerGuestFeature) GuestShutdown(ctx context.Context, req controlpkg.GuestShutdownRequest) (controlpkg.GuestShutdownResponse, error) {
-	_ = req
+func (f managerGuestFeature) GuestShutdown(ctx context.Context, _ controlpkg.GuestShutdownRequest) (controlpkg.GuestShutdownResponse, error) {
 	shutdown := f.manager.launchManifest.QEMU.GuestAgent.ShutdownExec
 	if err := f.manager.requestGuestShutdown(ctx, f.socketPath, shutdown); err != nil {
 		return controlpkg.GuestShutdownResponse{}, guestFeatureError(err)

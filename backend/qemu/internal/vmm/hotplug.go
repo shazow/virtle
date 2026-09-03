@@ -2,50 +2,21 @@ package vmm
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os/exec"
 	"path/filepath"
 	"strings"
 
-	"github.com/shazow/virtle/backend/qemu/internal/launch"
 	"github.com/shazow/virtle/backend/qemu/internal/qga"
-	controlpkg "github.com/shazow/virtle/internal/control"
 	"github.com/shazow/virtle/internal/executor"
 )
-
-func (m *manager) hotplug(ctx context.Context, id string, detach bool) error {
-	launchManifest := m.launchManifest
-	if err := launchManifest.Validate(); err != nil {
-		return &launch.StageError{Stage: "preflight", Err: err}
-	}
-	controlSocketPath, err := launchManifest.ResolvedControlSocketPath()
-	if err != nil {
-		return &launch.StageError{Stage: "preflight", Err: err}
-	}
-	if controlSocketPath == "" {
-		return &launch.StageError{Stage: "control hotplug", Err: fmt.Errorf("control socket path is not configured")}
-	}
-	params, err := json.Marshal(controlpkg.HotplugRequest{ID: id, Detach: detach})
-	if err == nil {
-		_, err = controlpkg.Raw(ctx, controlSocketPath, "hotplug", params)
-	}
-	if err != nil {
-		return &launch.StageError{Stage: "control hotplug", Err: err}
-	}
-	return nil
-}
 
 type managedProcessStarter struct {
 	m *manager
 }
 
 func (s managedProcessStarter) Start(ctx context.Context, cmd *exec.Cmd) (*executor.Process, error) {
-	proc, err := s.m.startManagedProcess(cmd)
-	if err != nil {
-		return nil, err
-	}
-	return proc, nil
+	return s.m.startManagedProcess(cmd)
 }
 
 func (s managedProcessStarter) Stop(process *executor.Process) error {
@@ -62,10 +33,8 @@ type socketReadinessWaiter struct {
 }
 
 func (w socketReadinessWaiter) Wait(ctx context.Context, stage string, socketPaths []string, process *executor.Process) error {
-	if process != nil {
-		return w.m.waitForSockets(ctx, stage, socketPaths, executor.NewGroup(process))
-	}
-	return w.m.waitForSockets(ctx, stage, socketPaths, executor.Group{})
+	// NewGroup skips a nil process, so a helper-less device waits on nothing.
+	return w.m.waitForSockets(ctx, stage, socketPaths, executor.NewGroup(process))
 }
 
 type guestCommandRunner struct {

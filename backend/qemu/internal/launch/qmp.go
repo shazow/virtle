@@ -2,8 +2,6 @@ package launch
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"time"
 
 	"github.com/shazow/virtle/backend/qemu/internal/qmpclient"
@@ -26,32 +24,18 @@ func WaitForQMP(ctx context.Context, wait QMPWait) (qmpclient.Client, error) {
 	if stage == "" {
 		stage = "vm startup"
 	}
-	if wait.SocketWaiter == nil {
-		return nil, fmt.Errorf("qmp socket waiter is not configured")
-	}
-	if err := WaitForSockets(ctx, SocketWait{
+	return waitForClient(ctx, SocketWait{
 		Stage:        stage,
 		SocketPaths:  []string{wait.SocketPath},
 		SocketWaiter: wait.SocketWaiter,
 		PollDelay:    wait.PollDelay,
 		Watchers:     wait.Watchers,
-	}); err != nil {
-		return nil, err
-	}
-
-	client, err := qmpclient.DialWithRetry(ctx, wait.Dialer, qmpclient.DialRetry{
-		SocketPath: wait.SocketPath,
-		Timeout:    wait.ConnectTimeout,
-		RetryDelay: wait.RetryDelay,
-		Check: func() error {
-			return firstUnexpectedExit(stage, wait.Watchers)
-		},
+	}, "qmp", func(ctx context.Context, check func() error) (qmpclient.Client, error) {
+		return qmpclient.DialWithRetry(ctx, wait.Dialer, qmpclient.DialRetry{
+			SocketPath:     wait.SocketPath,
+			ConnectTimeout: wait.ConnectTimeout,
+			RetryDelay:     wait.RetryDelay,
+			Check:          check,
+		})
 	})
-	if err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return nil, wrapStage(stage, err)
-		}
-		return nil, err
-	}
-	return client, nil
 }

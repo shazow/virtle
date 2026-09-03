@@ -8,7 +8,7 @@ Virtle is a VM manager for sandbox workflows.
 
 **Status**: Beta. Used day-to-day by a few people, feedback appreciated.
 
-Background: Originally designed to be used with [`agentspace`](https://github.com/shazow/agentspace), a NixOS-based sandbox builder, but it virtle has been refined enough to act as a standalone tool.
+Background: Originally designed to be used with [`agentspace`](https://github.com/shazow/agentspace), a NixOS-based sandbox builder, but virtle has been refined enough to act as a standalone tool.
 
 ## How does it work?
 
@@ -24,7 +24,7 @@ It also handles teardown, QMP-based shutdown, disk-backed suspend/resume, runtim
 - Manages [`virtiofsd`](https://gitlab.com/virtio-fs/virtiofsd) daemons for virtiofs mounts.
 - Provisions SSH between host and guest.
 - Connects over SSH upon boot via signaling.
-- Write files between guest and host on boot or shutdown.
+- Writes files between guest and host on boot or shutdown.
 - Suspend and resume.
 - Notification execution hooks.
 - Exposes a `virtle.sock` for RPC (also usable via `virtle rpc` sub-command).
@@ -33,12 +33,13 @@ It also handles teardown, QMP-based shutdown, disk-backed suspend/resume, runtim
 
 ## Usage
 
-First, write a simple manifest and save it as `manifest.toml`. See: [./examples/manifest.*.toml](https://github.com/shazow/virtle/tree/main/examples).
+First, write a simple manifest and save it as `manifest.toml`. See: [./examples/manifest-*.toml](https://github.com/shazow/virtle/tree/main/examples).
 
 Global flags:
-- `virtle [--manifest=MANIFEST] ...` - When `--manifest` is omitted, `./manifest.toml` is used by default.
+- `virtle [--manifest=MANIFEST] ...` - When `--manifest` is omitted, `./manifest.toml` is used, falling back to `./manifest.json`. Manifests may be TOML or JSON.
 - `virtle -v ...` - Show useful VM and SSH lifecycle information.
 - `virtle -vv ...` - Show debugging details and output from background commands.
+- `virtle --version` - Print the virtle version and exit.
 
 Launch a VM:
 - `virtle launch [--ssh] [--resume=no|auto|force] [-- <remote-cmd...>]`
@@ -67,9 +68,9 @@ process environment is available as `.Env` on every surface.
 | `qemu.exec` | `HostName`, `WorkingDir`, `StateDir`, `HostOS`, `HostArch`, `HostSystem`, `.Env` | none |
 | `qemu.fwd_tunnel_exec` | `Host`, `Port`, `.Env` | none; QEMU starts the command |
 | `ssh.exec` | `CID`, `User`, `Destination`, `.Env` | `CID`, `USER`, `DESTINATION` |
-| `mounts[type=virtiofs].virtiofs` | `Socket`, `MountSource`, `MountTag`, `.Env` | `SOCKET`, `MOUNT_SOURCE`, `MOUNT_TAG` |
+| `mounts[type=virtiofs].virtiofs` | `Socket`, `MountSource`, `MountTag`, `CID`, `StateDir`, `.Env` | `SOCKET`, `MOUNT_SOURCE`, `MOUNT_TAG`, `CID`, `STATE_DIR`, `VIRTIOFSD_SOCKET` |
 | `run[].exec` | `CID`, `StateDir`, `Workspace.GuestPath`, `Workspace.HostPath`, user vars, `.Env` | scalar top-level values only |
-| `notifications.exec` | `State`, `Message`, notification context values, `.Env` | `STATE`, `MESSAGE`, normalized context values |
+| `notifications.exec` | `State`, `Message`, notification context values, `.Env` | `STATE`, `MESSAGE`, normalized context values, `VIRTLE_NOTIFY_STATE`, `VIRTLE_NOTIFY_MESSAGE`, `VIRTLE_NOTIFY_CONTEXT_<KEY>` |
 
 ## Library
 

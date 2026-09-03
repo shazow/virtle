@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"sync"
 
 	"github.com/shazow/virtle/internal/executor"
@@ -81,14 +80,6 @@ func (r *Runner) NewProcess(name string) *Process {
 	return process
 }
 
-// ExitedProcess returns a tracked test process that has already exited.
-func (r *Runner) ExitedProcess(name string, err error) *Process {
-	process := r.NewProcess(name)
-	process.Exited = true
-	process.WaitErr = err
-	return process
-}
-
 // Starts returns recorded command starts.
 func (r *Runner) Starts() []Start {
 	r.mu.Lock()
@@ -111,15 +102,6 @@ func (r *Runner) Processes(name string) []*Process {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]*Process(nil), r.processes[name]...)
-}
-
-// LastProcess returns the most recent process created for name.
-func (r *Runner) LastProcess(name string) *Process {
-	processes := r.Processes(name)
-	if len(processes) == 0 {
-		return nil
-	}
-	return processes[len(processes)-1]
 }
 
 // ProcessSignals returns signal and kill events in observed order.
@@ -189,16 +171,8 @@ func (r *Runner) recordProcessSignal(name string, sig os.Signal) {
 }
 
 func runnerStart(cmd *exec.Cmd) Start {
-	name := "command"
-	if cmd != nil {
-		if len(cmd.Args) > 0 && cmd.Args[0] != "" {
-			name = filepath.Base(cmd.Args[0])
-		} else if cmd.Path != "" {
-			name = filepath.Base(cmd.Path)
-		}
-	}
 	return Start{
-		Name:         name,
+		Name:         executor.CommandName(cmd),
 		Args:         commandArgs(cmd),
 		Env:          commandEnv(cmd),
 		EnvAdditions: commandEnvAdditions(commandEnv(cmd)),

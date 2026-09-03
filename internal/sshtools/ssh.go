@@ -308,7 +308,11 @@ func (s KeyStore) Ensure() (Key, error) {
 		return Key{}, err
 	}
 
-	return writePublicKey(identityFile, publicKeyFile, privateKey.Public())
+	publicKey, err := ssh.NewPublicKey(privateKey.Public())
+	if err != nil {
+		return Key{}, fmt.Errorf("encode ssh public key: %w", err)
+	}
+	return writePublicKey(identityFile, publicKeyFile, publicKey)
 }
 
 func ensurePublicKeyForExistingIdentity(identityFile string, publicKeyFile string) (Key, error) {
@@ -341,19 +345,7 @@ func ensurePublicKeyForExistingIdentity(identityFile string, publicKeyFile strin
 	return writePublicKey(identityFile, publicKeyFile, signer.PublicKey())
 }
 
-func writePublicKey(identityFile string, publicKeyFile string, key any) (Key, error) {
-	var publicKey ssh.PublicKey
-	switch typed := key.(type) {
-	case ssh.PublicKey:
-		publicKey = typed
-	default:
-		var err error
-		publicKey, err = ssh.NewPublicKey(typed)
-		if err != nil {
-			return Key{}, fmt.Errorf("encode ssh public key: %w", err)
-		}
-	}
-
+func writePublicKey(identityFile string, publicKeyFile string, publicKey ssh.PublicKey) (Key, error) {
 	publicKeyBytes := ssh.MarshalAuthorizedKey(publicKey)
 	if err := os.WriteFile(publicKeyFile, publicKeyBytes, 0o644); err != nil {
 		return Key{}, fmt.Errorf("write ssh public key %q: %w", publicKeyFile, err)

@@ -2,6 +2,7 @@ package launch
 
 import (
 	"fmt"
+	"maps"
 	"strings"
 	"sync"
 	"time"
@@ -161,8 +162,8 @@ func (s *Stats) snapshot() statsSnapshot {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return statsSnapshot{
-		timers: copyTimers(s.timers),
-		counts: copyCounts(s.counts),
+		timers: maps.Clone(s.timers),
+		counts: maps.Clone(s.counts),
 	}
 }
 
@@ -186,28 +187,6 @@ func (s statsSnapshot) sshReady() time.Time {
 		sshReady = s.time(TimerSSHStarted)
 	}
 	return sshReady
-}
-
-func copyTimers(src map[TimerEvent]time.Time) map[TimerEvent]time.Time {
-	if src == nil {
-		return nil
-	}
-	dst := make(map[TimerEvent]time.Time, len(src))
-	for event, timestamp := range src {
-		dst[event] = timestamp
-	}
-	return dst
-}
-
-func copyCounts(src map[TimerEvent]int) map[TimerEvent]int {
-	if src == nil {
-		return nil
-	}
-	dst := make(map[TimerEvent]int, len(src))
-	for event, count := range src {
-		dst[event] = count
-	}
-	return dst
 }
 
 func formatStatDuration(name string, duration time.Duration) string {

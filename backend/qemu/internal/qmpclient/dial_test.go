@@ -11,9 +11,9 @@ func TestDialWithRetryReturnsClientAfterRetry(t *testing.T) {
 	want := &dialClient{}
 	dialer := &retryDialer{failures: 1, client: want}
 	client, err := DialWithRetry(context.Background(), dialer, DialRetry{
-		SocketPath: "qmp.sock",
-		Timeout:    10 * time.Millisecond,
-		RetryDelay: time.Millisecond,
+		SocketPath:     "qmp.sock",
+		ConnectTimeout: 10 * time.Millisecond,
+		RetryDelay:     time.Millisecond,
 	})
 	if err != nil {
 		t.Fatalf("dial retry: %v", err)

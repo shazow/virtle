@@ -171,3 +171,27 @@ func TestSessionQueuedOperationDeadlineStartsAtLockAcquisition(t *testing.T) {
 		t.Fatalf("queued operation should start with a fresh deadline, got %v", err)
 	}
 }
+
+func TestSessionRejectsEndedContextWithoutPoisoning(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+	session := &Session{Conn: clientConn, RPCTimeout: sessionTestRPCTimeout}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	ran := false
+	err := session.Do(ctx, func() error {
+		ran = true
+		return nil
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("ended context: got %v want %v", err, context.Canceled)
+	}
+	if ran {
+		t.Fatal("operation ran despite the ended context")
+	}
+	if err := session.Do(context.Background(), func() error { return nil }); err != nil {
+		t.Fatalf("session unusable after an ended-context call: %v", err)
+	}
+}

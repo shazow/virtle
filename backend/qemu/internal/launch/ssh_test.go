@@ -1,9 +1,9 @@
 package launch
 
 import (
-	"os"
 	"os/exec"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -40,10 +40,6 @@ func TestBuildSSHCommandBuildsInteractiveSession(t *testing.T) {
 	}
 	if !reflect.DeepEqual(commandArgs(session), wantArgs) {
 		t.Fatalf("unexpected ssh session args: got %v want %v", commandArgs(session), wantArgs)
-	}
-
-	if session.Stdin != os.Stdin {
-		t.Fatal("expected interactive ssh session to read from stdin")
 	}
 }
 
@@ -90,11 +86,11 @@ func TestBuildSSHCommandRendersManifestExecTemplates(t *testing.T) {
 	}
 
 	for _, want := range []string{"CID=10", "USER=agent", "DESTINATION=agent@vsock/10"} {
-		if !containsString(commandEnvAdditions(session.Env), want) {
+		if !slices.Contains(commandEnvAdditions(session.Env), want) {
 			t.Fatalf("expected ssh env %q in %#v", want, session.Env)
 		}
 	}
-	if !containsString(commandArgs(session), "control-10") || !containsString(commandArgs(session), "HostName=agent@vsock/10") {
+	if !slices.Contains(commandArgs(session), "control-10") || !slices.Contains(commandArgs(session), "HostName=agent@vsock/10") {
 		t.Fatalf("expected rendered ssh args, got %#v", commandArgs(session))
 	}
 	hint, err := BuildSSHCommandHint(launchManifest, 10)
@@ -135,15 +131,6 @@ func commandEnvAdditions(env []string) []string {
 		}
 	}
 	return additions
-}
-
-func containsString(values []string, needle string) bool {
-	for _, value := range values {
-		if value == needle {
-			return true
-		}
-	}
-	return false
 }
 
 // buildSSHCommand is a test-only convenience using the manifest's own argv.

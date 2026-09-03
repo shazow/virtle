@@ -14,13 +14,9 @@ type disconnecter interface {
 	Disconnect() error
 }
 
-type shutdownResources struct {
-	Processes *launch.ProcessSet
-	QMP       disconnecter
-}
-
 type closeActions struct {
-	shutdownResources
+	Processes        *launch.ProcessSet
+	QMP              disconnecter
 	WriteBack        func(context.Context) error
 	WriteBackTimeout time.Duration
 	SkipWriteBack    bool
@@ -63,8 +59,9 @@ func (a closeActions) Run(ctx context.Context) error {
 		err = errors.Join(err, a.Control.Close())
 	}
 	if a.Processes != nil {
-		// Teardown is never canceled from above; each process escalates on
-		// its own grace period.
+		// ctx expiry abandons the remaining graceful steps and kills (see
+		// executor.Process.Stop); Kill passes context.Background so a hard
+		// stop is never cut short.
 		err = errors.Join(err, a.Processes.Close(ctx))
 	}
 	if a.QMP != nil {

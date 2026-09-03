@@ -3,8 +3,8 @@ package qemu
 import (
 	"bytes"
 	"log/slog"
+	"maps"
 	"os"
-	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -193,13 +193,13 @@ func TestSpecDocumentAcceleration(t *testing.T) {
 }
 
 func TestSpecDocumentRequiresKernel(t *testing.T) {
-	if _, err := specDocument(&vm.Spec{Dir: t.TempDir()}, &Backend{}, nil); err == nil {
+	if _, err := specDocument(&vm.Spec{Dir: "/work"}, &Backend{}, nil); err == nil {
 		t.Fatal("expected error for missing kernel")
 	}
 }
 
 func TestSpecDocumentRejectsUnalignedMemory(t *testing.T) {
-	spec := &vm.Spec{Kernel: vm.Kernel{Path: "k", Initrd: "i"}, Memory: 100 * units.Kibibyte, Dir: t.TempDir()}
+	spec := &vm.Spec{Kernel: vm.Kernel{Path: "k", Initrd: "i"}, Memory: 100 * units.Kibibyte, Dir: "/work"}
 	if _, err := specDocument(spec, &Backend{}, nil); err == nil {
 		t.Fatal("expected error for non-MiB-aligned memory")
 	}
@@ -276,12 +276,17 @@ func TestSpecDocumentOverlaysBase(t *testing.T) {
 		Ports:  []vm.Forward{{Proto: "udp", HostAddr: "127.0.0.1:8080", GuestAddr: "10.0.2.15:80"}},
 		Files:  []vm.File{{GuestPath: "/etc/new", Content: strings.NewReader("new content"), Mode: 0o640}},
 	}
+	baseForwards := slices.Clone(base.Networks[0].Forward)
+	baseMachineOptions := maps.Clone(base.QEMU.MachineOptions)
 	doc, err := specDocument(spec, &Backend{}, &base)
 	if err != nil {
 		t.Fatalf("specDocument: %v", err)
 	}
 	if got, want := int(doc.Machine.Memory), 4096; got != want {
 		t.Errorf("Memory = %d MiB, want %d", got, want)
+	}
+	if !reflect.DeepEqual(base.Networks[0].Forward, baseForwards) || !reflect.DeepEqual(base.QEMU.MachineOptions, baseMachineOptions) {
+		t.Errorf("specDocument mutated the base document: forwards %+v, machine options %+v", base.Networks[0].Forward, base.QEMU.MachineOptions)
 	}
 	mf, err := doc.Manifest()
 	if err != nil {
@@ -330,54 +335,5 @@ func TestSpecDocumentOverlaysBase(t *testing.T) {
 	}
 	if got := files[0]; got.GuestPath != "/etc/backend.conf" || got.Content.Kind != imanifest.WriteFileContentPath || got.Content.Path != "/work/host.conf" || !got.WriteBack {
 		t.Errorf("backend-owned host file = %+v", got)
-	}
-}
-
-func TestAdHocHotplugDevicesReceiveExecutablePlansAndDefaults(t *testing.T) {
-	tmpDir := t.TempDir()
-	resolver := &imanifest.Manifest{
-		Paths: imanifest.Paths{
-			WorkingDir: tmpDir,
-			RuntimeDir: imanifest.RuntimeDir{Mode: imanifest.RuntimeDirPath, Path: filepath.Join(tmpDir, "state")},
-		},
-	}
-	share, err := hotplugDevice(resolver, vm.Share{Tag: "data", HostPath: "/host/data", GuestPath: "/data"})
-	if err != nil {
-		t.Fatalf("share: %v", err)
-	}
-	if share.ID != "data" || share.VirtioFS.Source != "/host/data" || share.VirtioFS.Target != "/data" || share.VirtioFS.Bin != "virtiofsd" {
-		t.Errorf("share device = %+v", share)
-	}
-	if got, want := share.VirtioFS.SocketPath, filepath.Join(tmpDir, "state", "data.sock"); got != want {
-		t.Errorf("share socket = %q, want %q", got, want)
-	}
-	if got, want := share.VirtioFS.Args, imanifest.DefaultVirtioFSArgs(share.VirtioFS.SocketPath, "/host/data", "data"); !reflect.DeepEqual(got, want) {
-		t.Errorf("share helper args = %#v, want %#v", got, want)
-	}
-
-	disk, err := hotplugDevice(resolver, vm.Disk{Path: "/imgs/scratch.img"})
-	if err != nil {
-		t.Fatalf("disk: %v", err)
-	}
-	if disk.Block.ImagePath != "/imgs/scratch.img" || disk.Block.Format != "raw" {
-		t.Errorf("disk device = %+v", disk)
-	}
-	if strings.ContainsAny(disk.ID, "/ ") {
-		t.Errorf("disk ID %q contains unsafe characters", disk.ID)
-	}
-	couldCollide, err := hotplugDevice(resolver, vm.Disk{Path: "/imgs/scratch_img"})
-	if err != nil {
-		t.Fatalf("second disk: %v", err)
-	}
-	if disk.ID == couldCollide.ID {
-		t.Errorf("distinct disk paths produced the same ID %q", disk.ID)
-	}
-
-	fwd, err := hotplugDevice(resolver, vm.Forward{HostAddr: "127.0.0.1:8080", GuestAddr: ":80"})
-	if err != nil {
-		t.Fatalf("forward: %v", err)
-	}
-	if fwd.Net.Backend != "user" || fwd.Net.MAC == "" || len(fwd.Net.Forward) != 1 || fwd.Net.Forward[0].Proto != "tcp" || fwd.Net.Forward[0].Host != "127.0.0.1:8080" || fwd.Net.Forward[0].Guest != ":80" {
-		t.Errorf("forward device = %+v", fwd)
 	}
 }

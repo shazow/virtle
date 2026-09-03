@@ -3,9 +3,11 @@ package qemu
 import (
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 
 	imanifest "github.com/shazow/virtle/internal/manifest"
@@ -25,35 +27,36 @@ func specDocument(spec *vm.Spec, cfg *Backend, base *imanifest.Document) (imanif
 	}
 	doc := imanifest.DefaultDocument()
 	if base != nil {
+		// The overlay below writes into the network and machine-option
+		// collections, so detach them from the backend's stored document.
 		doc = *base
+		doc.Networks = slices.Clone(doc.Networks)
+		doc.QEMU.MachineOptions = maps.Clone(doc.QEMU.MachineOptions)
 	}
 
 	if cfg.HostName != "" {
 		doc.HostName = cfg.HostName
 	}
 
+	// Spec.Dir wins; a Go-configured backend without one gets a fresh
+	// temporary directory, a manifest.Load backend keeps the manifest's.
 	dir := spec.Dir
-	if dir == "" && base == nil {
-		tmp, err := os.MkdirTemp("", "virtle-")
-		if err != nil {
-			return imanifest.Document{}, fmt.Errorf("create working directory: %w", err)
+	if dir == "" {
+		if base == nil {
+			tmp, err := os.MkdirTemp("", "virtle-")
+			if err != nil {
+				return imanifest.Document{}, fmt.Errorf("create working directory: %w", err)
+			}
+			dir = tmp
+		} else {
+			dir = doc.WorkingDir
 		}
-		dir = tmp
 	}
-	if dir != "" {
-		abs, err := filepath.Abs(dir)
-		if err != nil {
-			return imanifest.Document{}, fmt.Errorf("resolve working directory %q: %w", dir, err)
-		}
-		doc.WorkingDir = abs
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return imanifest.Document{}, fmt.Errorf("resolve working directory %q: %w", dir, err)
 	}
-	if !filepath.IsAbs(doc.WorkingDir) {
-		abs, err := filepath.Abs(doc.WorkingDir)
-		if err != nil {
-			return imanifest.Document{}, fmt.Errorf("resolve working directory %q: %w", doc.WorkingDir, err)
-		}
-		doc.WorkingDir = abs
-	}
+	doc.WorkingDir = abs
 
 	cpus := spec.CPUs
 	if cpus == 0 && base == nil && doc.Machine.VCPU == 0 {

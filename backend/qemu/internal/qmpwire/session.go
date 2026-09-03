@@ -202,6 +202,11 @@ func (s *Session) do(ctx context.Context, bounded bool, fn func() error) (err er
 		// timeout or cancellation by callers mapping this fresh failure.
 		return fmt.Errorf("%w: %v", ErrBroken, s.broken)
 	}
+	// Nothing has been sent yet, so an already-ended ctx is a plain failure:
+	// the stream position is still known and the session stays usable.
+	if ctx.Err() != nil {
+		return context.Cause(ctx)
+	}
 
 	// The deadline must be computed under the lock: an operation that queued
 	// behind a slow one would otherwise start already expired and poison the

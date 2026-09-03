@@ -10,7 +10,7 @@ import (
 
 func TestWrapStagePreservesStageAndCause(t *testing.T) {
 	cause := errors.New("failed")
-	err := wrapStage("vm startup", cause)
+	err := WrapStage("vm startup", cause)
 	if !errors.Is(err, cause) {
 		t.Fatalf("wrapped error does not preserve cause: %v", err)
 	}
@@ -23,18 +23,6 @@ func TestWrapStagePreservesStageAndCause(t *testing.T) {
 	}
 	if got, want := err.Error(), "vm startup: failed"; got != want {
 		t.Fatalf("error string: got %q want %q", got, want)
-	}
-}
-
-func TestWrapFixedStage(t *testing.T) {
-	cause := errors.New("failed")
-	err := WrapFixedStage("restore")(cause)
-	var stageErr *StageError
-	if !errors.As(err, &stageErr) {
-		t.Fatalf("error type: got %T", err)
-	}
-	if stageErr.Stage != "restore" || !errors.Is(err, cause) {
-		t.Fatalf("wrapped error: %#v", err)
 	}
 }
 

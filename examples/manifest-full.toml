@@ -1,5 +1,4 @@
-# Proposed simplified virtle manifest.
-# This annotated manifest documents the supported snake_case schema.
+# Annotated virtle manifest documenting the supported snake_case schema.
 
 # This names the guest and is also used to derive default lock/state names.
 # It must be configurable because multiple manifests may run from the same host
@@ -96,7 +95,7 @@ hotplug_ports = 3  # Default: the number of listed hotplug devices
 # The machine profile is the backend-neutral VM shape virtle should run. For
 # QEMU today this maps to a board model; another backend may map it to its own
 # closest machine class. Changing it can affect boot compatibility and devices.
-type = "microvm"  # Options: microvm (default: microvm)
+type = "microvm"  # Default: microvm. Other QEMU machine types (e.g. q35) select PCI device transports.
 
 # A stable machine id lets generated configurations preserve VM identity across
 # launches. Omit it when the backend should use its own default identity.
@@ -220,7 +219,8 @@ virtiofs.socket = "workspace.sock"
 
 # When the socket already exists, virtle treats it as externally managed. When
 # it is missing, virtle starts virtiofsd with these values. Template values
-# include {{.Socket}}, {{.MountSource}}, {{.MountTag}}, and {{.Env.USER}}.
+# include {{.Socket}}, {{.MountSource}}, {{.MountTag}}, {{.CID}}, {{.StateDir}},
+# and {{.Env.USER}}; the process also receives VIRTIOFSD_SOCKET.
 virtiofs.bin = "virtiofsd"
 virtiofs.args = ["--socket-path={{.Socket}}", "--shared-dir={{.MountSource}}", "--tag={{.MountTag}}"]
 

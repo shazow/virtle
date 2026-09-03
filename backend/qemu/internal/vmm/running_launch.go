@@ -13,8 +13,8 @@ type runningLaunch struct {
 	plan           *launch.Plan
 	stats          *launch.Stats
 	qmp            qmpclient.Client
-	lifecycle      *launch.Lifecycle
-	suspendHandler suspendHandler
+	suspend        *launch.SuspendCoordinator
+	suspendHandler *launchSuspendHandler
 	processes      *launch.ProcessSet
 }
 

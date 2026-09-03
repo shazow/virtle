@@ -136,18 +136,20 @@ func (r Runner) detach(ctx context.Context, id string) error {
 	if err := r.QMP.DetachDevice(cleanupCtx, device); err != nil {
 		return err
 	}
+	// QEMU has already released the device, so the registry entry and its
+	// port are freed even when the helper refuses to stop; the failure is
+	// still reported.
+	var stopErr error
 	if device.Kind == manifest.HotplugKindVirtioFS {
 		if attached.helper != nil {
-			if err := r.Start.Stop(attached.helper); err != nil {
-				return err
-			}
+			stopErr = r.Start.Stop(attached.helper)
 		}
 		if device.VirtioFS.SocketPath != "" {
 			_ = os.Remove(device.VirtioFS.SocketPath)
 		}
 	}
 	r.Runtime.remove(id)
-	return nil
+	return stopErr
 }
 
 func (r Runner) attachVirtioFSHost(ctx context.Context, device manifest.HotplugDevice) (*executor.Process, error) {

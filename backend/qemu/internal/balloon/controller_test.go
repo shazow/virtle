@@ -271,19 +271,18 @@ func TestControllerNotifiesAfterSuccessfulResize(t *testing.T) {
 			GrowBelowAvailable:    128,
 			ReclaimAboveAvailable: 4096,
 			Step:                  2048,
-			PollInterval:          1 * time.Second,
-			ReclaimHoldoff:        1 * time.Second,
+			PollInterval:          10 * time.Millisecond,
+			ReclaimHoldoff:        10 * time.Millisecond,
 		},
 		Notifier: notifications,
 		Now:      func() time.Time { return now },
 	}
+	session.onSetBalloon = cancel
 
 	done := make(chan error, 1)
 	go func() {
 		done <- controller.Run(ctx)
 	}()
-	time.Sleep(1100 * time.Millisecond)
-	cancel()
 	if err := <-done; err != nil {
 		t.Fatalf("run controller: %v", err)
 	}
@@ -343,12 +342,12 @@ func TestControllerSurvivesTransientFailures(t *testing.T) {
 		Now: func() time.Time { return now },
 	}
 
+	session.onSetBalloon = cancel
+
 	done := make(chan error, 1)
 	go func() {
 		done <- controller.Run(ctx)
 	}()
-	time.Sleep(200 * time.Millisecond)
-	cancel()
 	if err := <-done; err != nil {
 		t.Fatalf("run controller: %v", err)
 	}
@@ -431,19 +430,19 @@ func TestControllerDoesNotNotifyWhenResizeIsNotApplied(t *testing.T) {
 			GrowBelowAvailable:    128,
 			ReclaimAboveAvailable: 4096,
 			Step:                  2048,
-			PollInterval:          1 * time.Second,
-			ReclaimHoldoff:        1 * time.Second,
+			PollInterval:          10 * time.Millisecond,
+			ReclaimHoldoff:        10 * time.Millisecond,
 		},
 		Notifier: notifications,
 		Now:      func() time.Time { return now },
 	}
+	// One full cycle runs before the cancel is observed on the next tick.
+	session.onReadBalloonStats = cancel
 
 	done := make(chan error, 1)
 	go func() {
 		done <- controller.Run(ctx)
 	}()
-	time.Sleep(1100 * time.Millisecond)
-	cancel()
 	if err := <-done; err != nil {
 		t.Fatalf("run controller: %v", err)
 	}
@@ -467,6 +466,11 @@ type fakeSession struct {
 	readBalloonStatsFails  int
 	listQOMProperties      map[string][]objectPropertyInfo
 	listQOMPropertiesErr   map[string]error
+
+	// onSetBalloon and onReadBalloonStats let tests stop the controller at a
+	// known point in its cycle instead of sleeping through poll intervals.
+	onSetBalloon       func()
+	onReadBalloonStats func()
 }
 
 func (f *fakeSession) QueryBalloon(ctx context.Context) (info, error) {
@@ -478,6 +482,9 @@ func (f *fakeSession) QueryBalloon(ctx context.Context) (info, error) {
 
 func (f *fakeSession) SetBalloonLogicalSize(ctx context.Context, logicalSizeBytes int64) error {
 	f.setBalloonLogicalSizes = append(f.setBalloonLogicalSizes, logicalSizeBytes)
+	if f.onSetBalloon != nil {
+		f.onSetBalloon()
+	}
 	return f.setBalloonErr
 }
 
@@ -504,6 +511,13 @@ func (f *fakeNotifier) Notify(ctx context.Context, state string, message string,
 }
 
 func (f *fakeSession) ReadBalloonStats(ctx context.Context, qomPath string) (stats, error) {
+	// A canceled controller must not observe a fresh sample and resize again.
+	if err := ctx.Err(); err != nil {
+		return stats{}, err
+	}
+	if f.onReadBalloonStats != nil {
+		f.onReadBalloonStats()
+	}
 	if f.readBalloonStatsFails > 0 {
 		f.readBalloonStatsFails--
 		return stats{}, errors.New("transient qmp failure")

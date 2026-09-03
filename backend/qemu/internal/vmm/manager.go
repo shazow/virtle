@@ -40,9 +40,8 @@ const (
 )
 
 type manager struct {
-	// launchManifest is bound once where each operation enters (startWithPlan
-	// for launches, the Suspend and Hotplug wrappers otherwise); one manager
-	// serves exactly one manifest.
+	// launchManifest is bound once in startWithPlan; one manager serves
+	// exactly one manifest.
 	launchManifest *manifest.Manifest
 	hotplugRuntime *hotplug.Runtime
 
@@ -60,19 +59,15 @@ type manager struct {
 	qmpConnectTimeout   time.Duration
 	qmpQuitTimeout      time.Duration
 	qmpMigrationTimeout time.Duration
-	pidSignaler         launch.PIDSignaler
 	notifier            launch.NotificationSink
 }
 
 func newManagerFromConfig(config Config) *manager {
 	config = mergeConfig(DefaultConfig(), config)
-	logger := config.Logger
-	if logger == nil {
-		logger = discardLogger
-	}
+	logger := config.Logger.With("package", "vmm")
 	runner := config.Runner
 	if runner == nil {
-		runner = &executor.Runner{Logger: logger.With("package", "vmm")}
+		runner = &executor.Runner{Logger: logger}
 	}
 	return &manager{
 		locker:              config.Locker,
@@ -81,15 +76,14 @@ func newManagerFromConfig(config Config) *manager {
 		socketWaiter:        config.SocketWaiter,
 		qmpDialer:           config.QMPDialer,
 		guestAgentDialer:    config.GuestAgentDialer,
-		logger:              logger.With("package", "vmm"),
-		balloonLogger:       logger.With("package", "balloon"),
+		logger:              logger,
+		balloonLogger:       config.Logger.With("package", "balloon"),
 		consoleOutput:       config.ConsoleOutput,
 		shutdownDelay:       config.ShutdownDelay,
 		qmpRetryDelay:       config.QMPRetryDelay,
 		qmpConnectTimeout:   config.QMPConnectTimeout,
 		qmpQuitTimeout:      config.QMPQuitTimeout,
 		qmpMigrationTimeout: config.QMPMigrationTimeout,
-		pidSignaler:         config.PIDSignaler,
 		notifier:            config.Notifier,
 	}
 }
@@ -126,7 +120,7 @@ func (m *manager) restoreLaunchRuntime(ctx context.Context, plan *launch.Plan, c
 	migrateCtx, cancel := m.migrationContext(ctx)
 	defer cancel()
 	if err := qmpclient.RestoreFromFile(migrateCtx, client, plan.ResumeState.VMStatePath); err != nil {
-		return launch.WrapFixedStage("restore")(err)
+		return launch.WrapStage("restore", err)
 	}
 	notifyRuntimeResume(ctx, plan)
 	return nil
@@ -149,8 +143,8 @@ func (m *manager) startManagedProcess(cmd *exec.Cmd) (*executor.Process, error) 
 }
 
 func (m *manager) startRuns(cid int) (executor.Group, error) {
-	manifest := m.launchManifest
-	runs, err := manifest.ResolvedRuns(cid)
+	mf := m.launchManifest
+	runs, err := mf.ResolvedRuns(cid)
 	if err != nil {
 		return executor.Group{}, &launch.StageError{Stage: "run startup", Err: err}
 	}
@@ -180,18 +174,10 @@ func (m *manager) startRuns(cid int) (executor.Group, error) {
 	return started, nil
 }
 
-func (m *manager) waitForSockets(ctx context.Context, stage string, socketPaths []string, watchers executor.Group) error {
-	return m.waitForLaunchSockets(ctx, stage, socketPaths, watchers)
-}
-
 // quitFreshQMP dials a new QMP connection and quits QEMU through it, for
 // teardown paths whose long-lived monitor has been poisoned.
 func (m *manager) quitFreshQMP(ctx context.Context, socketPath string) error {
-	dialer := m.qmpDialer
-	if dialer == nil {
-		dialer = &qmpclient.SocketMonitorDialer{}
-	}
-	client, err := dialer.Dial(ctx, socketPath, m.effectiveQMPConnectTimeout())
+	client, err := m.effectiveQMPDialer().Dial(ctx, socketPath, m.effectiveQMPConnectTimeout())
 	if err != nil {
 		return fmt.Errorf("redial qmp for quit: %w", err)
 	}
@@ -200,27 +186,19 @@ func (m *manager) quitFreshQMP(ctx context.Context, socketPath string) error {
 }
 
 func (m *manager) waitForQMP(ctx context.Context, socketPath string, watchers executor.Group) (qmpclient.Client, error) {
-	dialer := m.qmpDialer
-	if dialer == nil {
-		dialer = &qmpclient.SocketMonitorDialer{}
-	}
-	retryDelay := m.qmpRetryDelay
-	if retryDelay <= 0 {
-		retryDelay = defaultQMPRetryDelay
-	}
 	return launch.WaitForQMP(ctx, launch.QMPWait{
 		Stage:          "vm startup",
 		SocketPath:     socketPath,
 		SocketWaiter:   m.socketWaiter,
-		Dialer:         dialer,
+		Dialer:         m.effectiveQMPDialer(),
 		ConnectTimeout: m.effectiveQMPConnectTimeout(),
-		RetryDelay:     retryDelay,
+		RetryDelay:     m.effectiveQMPRetryDelay(),
 		PollDelay:      defaultSocketPollInterval,
 		Watchers:       watchers,
 	})
 }
 
-func (m *manager) waitForLaunchSockets(ctx context.Context, stage string, socketPaths []string, watchers executor.Group) error {
+func (m *manager) waitForSockets(ctx context.Context, stage string, socketPaths []string, watchers executor.Group) error {
 	return launch.WaitForSockets(ctx, launch.SocketWait{
 		Stage:        stage,
 		SocketPaths:  socketPaths,
@@ -228,6 +206,30 @@ func (m *manager) waitForLaunchSockets(ctx context.Context, stage string, socket
 		PollDelay:    defaultSocketPollInterval,
 		Watchers:     watchers,
 	})
+}
+
+// The effective* accessors apply the package defaults for fields that tests
+// leave unset when they build a manager literal directly.
+
+func (m *manager) effectiveQMPDialer() qmpclient.Dialer {
+	if m.qmpDialer != nil {
+		return m.qmpDialer
+	}
+	return &qmpclient.SocketMonitorDialer{}
+}
+
+func (m *manager) effectiveGuestAgentDialer() qga.Dialer {
+	if m.guestAgentDialer != nil {
+		return m.guestAgentDialer
+	}
+	return &qga.SocketDialer{}
+}
+
+func (m *manager) effectiveQMPRetryDelay() time.Duration {
+	if m.qmpRetryDelay > 0 {
+		return m.qmpRetryDelay
+	}
+	return defaultQMPRetryDelay
 }
 
 func (m *manager) effectiveQMPConnectTimeout() time.Duration {
@@ -269,10 +271,6 @@ type launchSuspendHandler struct {
 	err           error
 }
 
-type suspendHandler interface {
-	Handle(context.Context, *launch.SuspendCoordinator) error
-}
-
 func newLaunchSuspendHandler(manager *manager, qmpSocketPath string, client qmpclient.Client, cid int, notifier launch.NotificationSink, writeBack func() bool) *launchSuspendHandler {
 	return &launchSuspendHandler{
 		manager:       manager,
@@ -284,15 +282,13 @@ func newLaunchSuspendHandler(manager *manager, qmpSocketPath string, client qmpc
 	}
 }
 
-func handleSuspendRequest(ctx context.Context, coordinator *launch.SuspendCoordinator, handler *launchSuspendHandler) error {
+// Handle services one queued suspend request, reporting the outcome to the
+// coordinator's waiters.
+func (h *launchSuspendHandler) Handle(ctx context.Context, coordinator *launch.SuspendCoordinator) error {
 	coordinator.Begin()
-	err := handler.saveAndExit(ctx)
+	err := h.saveAndExit(ctx)
 	coordinator.Complete(err)
 	return err
-}
-
-func (h *launchSuspendHandler) Handle(ctx context.Context, coordinator *launch.SuspendCoordinator) error {
-	return handleSuspendRequest(ctx, coordinator, h)
 }
 
 func (h *launchSuspendHandler) saveAndExit(ctx context.Context) error {
@@ -313,31 +309,31 @@ func (h *launchSuspendHandler) saveAndExit(ctx context.Context) error {
 }
 
 func (m *manager) saveSuspendStateConnected(ctx context.Context, qmpSocketPath string, client qmpclient.Client, cid int, notifier launch.NotificationSink) error {
-	manifest := m.launchManifest
-	if manifest == nil {
-		return launch.WrapFixedStage("qmp suspend")(fmt.Errorf("suspend manifest is not configured"))
+	mf := m.launchManifest
+	if mf == nil {
+		return launch.WrapStage("qmp suspend", fmt.Errorf("suspend manifest is not configured"))
 	}
 
-	statePath, err := launch.PrepareVMStateFile(manifest)
+	statePath, err := launch.PrepareVMStateFile(mf)
 	if err != nil {
-		return launch.WrapFixedStage("qmp suspend")(err)
+		return launch.WrapStage("qmp suspend", err)
 	}
 	migrateCtx, cancel := m.migrationContext(ctx)
 	defer cancel()
 	if err := qmpclient.SaveToFile(migrateCtx, client, statePath); err != nil {
-		return launch.WrapFixedStage("qmp suspend")(err)
+		return launch.WrapStage("qmp suspend", err)
 	}
 
 	state := launch.SuspendState{
 		Version:       StateVersion,
-		HostName:      manifest.Identity.HostName,
+		HostName:      mf.Identity.HostName,
 		QMPSocketPath: qmpSocketPath,
 		VMStatePath:   statePath,
 		CID:           cid,
-		Status:        "saved",
+		Status:        launch.SuspendStatusSaved,
 	}
-	if err := launch.WriteSuspendStateData(manifest, state); err != nil {
-		return launch.WrapFixedStage("qmp suspend")(err)
+	if err := launch.WriteSuspendStateData(mf, state); err != nil {
+		return launch.WrapStage("qmp suspend", err)
 	}
 	notifyRuntimeSuspend(ctx, notifier, state)
 	return nil

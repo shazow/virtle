@@ -24,7 +24,6 @@ type Config struct {
 	QMPConnectTimeout   time.Duration
 	QMPQuitTimeout      time.Duration
 	QMPMigrationTimeout time.Duration
-	PIDSignaler         launch.PIDSignaler
 	Notifier            launch.NotificationSink
 }
 
@@ -74,9 +73,6 @@ func mergeConfig(base Config, override Config) Config {
 	}
 	if override.QMPMigrationTimeout != 0 {
 		base.QMPMigrationTimeout = override.QMPMigrationTimeout
-	}
-	if override.PIDSignaler != nil {
-		base.PIDSignaler = override.PIDSignaler
 	}
 	if override.Notifier != nil {
 		base.Notifier = override.Notifier

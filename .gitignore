@@ -1,4 +1,6 @@
 /result
+/result-*
+/.update-release-nix.*
 /dist/
 /coverage.out
 /virtle

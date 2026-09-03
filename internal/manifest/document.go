@@ -1,6 +1,9 @@
 package manifest
 
 import (
+	"fmt"
+	"path/filepath"
+
 	"github.com/shazow/virtle/internal/manifest/tagged"
 	"github.com/shazow/virtle/units"
 )
@@ -36,6 +39,25 @@ type Document struct {
 	Hotplug       HotplugInput       `json:"hotplug,omitempty" toml:"hotplug" jsonschema:"Devices that may be attached or detached after launch."`
 }
 
+// ResolveWorkingDir makes WorkingDir absolute against the process working
+// directory; an empty WorkingDir means ".". Loaders call it once so every
+// relative manifest path resolves against the same directory.
+func (d *Document) ResolveWorkingDir() error {
+	dir := d.WorkingDir
+	if dir == "" {
+		dir = "."
+	}
+	if !filepath.IsAbs(dir) {
+		abs, err := filepath.Abs(dir)
+		if err != nil {
+			return fmt.Errorf("resolve manifest working directory %q: %w", dir, err)
+		}
+		dir = abs
+	}
+	d.WorkingDir = dir
+	return nil
+}
+
 type HostInput struct {
 	OS     string `json:"-" toml:"-"`
 	Arch   string `json:"-" toml:"-"`
@@ -52,7 +74,7 @@ type QEMUInput struct {
 	GuestAgentSocket    string            `json:"guest_agent_socket,omitempty" toml:"guest_agent_socket" default:"qga.sock" jsonschema:"Path to the QEMU guest agent socket relative to the runtime state directory unless absolute."`
 	GuestDefaultTimeout units.Duration    `json:"guest_default_timeout,omitempty" toml:"guest_default_timeout" default:"30s" jsonschema:"Timeout for guest agent commands virtle issues itself such as file writes and workspace mounts. Guest-exec requests sent through the control socket carry their own timeout. Zero disables the timeout."`
 	ShutdownExec        []string          `json:"shutdown_exec,omitempty" toml:"shutdown_exec" jsonschema:"Optional guest command tuple invoked through QGA to shut down the VM gracefully."`
-	ShutdownTimeout     units.Duration    `json:"shutdown_timeout,omitempty" toml:"shutdown_timeout" default:"90s" jsonschema:"Duration to wait for graceful shutdown before forcing QEMU to quit"`
+	ShutdownTimeout     units.Duration    `json:"shutdown_timeout,omitempty" toml:"shutdown_timeout" default:"90s" jsonschema:"Duration to wait for graceful shutdown before forcing QEMU to quit."`
 	HotplugPorts        int               `json:"hotplug_ports,omitempty" toml:"hotplug_ports" jsonschema:"Reserve at least this many PCIe hotplug root ports; defaults to the number of listed hotplug devices. Extra ports allow devices to be attached that the manifest does not describe."`
 }
 
@@ -217,8 +239,8 @@ type NetworkInput struct {
 }
 
 type ForwardPort struct {
-	Proto string `json:"proto" toml:"proto" jsonschema:"Transport protocol for the forwarded port."`
-	From  string `json:"from" toml:"from" jsonschema:"Forwarding direction: host or guest."`
+	Proto string `json:"proto,omitempty" toml:"proto" jsonschema:"Transport protocol for the forwarded port; defaults to tcp."`
+	From  string `json:"from,omitempty" toml:"from" jsonschema:"Forwarding direction: host or guest; defaults to host."`
 	Host  string `json:"host" toml:"host" jsonschema:"Host endpoint address in address:port form."`
 	Guest string `json:"guest" toml:"guest" jsonschema:"Guest endpoint address in address:port form."`
 }

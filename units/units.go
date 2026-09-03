@@ -111,8 +111,11 @@ func (b *Bytes) UnmarshalText(text []byte) error {
 	return nil
 }
 
+// MarshalJSON encodes the size as a unit-suffixed JSON string, like
+// MarshalText.
 func (b Bytes) MarshalJSON() ([]byte, error) { return json.Marshal(b.String()) }
 
+// UnmarshalJSON accepts a unit-suffixed JSON string such as "2GiB".
 func (b *Bytes) UnmarshalJSON(data []byte) error {
 	var value string
 	if err := json.Unmarshal(data, &value); err != nil {

@@ -16,8 +16,6 @@ const (
 	ResumeModeForce = launch.ResumeModeForce
 )
 
-type LaunchOptions = launch.Options
-
 func DefaultConfig() Config {
 	return Config{
 		Locker:              &fileLocker{},

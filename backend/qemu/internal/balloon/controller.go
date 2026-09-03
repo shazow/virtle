@@ -4,11 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/shazow/virtle/internal/manifest"
 	"log/slog"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/shazow/virtle/internal/manifest"
 )
 
 var (
@@ -86,7 +87,7 @@ func (c *controller) Run(ctx context.Context) error {
 		return err
 	}
 
-	ticker := time.NewTicker(c.pollInterval())
+	ticker := time.NewTicker(c.Config.PollInterval)
 	defer ticker.Stop()
 
 	failures := 0
@@ -232,10 +233,6 @@ func (c *controller) readSample(ctx context.Context, qomPath string) (info, gues
 		HasAvailableMemory:   ok,
 		LastUpdate:           stats.LastUpdate,
 	}, nil
-}
-
-func (c *controller) pollInterval() time.Duration {
-	return c.Config.PollInterval
 }
 
 // statsPollSeconds converts the poll interval for QEMU's integer-second

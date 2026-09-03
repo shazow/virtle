@@ -87,7 +87,7 @@
         },
         "shutdown_timeout": {
           "type": "string",
-          "description": "Duration to wait for graceful shutdown before forcing QEMU to quit",
+          "description": "Duration to wait for graceful shutdown before forcing QEMU to quit.",
           "default": "1m30s"
         },
         "hotplug_ports": {
@@ -395,11 +395,11 @@
               "properties": {
                 "proto": {
                   "type": "string",
-                  "description": "Transport protocol for the forwarded port."
+                  "description": "Transport protocol for the forwarded port; defaults to tcp."
                 },
                 "from": {
                   "type": "string",
-                  "description": "Forwarding direction: host or guest."
+                  "description": "Forwarding direction: host or guest; defaults to host."
                 },
                 "host": {
                   "type": "string",
@@ -411,8 +411,6 @@
                 }
               },
               "required": [
-                "proto",
-                "from",
                 "host",
                 "guest"
               ],
@@ -880,11 +878,11 @@
                   "properties": {
                     "proto": {
                       "type": "string",
-                      "description": "Transport protocol for the forwarded port."
+                      "description": "Transport protocol for the forwarded port; defaults to tcp."
                     },
                     "from": {
                       "type": "string",
-                      "description": "Forwarding direction: host or guest."
+                      "description": "Forwarding direction: host or guest; defaults to host."
                     },
                     "host": {
                       "type": "string",
@@ -896,8 +894,6 @@
                     }
                   },
                   "required": [
-                    "proto",
-                    "from",
                     "host",
                     "guest"
                   ],

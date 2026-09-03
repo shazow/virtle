@@ -33,6 +33,10 @@ type Spec struct {
 	Options  Options
 }
 
+// SuspendStatusSaved is the SuspendState.Status of a save whose VM state
+// stream completed; only saved states are resumable.
+const SuspendStatusSaved = "saved"
+
 type SuspendState struct {
 	// Version is the state version token stamped at suspend and compared
 	// on resume; only an exact match is resumable. Pre-marker states

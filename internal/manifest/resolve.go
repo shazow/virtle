@@ -253,25 +253,11 @@ func (m *Manifest) ResolvedRuns(cid int) ([]ResolvedRun, error) {
 	return runs, nil
 }
 
-func (m *Manifest) ResolvedNotifications() Notifications {
-	resolved := Notifications{
-		States: append([]string(nil), m.Notifications.States...),
-	}
-	if !m.Notifications.Command.IsZero() {
-		command := m.Notifications.Command
-		command.Args = append([]string(nil), command.Args...)
-		command.Env = append([]string(nil), command.Env...)
-		resolved.Command = command
-	}
-	return resolved
-}
-
 func (m *Manifest) ResolvedVolumes() []Volume {
 	volumes := make([]Volume, 0, len(m.Volumes))
 	for _, volume := range m.Volumes {
 		resolved := volume
 		resolved.ImagePath = m.resolvePath(volume.ImagePath)
-		resolved.MkfsExtraArgs = append([]string(nil), volume.MkfsExtraArgs...)
 		volumes = append(volumes, resolved)
 	}
 	return volumes

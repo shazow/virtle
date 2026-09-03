@@ -2,7 +2,6 @@ package launch
 
 import (
 	"context"
-	"os"
 	"os/exec"
 
 	"github.com/shazow/virtle/internal/executor"
@@ -26,9 +25,4 @@ type Runner interface {
 
 type SocketWaiter interface {
 	Wait(ctx context.Context, socketPaths []string) error
-}
-
-type PIDSignaler interface {
-	Exists(pid int) error
-	Signal(pid int, sig os.Signal) error
 }

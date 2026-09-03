@@ -10,6 +10,6 @@ Save `flake.nix` in a new directory, then launch the guest:
 nix run
 ```
 
-The VM has one CPU, 128 MiB of memory, no network devices, and an immutable
-root filesystem. It intentionally has no SSH or QEMU Guest Agent setup. At the
-`~ #` prompt, use `poweroff -f` to exit.
+The VM has eight vCPUs, 512 MiB of memory, no network devices, and an
+immutable root filesystem. It intentionally has no SSH or QEMU Guest Agent
+setup. At the `~ #` prompt, use `poweroff -f` to exit.

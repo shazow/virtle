@@ -8,17 +8,15 @@ import (
 	"strings"
 	"text/template"
 	"text/template/parse"
-	"time"
 
 	"github.com/shazow/virtle/units"
 )
 
 const (
-	defaultSSHReadySocket = ""
-	defaultVSockCIDStart  = 3
-	defaultVSockCIDEnd    = 65535
-	defaultVolumeFSType   = "ext4"
-	minAutoVolumeSize     = units.MiB(256)
+	defaultVSockCIDStart = 3
+	defaultVSockCIDEnd   = 65535
+	defaultVolumeFSType  = "ext4"
+	minAutoVolumeSize    = units.MiB(256)
 )
 
 var writeFileModePattern = regexp.MustCompile(`^0?[0-7]{3}$`)
@@ -26,10 +24,6 @@ var writeFileModePattern = regexp.MustCompile(`^0?[0-7]{3}$`)
 func (m *Manifest) applyDefaults() {
 	if m == nil {
 		return
-	}
-
-	if m.QEMU.SSHReady.SocketPath == "" {
-		m.QEMU.SSHReady.SocketPath = defaultSSHReadySocket
 	}
 
 	if m.VSock.CIDRange.Start == 0 {
@@ -112,7 +106,7 @@ func (m *Manifest) Validate() error {
 	}
 	hotplugIDs := make(map[string]int, len(m.Hotplug))
 	for i, hotplug := range m.Hotplug {
-		if err := validateHotplug(i, hotplug); err != nil {
+		if err := validateHotplug(fmt.Sprintf("manifest.hotplug[%d]", i), hotplug); err != nil {
 			return err
 		}
 		if previous, ok := hotplugIDs[hotplug.ID]; ok {
@@ -182,48 +176,48 @@ func (m *Manifest) Validate() error {
 		if volume.AutoCreate && volume.FSType != defaultVolumeFSType {
 			return fmt.Errorf("manifest.mounts.image[%d].image.fs must be %q when image.create is true", i, defaultVolumeFSType)
 		}
-		if volume.AutoCreate && len(volume.MkfsExtraArgs) > 0 {
-			return fmt.Errorf("manifest.mounts.image[%d].image.mkfs_extra_args is not supported when image.create is true", i)
-		}
 	}
 
 	return nil
 }
 
-func validateHotplug(index int, device HotplugDevice) error {
+// validateHotplug checks a resolved hotplug device. prefix names the device
+// in errors: the manifest key for declared devices, "hotplug" for ad-hoc
+// attachments that have no manifest position.
+func validateHotplug(prefix string, device HotplugDevice) error {
 	if device.ID == "" {
-		return fmt.Errorf("manifest.hotplug[%d].id is required", index)
+		return fmt.Errorf("%s.id is required", prefix)
 	}
 	if strings.ContainsAny(device.ID, `/\`) {
-		return fmt.Errorf("manifest.hotplug[%d].id must not contain path separators", index)
+		return fmt.Errorf("%s.id must not contain path separators", prefix)
 	}
 	switch device.Kind {
 	case HotplugKindVirtioFS:
 		if device.VirtioFS.Source == "" {
-			return fmt.Errorf("manifest.hotplug[%d].virtiofs.source is required", index)
+			return fmt.Errorf("%s.virtiofs.source is required", prefix)
 		}
 		if device.VirtioFS.SocketPath == "" {
-			return fmt.Errorf("manifest.hotplug[%d].virtiofs.socket is required", index)
+			return fmt.Errorf("%s.virtiofs.socket is required", prefix)
 		}
 		if device.VirtioFS.Bin == "" {
-			return fmt.Errorf("manifest.hotplug[%d].virtiofs.bin is required", index)
+			return fmt.Errorf("%s.virtiofs.bin is required", prefix)
 		}
 	case HotplugKindNet:
 		if device.Net.Backend != "user" {
-			return fmt.Errorf("manifest.hotplug[%d].net.backend must be user", index)
+			return fmt.Errorf("%s.net.backend must be user", prefix)
 		}
 		if device.Net.MAC == "" {
-			return fmt.Errorf("manifest.hotplug[%d].net.mac is required", index)
+			return fmt.Errorf("%s.net.mac is required", prefix)
 		}
 	case HotplugKindBlock:
 		if device.Block.ImagePath == "" {
-			return fmt.Errorf("manifest.hotplug[%d].block.image is required", index)
+			return fmt.Errorf("%s.block.image is required", prefix)
 		}
 		if !validImageFormat(device.Block.Format) {
-			return fmt.Errorf("manifest.hotplug[%d].block.format must be raw or qcow2", index)
+			return fmt.Errorf("%s.block.format must be raw or qcow2", prefix)
 		}
 	default:
-		return fmt.Errorf("manifest.hotplug[%d].kind is required", index)
+		return fmt.Errorf("%s.kind is required", prefix)
 	}
 	return nil
 }
@@ -309,13 +303,6 @@ func templateUsesBareWorkspace(node parse.Node) bool {
 		return len(node.Ident) == 1 && node.Ident[0] == "Workspace"
 	}
 	return false
-}
-
-func (m *Manifest) SSHRetryDelay(fallback time.Duration) time.Duration {
-	if m == nil {
-		return fallback
-	}
-	return m.SSH.RetryDelay
 }
 
 func validateWriteFiles(files WriteFiles) error {

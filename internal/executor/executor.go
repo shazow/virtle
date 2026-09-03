@@ -115,11 +115,21 @@ func (p *execCmdHandle) Name() string {
 	if p == nil || p.cmd == nil {
 		return ""
 	}
-	if len(p.cmd.Args) > 0 && p.cmd.Args[0] != "" {
-		return filepath.Base(p.cmd.Args[0])
+	return CommandName(p.cmd)
+}
+
+// CommandName returns the short display name for cmd used in logs and
+// errors: the base name of its first argument, else of its path, else
+// "command".
+func CommandName(cmd *exec.Cmd) string {
+	if cmd == nil {
+		return "command"
 	}
-	if p.cmd.Path != "" {
-		return filepath.Base(p.cmd.Path)
+	if len(cmd.Args) > 0 && cmd.Args[0] != "" {
+		return filepath.Base(cmd.Args[0])
+	}
+	if cmd.Path != "" {
+		return filepath.Base(cmd.Path)
 	}
 	return "command"
 }
@@ -188,18 +198,18 @@ type Renderer struct {
 }
 
 // New returns a Renderer that uses the current process environment for Env lookups.
-func New(context Context) (*Renderer, error) {
-	return NewWithEnviron(context, os.Environ())
+func New(values Context) (*Renderer, error) {
+	return NewWithEnviron(values, os.Environ())
 }
 
 // NewWithEnviron returns a Renderer that uses environ for Env lookups.
-func NewWithEnviron(context Context, environ []string) (*Renderer, error) {
-	env, err := contextEnv(context)
+func NewWithEnviron(values Context, environ []string) (*Renderer, error) {
+	env, err := contextEnv(values)
 	if err != nil {
 		return nil, err
 	}
-	data := make(map[string]any, len(context)+1)
-	for key, value := range context {
+	data := make(map[string]any, len(values)+1)
+	for key, value := range values {
 		data[key] = value
 	}
 	data["Env"] = environMap(environ)
@@ -240,20 +250,20 @@ func (r *Renderer) Env() []string {
 	return append([]string(nil), r.env...)
 }
 
-func contextEnv(context Context) ([]string, error) {
-	if len(context) == 0 {
+func contextEnv(values Context) ([]string, error) {
+	if len(values) == 0 {
 		return nil, nil
 	}
-	keys := make([]string, 0, len(context))
-	for key := range context {
+	keys := make([]string, 0, len(values))
+	for key := range values {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
 
-	values := make(map[string]string, len(keys))
+	envValues := make(map[string]string, len(keys))
 	sources := make(map[string]string, len(keys))
 	for _, key := range keys {
-		value, ok := scalarEnvValue(context[key])
+		value, ok := scalarEnvValue(values[key])
 		if !ok {
 			continue
 		}
@@ -265,18 +275,18 @@ func contextEnv(context Context) ([]string, error) {
 			return nil, fmt.Errorf("exec template context keys %q and %q both produce environment name %q", source, key, envKey)
 		}
 		sources[envKey] = key
-		values[envKey] = value
+		envValues[envKey] = value
 	}
 
 	keys = keys[:0]
-	for key := range values {
+	for key := range envValues {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
 
 	env := make([]string, 0, len(keys))
 	for _, key := range keys {
-		env = append(env, key+"="+values[key])
+		env = append(env, key+"="+envValues[key])
 	}
 	return env, nil
 }

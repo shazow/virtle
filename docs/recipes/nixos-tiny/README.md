@@ -3,7 +3,7 @@
 This example explores how close a genuine NixOS stage-2 system can get to the
 Alpine console example. Not recommended for production!
 
-The flake is a fair bit larger and more complex, but that's that's what it
+The flake is a fair bit larger and more complex, but that's what it
 takes to turn off a bunch of things. There's room for more reduction!
 
 The accompanying [flake.nix](flake.nix) builds a direct

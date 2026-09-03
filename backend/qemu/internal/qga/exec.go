@@ -5,18 +5,41 @@ import (
 	"encoding/base64"
 	"fmt"
 	"time"
+
+	shellquote "github.com/kballard/go-shellquote"
 )
 
 const (
-	// InternalCommandPathEnv is the default PATH used to find Virtle's internal
-	// guest commands. It covers common distros such as BusyBox/Alpine,
-	// Debian/Ubuntu, and NixOS/Guix, whose service PATH may omit system commands.
-	// TODO: Add some way for users to bring their own path, or better yet: preload guest's default PATH and prefix it here.
+	// InternalCommandPathEnv is the PATH virtle supplies for its own guest
+	// commands (chmod, chown, install, mount, ps, ...). QGA resolves a relative
+	// command against the PATH in the supplied environment, falling back to the
+	// agent's own PATH only when the environment carries none, and the agent's
+	// service PATH often omits system directories. The list covers
+	// BusyBox/Alpine, Debian/Ubuntu, and NixOS/Guix layouts. User commands
+	// choose their own PATH through vm.GuestCmd.Env.
 	InternalCommandPathEnv = "PATH=/bin:/usr/bin:/run/current-system/sw/bin:/run/current-system/profile/bin"
 
 	// execPollDelay is the delay between exit-status polls.
 	execPollDelay = 250 * time.Millisecond
 )
+
+// ShellCommand lowers a working directory and environment onto a /bin/sh
+// wrapper: guest-exec has no working directory, and its env parameter
+// replaces rather than augments the inherited environment. Without dir or
+// env it returns path and args unchanged.
+func ShellCommand(path string, args, env []string, dir string) (string, []string) {
+	if dir == "" && len(env) == 0 {
+		return path, args
+	}
+	script := "exec " + shellquote.Join(append([]string{path}, args...)...)
+	if dir != "" {
+		script = "cd " + shellquote.Join(dir) + " && " + script
+	}
+	if len(env) > 0 {
+		script = "export " + shellquote.Join(env...) + " && " + script
+	}
+	return "/bin/sh", []string{"-c", script}
+}
 
 // ExecWait configures guest command execution. The command deadline is
 // carried by ctx; RunCommandStatus polls until the command exits or ctx ends.

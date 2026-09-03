@@ -33,7 +33,7 @@ type Core struct {
 	control *control.Server
 }
 
-func New(config RuntimeConfig) *Core {
+func New(config Config) *Core {
 	state := newState(control.RuntimeStarting)
 	return &Core{
 		manifest:         config.Manifest,
@@ -75,16 +75,16 @@ func (r *Core) StartControl(ctx context.Context, handlers control.Handlers) (*co
 	if err != nil {
 		return nil, err
 	}
-	controlServer, err := StartControl(ctx, r.paths.ControlSocket, router, r.logger)
+	controlServer, err := startControl(ctx, r.paths.ControlSocket, router, r.logger)
 	if err == nil {
 		r.control = controlServer
 	}
 	return controlServer, err
 }
 
-func (r *Core) Kill(ctx context.Context, req control.KillRequest) (control.KillResponse, error) {
-	_ = ctx
-	_ = req
+// Kill hard-stops QEMU and tears the runtime down. It ignores ctx: a hard
+// stop must never be cut short by the requesting peer disconnecting.
+func (r *Core) Kill(_ context.Context, _ control.KillRequest) (control.KillResponse, error) {
 	var err error
 	if r.processes != nil && r.processes.QEMU() != nil {
 		err = r.processes.QEMU().KillAndWait()
@@ -92,17 +92,14 @@ func (r *Core) Kill(ctx context.Context, req control.KillRequest) (control.KillR
 	return control.KillResponse{}, errors.Join(err, r.Shutdown(context.Background()))
 }
 
-func (r *Core) ShutdownRPC(ctx context.Context, req control.ShutdownRequest) (control.ShutdownResponse, error) {
-	_ = req
+func (r *Core) ShutdownRPC(ctx context.Context, _ control.ShutdownRequest) (control.ShutdownResponse, error) {
 	return control.ShutdownResponse{}, r.Shutdown(ctx)
 }
 
 func (r *Core) Shutdown(ctx context.Context) error {
 	return r.closer.Close(ctx, closeActions{
-		shutdownResources: shutdownResources{
-			Processes: r.processes,
-			QMP:       r.qmp,
-		},
+		Processes:        r.processes,
+		QMP:              r.qmp,
 		WriteBack:        r.writeBack,
 		WriteBackTimeout: r.writeBackTimeout,
 		SkipWriteBack:    r.savedSuspend.Load(),
@@ -111,13 +108,11 @@ func (r *Core) Shutdown(ctx context.Context) error {
 	})
 }
 
-func (r *Core) Wait(ctx context.Context, req control.WaitRequest) (control.WaitResponse, error) {
-	_ = req
+func (r *Core) Wait(ctx context.Context, _ control.WaitRequest) (control.WaitResponse, error) {
 	return control.WaitResponse{}, r.state.Wait(ctx)
 }
 
-func (r *Core) Status(ctx context.Context, req control.StatusRequest) (control.StatusResponse, error) {
-	_ = ctx
+func (r *Core) Status(_ context.Context, _ control.StatusRequest) (control.StatusResponse, error) {
 	pid := 0
 	if r.processes != nil && r.processes.QEMU() != nil {
 		pid = r.processes.QEMU().PID()

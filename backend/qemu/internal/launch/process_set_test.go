@@ -8,7 +8,7 @@ import (
 	"github.com/shazow/virtle/internal/executor/executortest"
 )
 
-func TestProcessSetWatchersAndVMWatchers(t *testing.T) {
+func TestProcessSetWatchersIncludeQEMUAndRuns(t *testing.T) {
 	qemu := (&executortest.Process{}).Process()
 	run := (&executortest.Process{}).Process()
 	processes := NewProcessSet()
@@ -19,13 +19,8 @@ func TestProcessSetWatchersAndVMWatchers(t *testing.T) {
 	if got, want := len(watchers.Processes()), 2; got != want {
 		t.Fatalf("unexpected watcher count: got %d want %d", got, want)
 	}
-	vmWatcherGroup := processes.VMWatchers()
-	vmWatchers := vmWatcherGroup.Processes()
-	if got, want := len(vmWatchers), 1; got != want {
-		t.Fatalf("unexpected vm watcher count: got %d want %d", got, want)
-	}
-	if vmWatchers[0] != run {
-		t.Fatalf("vm watchers should exclude qemu process")
+	if processes.QEMU() != qemu {
+		t.Fatal("expected the qemu process to be tracked separately")
 	}
 }
 
@@ -72,8 +67,6 @@ func TestProcessSetConcurrentWatchersAndMutation(t *testing.T) {
 				_ = processes.QEMU()
 				watchers := processes.Watchers()
 				_ = len(watchers.Processes())
-				vmWatchers := processes.VMWatchers()
-				_ = len(vmWatchers.Processes())
 				processes.Remove(process)
 			}
 		}()

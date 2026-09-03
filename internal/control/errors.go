@@ -6,6 +6,11 @@ import (
 	"syscall"
 )
 
+// InvalidParams reports request params that do not satisfy the method.
+func InvalidParams(message string) error {
+	return &RPCError{Code: ErrInvalidParams, Message: message}
+}
+
 // FailedPrecondition wraps err as an RPC failed-precondition error.
 func FailedPrecondition(err error) error {
 	return &RPCError{Code: ErrFailedPrecondition, Message: err.Error()}

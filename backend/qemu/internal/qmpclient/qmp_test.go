@@ -378,3 +378,26 @@ func assertQMPCommand(t *testing.T, commands <-chan map[string]any, want string)
 	}
 	return nil
 }
+
+func TestWithRawReportsContextCancellation(t *testing.T) {
+	release := make(chan struct{})
+	client, commands, cleanup := newTestQMPClient(t, func(map[string]any) map[string]any {
+		<-release
+		return nil
+	})
+	defer cleanup()
+	assertHandshakeCommand(t, commands)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- client.WithRaw(ctx, func(monitor *rawQMP.Monitor) error { return monitor.Stop() })
+	}()
+	assertQMPCommand(t, commands, "stop")
+	cancel()
+	err := <-done
+	close(release)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("WithRaw after cancellation: got %v, want %v", err, context.Canceled)
+	}
+}

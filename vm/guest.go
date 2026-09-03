@@ -9,10 +9,10 @@ import (
 	"io/fs"
 )
 
-// Guest performs operations inside a running VM. Implemented by the
-// host-side client in ./guest (virtle-native daemon) and by backend/qemu's
-// QGA adapter. Shapes are os/exec- and io/fs-flavored, never protocol-
-// flavored. Implementations must be safe for concurrent use.
+// Guest performs operations inside a running VM. Implemented today by
+// backend/qemu's QEMU Guest Agent adapter; a virtle-native guest daemon
+// client is planned. Shapes are os/exec- and io/fs-flavored, never
+// protocol-flavored. Implementations must be safe for concurrent use.
 //
 // Daemon-only features (file-tree copy, streaming exec, file watching, ...)
 // are GuestWithX extension interfaces discovered by type assertion; they
@@ -74,7 +74,8 @@ func Output(ctx context.Context, g Guest, cmd *GuestCmd) ([]byte, error) {
 // Both directions speak the same shape (the Docker CopyToContainer /
 // CopyFromContainer model), so a guest->guest copy is a direct pipe with no
 // host filesystem and no buffering, and transforms compose as ordinary
-// io.Reader middleware. Implemented by the ./guest daemon client.
+// io.Reader middleware. No in-tree implementation exists yet; it is
+// reserved for the planned guest daemon client.
 type GuestWithCopy interface {
 	CopyToGuest(ctx context.Context, guestPath string, archive io.Reader, opts CopyOptions) error
 	CopyFromGuest(ctx context.Context, guestPath string) (io.ReadCloser, error)

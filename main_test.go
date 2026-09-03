@@ -14,6 +14,8 @@ import (
 	"testing"
 
 	"github.com/shazow/virtle/internal/control"
+	"github.com/shazow/virtle/internal/manifest"
+	manifestapi "github.com/shazow/virtle/manifest"
 )
 
 func TestOptionsDeclaresCommands(t *testing.T) {
@@ -251,7 +253,9 @@ func TestVerboseLoggingUsesDefaultFormat(t *testing.T) {
 }
 
 func TestParserAcceptsSharedOptionsBeforeOrAfterSubcommand(t *testing.T) {
-	manifestPath := filepath.Join(t.TempDir(), "manifest.toml")
+	// The path only needs to be absent so every placement fails at the same
+	// manifest-open step.
+	manifestPath := "/nonexistent/virtle-test/manifest.toml"
 	tests := []struct {
 		name string
 		args []string
@@ -520,9 +524,13 @@ func TestLoadLaunchManifestResolvesWorkingDirAgainstProcessCWD(t *testing.T) {
 		t.Fatalf("get cwd after chdir: %v", err)
 	}
 
-	loaded, err := loadLaunchManifest(manifestPath, slog.New(slog.DiscardHandler))
+	doc, _, err := loadManifestDocument(manifestPath)
 	if err != nil {
-		t.Fatalf("load launch manifest: %v", err)
+		t.Fatalf("load manifest document: %v", err)
+	}
+	loaded, err := doc.ManifestWithOptions(manifest.ResolveOptions{Logger: slog.New(slog.DiscardHandler)})
+	if err != nil {
+		t.Fatalf("resolve launch manifest: %v", err)
 	}
 	if loaded.Paths.WorkingDir != wantDir {
 		t.Fatalf("unexpected working dir: got %q want %q", loaded.Paths.WorkingDir, wantDir)
@@ -553,7 +561,11 @@ func TestLoadManifestLeavesReadOnlyManifestIntact(t *testing.T) {
 	if _, err := loadManifest(manifestPath); err != nil {
 		t.Fatalf("load manifest: %v", err)
 	}
-	if _, err := loadLaunchManifest(manifestPath, slog.New(slog.DiscardHandler)); err != nil {
+	doc, _, err := loadManifestDocument(manifestPath)
+	if err != nil {
+		t.Fatalf("load manifest document: %v", err)
+	}
+	if _, _, err := manifestapi.LoadDocument(doc); err != nil {
 		t.Fatalf("load launch manifest: %v", err)
 	}
 

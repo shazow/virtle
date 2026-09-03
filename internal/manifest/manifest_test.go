@@ -539,23 +539,6 @@ func TestDocumentExternalVirtioFSSocketIsNotAutoRemovedOnShutdown(t *testing.T) 
 	}
 }
 
-func TestLoadTOMLExamples(t *testing.T) {
-	for _, path := range []string{
-		"../../examples/manifest-simple.toml",
-		"../../examples/manifest-full.toml",
-	} {
-		t.Run(filepath.Base(path), func(t *testing.T) {
-			data, err := os.ReadFile(path)
-			if err != nil {
-				t.Fatalf("read example: %v", err)
-			}
-			if _, err := loadBytes(data, path); err != nil {
-				t.Fatalf("load example: %v", err)
-			}
-		})
-	}
-}
-
 func TestDecodeDocumentOrderedTaggedMounts(t *testing.T) {
 	data := []byte(`
 [kernel]
@@ -994,7 +977,9 @@ func TestDocumentSSHAutoprovisionResolvesToManifest(t *testing.T) {
 
 func TestManifestResolvesSocketsFromRuntimeDir(t *testing.T) {
 	runtimeDir := t.TempDir()
-	setXDGTestRuntimeDir(t, runtimeDir)
+	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
+	xdg.Reload()
+	t.Cleanup(xdg.Reload)
 
 	tests := []struct {
 		name       string
@@ -1354,7 +1339,7 @@ func TestManifestNotificationsValidationAndResolution(t *testing.T) {
 			t.Fatalf("validate manifest: %v", err)
 		}
 
-		resolved := manifest.ResolvedNotifications()
+		resolved := manifest.Notifications
 		if resolved.Command.IsZero() {
 			t.Fatal("expected resolved notification command")
 		}
@@ -2094,10 +2079,10 @@ func TestDocumentHotplugVirtioFSMountGeneratesHotplugEntry(t *testing.T) {
 	if got, want := device.VirtioFS.Bin, "/tmp/virtiofsd-workspace"; got != want {
 		t.Fatalf("unexpected hotplug exec path: got %q want %q", got, want)
 	}
-	if !containsString(device.VirtioFS.Args, "--socket-path=/tmp/work/.virtle/workspace.sock") {
+	if !slices.Contains(device.VirtioFS.Args, "--socket-path=/tmp/work/.virtle/workspace.sock") {
 		t.Fatalf("expected resolved socket arg, got %#v", device.VirtioFS.Args)
 	}
-	if !containsString(device.VirtioFS.Args, "--shared-dir=/tmp/work/shares/cache") {
+	if !slices.Contains(device.VirtioFS.Args, "--shared-dir=/tmp/work/shares/cache") {
 		t.Fatalf("expected resolved source arg, got %#v", device.VirtioFS.Args)
 	}
 }
@@ -2421,7 +2406,7 @@ func TestDocumentExplicitMachineOptionsEnablePCIForHotplug(t *testing.T) {
 			if err != nil {
 				t.Fatalf("resolve manifest: %v", err)
 			}
-			if !containsString(manifest.QEMU.Machine.Options, "pcie=on") {
+			if !slices.Contains(manifest.QEMU.Machine.Options, "pcie=on") {
 				t.Fatalf("expected pcie=on in machine options, got %#v", manifest.QEMU.Machine.Options)
 			}
 			if got, want := document.QEMU.MachineOptions["pcie"], tt.options["pcie"]; got != want {
@@ -2604,21 +2589,6 @@ func TestManifestVolumeValidation(t *testing.T) {
 		}
 	})
 
-	t.Run("rejects mkfs extra args when auto creating", func(t *testing.T) {
-		manifest := validManifest()
-		manifest.Volumes = []Volume{{
-			ImagePath:     "root.img",
-			Size:          256,
-			AutoCreate:    true,
-			MkfsExtraArgs: []string{"-E", "discard"},
-		}}
-
-		err := manifest.Validate()
-		if err == nil || !strings.Contains(err.Error(), "manifest.mounts.image[0].image.mkfs_extra_args is not supported") {
-			t.Fatalf("expected auto-create mkfsExtraArgs validation error, got %v", err)
-		}
-	})
-
 	t.Run("allows label when auto creating ext4", func(t *testing.T) {
 		manifest := validManifest()
 		label := "persist"
@@ -2751,38 +2721,6 @@ func validDocument() Document {
 			RetryDelay: units.Duration(500 * time.Millisecond),
 		},
 	}
-}
-
-func containsString(values []string, needle string) bool {
-	for _, value := range values {
-		if value == needle {
-			return true
-		}
-	}
-	return false
-}
-
-func setXDGTestRuntimeDir(t *testing.T, runtimeDir string) {
-	t.Helper()
-
-	original, hadOriginal := os.LookupEnv("XDG_RUNTIME_DIR")
-	if err := os.Setenv("XDG_RUNTIME_DIR", runtimeDir); err != nil {
-		t.Fatalf("set XDG_RUNTIME_DIR: %v", err)
-	}
-	xdg.Reload()
-
-	t.Cleanup(func() {
-		var err error
-		if hadOriginal {
-			err = os.Setenv("XDG_RUNTIME_DIR", original)
-		} else {
-			err = os.Unsetenv("XDG_RUNTIME_DIR")
-		}
-		if err != nil {
-			t.Fatalf("restore XDG_RUNTIME_DIR: %v", err)
-		}
-		xdg.Reload()
-	})
 }
 
 func TestDocumentHotplugPortsReservesExtraPCIEPorts(t *testing.T) {

@@ -1,5 +1,11 @@
 // Package session implements the virtle CLI foreground loop over the public
 // backend machine contract.
+//
+// It is an implementation detail of the virtle command: Run takes the
+// module-internal resolved manifest, so the package is not callable from
+// outside this module and its API carries no compatibility promise. It lives
+// under backend/qemu rather than internal/ only because it needs QEMU
+// launch helpers that the root command cannot import.
 package session
 
 import (
@@ -17,6 +23,7 @@ import (
 
 	"github.com/shazow/virtle/backend"
 	"github.com/shazow/virtle/backend/qemu/internal/launch"
+	"github.com/shazow/virtle/backend/qemu/internal/qga"
 	"github.com/shazow/virtle/backend/qemu/internal/sessionbridge"
 	"github.com/shazow/virtle/internal/executor"
 	"github.com/shazow/virtle/internal/manifest"
@@ -31,19 +38,26 @@ const (
 	sshReadyToken          = "SSH-READY"
 	guestShellPath         = "/bin/sh"
 	sshRetryOutputDelay    = 250 * time.Millisecond
-	guestCommandPathEnv    = "PATH=/bin:/usr/bin:/run/current-system/sw/bin:/run/current-system/profile/bin"
 )
 
 // Options configures a CLI session.
 type Options struct {
-	Resume        string
-	SSH           bool
+	// Resume selects how saved suspend state is treated: "auto" (the default
+	// when empty) resumes when a save exists, "force" requires one, and "no"
+	// always boots fresh.
+	Resume string
+	// SSH runs the manifest's ssh.exec command in the foreground once the
+	// guest reports readiness, instead of waiting for the machine to exit.
+	SSH bool
+	// RemoteCommand is appended to the SSH command; it requires SSH.
 	RemoteCommand []string
-	Logger        *slog.Logger
-	Stdin         io.Reader
-	Stdout        io.Writer
-	Stderr        io.Writer
-	runner        launch.Runner
+	// Logger receives session and SSH lifecycle logs; nil discards them.
+	Logger *slog.Logger
+	// Stdin, Stdout, and Stderr back the SSH session and the connection
+	// hint. Nil selects the process standard streams.
+	Stdin  io.Reader
+	Stdout io.Writer
+	Stderr io.Writer
 }
 
 // Run starts a machine and owns it until exit, suspend, or signal shutdown.
@@ -65,7 +79,7 @@ func Run(ctx context.Context, b backend.Backend, spec *vm.Spec, mf *manifest.Man
 	if opts.SSH && len(mf.SSH.Argv) == 0 {
 		return fmt.Errorf("--ssh requires a non-empty manifest.ssh.exec")
 	}
-	if err := validateResumeMode(opts.Resume); err != nil {
+	if _, err := launch.NormalizeResumeMode(launch.ResumeMode(opts.Resume)); err != nil {
 		return err
 	}
 
@@ -86,7 +100,7 @@ func Run(ctx context.Context, b backend.Backend, spec *vm.Spec, mf *manifest.Man
 			if launch.IsSavedSuspendExit(err) {
 				return nil
 			}
-			return errors.Join(err, m.Shutdown(context.WithoutCancel(runCtx)))
+			return shutdownAfter(runCtx, m, err)
 		}
 		sshLogger.Info("guest is ready")
 	}
@@ -122,11 +136,18 @@ func start(ctx context.Context, b backend.Backend, spec *vm.Spec, mf *manifest.M
 	return m, true, err
 }
 
-func validateResumeMode(mode string) error {
-	if mode == "" || mode == "no" || mode == "auto" || mode == "force" {
-		return nil
+// shutdownAfter tears m down after err, uncancelably, and reports both.
+func shutdownAfter(ctx context.Context, m backend.Machine, err error) error {
+	return errors.Join(err, m.Shutdown(context.WithoutCancel(ctx)))
+}
+
+// afterSuspend reports a suspend outcome. A saved-state exit needs no
+// teardown (the machine is already down); any other failure shuts m down.
+func afterSuspend(ctx context.Context, m backend.Machine, err error) error {
+	if err == nil || launch.IsSavedSuspendExit(err) {
+		return err
 	}
-	return fmt.Errorf("unsupported resume mode %q", mode)
+	return shutdownAfter(ctx, m, err)
 }
 
 func waitReady(ctx context.Context, m backend.Machine, bridge *sessionbridge.Bridge, signals <-chan os.Signal, logger *slog.Logger) error {
@@ -180,25 +201,25 @@ func foreground(ctx context.Context, m backend.Machine, bridge *sessionbridge.Br
 		if launch.IsSavedSuspendExit(err) {
 			return err
 		}
-		return errors.Join(err, m.Shutdown(context.WithoutCancel(ctx)))
+		return shutdownAfter(ctx, m, err)
 	}
 
 	if reporter, ok := m.(backend.StatusReporter); ok && len(mf.SSH.Argv) > 0 {
 		status, err := reporter.Status(ctx)
 		if err != nil {
-			return errors.Join(err, m.Shutdown(context.WithoutCancel(ctx)))
+			return shutdownAfter(ctx, m, err)
 		}
 		hint, err := launch.BuildSSHCommandHint(mf, status.CID)
 		if err != nil {
 			logger.Warn("ssh command hint template failed", "err", err)
 		} else if hint != "" {
 			if _, err := fmt.Fprintf(optionWriter(opts.Stdout, os.Stdout), "connect with ssh: %s\n", hint); err != nil {
-				return errors.Join(fmt.Errorf("write ssh command hint: %w", err), m.Shutdown(context.WithoutCancel(ctx)))
+				return shutdownAfter(ctx, m, fmt.Errorf("write ssh command hint: %w", err))
 			}
 		}
 	}
 	if err := bridge.Commit(); err != nil {
-		return errors.Join(err, m.Shutdown(context.WithoutCancel(ctx)))
+		return shutdownAfter(ctx, m, err)
 	}
 	return waitForMachine(ctx, m, bridge, signals, logger)
 }
@@ -209,22 +230,16 @@ func waitForMachine(ctx context.Context, m backend.Machine, bridge *sessionbridg
 		case <-m.Done():
 			return m.Err()
 		case <-bridge.Requests():
-			if err := bridge.HandleSuspend(ctx); err != nil {
-				return errors.Join(err, m.Shutdown(context.WithoutCancel(ctx)))
-			}
-			return nil
+			return afterSuspend(ctx, m, bridge.HandleSuspend(ctx))
 		case sig := <-signals:
 			switch sig {
 			case syscall.SIGUSR1:
 				logStatus(ctx, m, logger)
 			case syscall.SIGTSTP:
-				if err := suspend(ctx, m, bridge); err != nil {
-					return errors.Join(err, m.Shutdown(context.WithoutCancel(ctx)))
-				}
-				return nil
+				return afterSuspend(ctx, m, suspend(ctx, m, bridge))
 			}
 		case <-ctx.Done():
-			return errors.Join(context.Cause(ctx), m.Shutdown(context.WithoutCancel(ctx)))
+			return shutdownAfter(ctx, m, context.Cause(ctx))
 		}
 	}
 }
@@ -238,10 +253,7 @@ func runSSH(ctx context.Context, m backend.Machine, bridge *sessionbridge.Bridge
 	if err != nil {
 		return err
 	}
-	runner := opts.runner
-	if runner == nil {
-		runner = &executor.Runner{Logger: logger}
-	}
+	runner := &executor.Runner{Logger: logger}
 	plan := &launch.Plan{Manifest: mf, CID: status.CID, RemoteCommand: append([]string(nil), opts.RemoteCommand...)}
 	return launch.RunSSHSession(ctx, launch.SSHSession{
 		Plan:                   plan,
@@ -354,7 +366,7 @@ func installSSHKey(ctx context.Context, m backend.Machine, mf *manifest.Manifest
 	run := func(ctx context.Context, subject string, path string, args []string) error {
 		commandCtx, cancel := mf.GuestCommandContext(ctx)
 		defer cancel()
-		if err := guest.Run(commandCtx, &vm.GuestCmd{Path: path, Args: args, Env: []string{guestCommandPathEnv}}); err != nil {
+		if err := guest.Run(commandCtx, &vm.GuestCmd{Path: path, Args: args, Env: []string{qga.InternalCommandPathEnv}}); err != nil {
 			return fmt.Errorf("%s %q: %w", subject, plan.AuthorizedKeysPath, err)
 		}
 		return nil
@@ -431,7 +443,11 @@ func ExitCode(err error) int {
 	}
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
-		return exitErr.ExitCode()
+		// ExitCode is -1 for a signal-killed child; fall through to the
+		// generic failure code rather than exiting 255.
+		if code := exitErr.ExitCode(); code >= 0 {
+			return code
+		}
 	}
 	if errors.Is(err, context.Canceled) {
 		return 130

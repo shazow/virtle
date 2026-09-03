@@ -5,7 +5,7 @@ kernel, initrd, and virtle manifest. The guest includes public-key-only
 OpenSSH, QEMU Guest Agent, and the virtio drivers required by virtle's
 `microvm` machine.
 
-It's simpler and more stand-alone version of what
+It's a simpler and more stand-alone version of what
 [agentspace](https://github.com/shazow/agentspace) does.
 
 Save `flake.nix` in a new directory, then build the image and launch into the

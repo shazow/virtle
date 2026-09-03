@@ -8,7 +8,6 @@ import (
 	"io"
 	"io/fs"
 
-	shellquote "github.com/kballard/go-shellquote"
 	"github.com/shazow/virtle/backend/qemu/internal/qga"
 	"github.com/shazow/virtle/vm"
 )
@@ -36,22 +35,7 @@ func (g *qgaGuest) Run(ctx context.Context, cmd *vm.GuestCmd) error {
 	if cmd.Stdin != nil {
 		return fmt.Errorf("guest command stdin over QGA: %w", errors.ErrUnsupported)
 	}
-	path, args := cmd.Path, cmd.Args
-	if cmd.Dir != "" || len(cmd.Env) > 0 {
-		// QGA's guest-exec has no working directory, and its env parameter
-		// replaces rather than augments the inherited environment. Lower both
-		// operations onto a shell wrapper to preserve GuestCmd's semantics.
-		script := ""
-		if cmd.Dir != "" {
-			script += "cd " + shellquote.Join(cmd.Dir) + " && "
-		}
-		script += "exec " + shellquote.Join(append([]string{cmd.Path}, cmd.Args...)...)
-		wrapped := []string{"-c", script}
-		if len(cmd.Env) > 0 {
-			wrapped = []string{"-c", "export " + shellquote.Join(cmd.Env...) + " && " + script}
-		}
-		path, args = "/bin/sh", wrapped
-	}
+	path, args := qga.ShellCommand(cmd.Path, cmd.Args, cmd.Env, cmd.Dir)
 
 	client, err := g.vm.DialGuestAgent(ctx)
 	if err != nil {

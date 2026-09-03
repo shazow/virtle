@@ -32,6 +32,32 @@ func TestBackend(t *testing.T, start func(t *testing.T) (backend.Backend, *vm.Sp
 		if err := m.Err(); err != nil {
 			t.Fatalf("Err: %v", err)
 		}
+		if err := m.Wait(context.Background()); err != nil {
+			t.Fatalf("Wait after exit: %v", err)
+		}
+		if err := m.Shutdown(context.Background()); err != nil {
+			t.Fatalf("repeated Shutdown: %v", err)
+		}
+	})
+
+	t.Run("kill", func(t *testing.T) {
+		m := startMachine(t)
+		if err := m.Kill(); err != nil {
+			t.Fatalf("Kill: %v", err)
+		}
+		<-m.Done()
+		// Kill may legitimately record a non-nil exit; Wait must agree with Err.
+		if got, want := m.Wait(context.Background()), m.Err(); !errors.Is(got, want) {
+			t.Fatalf("Wait after Kill = %v, want Err %v", got, want)
+		}
+	})
+
+	t.Run("shutdown_expired_context", func(t *testing.T) {
+		m := startMachine(t)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		_ = m.Shutdown(ctx) // must fall back to a hard stop
+		<-m.Done()
 	})
 
 	t.Run("guest", func(t *testing.T) {

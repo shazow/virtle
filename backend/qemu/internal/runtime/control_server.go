@@ -7,7 +7,9 @@ import (
 	"github.com/shazow/virtle/internal/control"
 )
 
-func StartControl(ctx context.Context, socketPath string, router *control.Router, logger *slog.Logger) (*control.Server, error) {
+// startControl serves the control socket at socketPath; an empty path
+// disables the socket and returns a nil server.
+func startControl(ctx context.Context, socketPath string, router *control.Router, logger *slog.Logger) (*control.Server, error) {
 	if socketPath == "" {
 		return nil, nil
 	}

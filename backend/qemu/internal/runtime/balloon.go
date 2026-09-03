@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/shazow/virtle/internal/manifest"
 
 	rawQMP "github.com/digitalocean/go-qemu/qmp/raw"
 	"github.com/shazow/virtle/internal/control"
+	"github.com/shazow/virtle/internal/manifest"
 )
 
 var errBalloonNotConfigured = errors.New("balloon device is not configured")

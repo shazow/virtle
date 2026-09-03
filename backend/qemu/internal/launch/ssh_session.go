@@ -65,7 +65,7 @@ func RunSSHSession(ctx context.Context, session SSHSession) error {
 		}
 		cmd, err := buildSSHCommandWithArgv(launchManifest, plan.CID, plan.RemoteCommand, argv)
 		if err != nil {
-			return wrapStage("active session", err)
+			return WrapStage("active session", err)
 		}
 		sessionLogger.Info("ssh command", "command", shellquote.Join(cmd.Args...))
 		cmd.Stdin = session.Stdin
@@ -73,7 +73,7 @@ func RunSSHSession(ctx context.Context, session SSHSession) error {
 		cmd.Stderr = stderr
 		started, err := session.Runner.Start(cmd)
 		if err != nil {
-			return wrapStage("active session", err)
+			return WrapStage("active session", err)
 		}
 		watchers := executor.Group{}
 		if session.Watchers != nil {
@@ -88,7 +88,7 @@ func RunSSHSession(ctx context.Context, session SSHSession) error {
 		if session.Established != nil {
 			if err := session.Established(); err != nil {
 				_ = started.Stop(context.Background())
-				return wrapStage("active session", err)
+				return WrapStage("active session", err)
 			}
 		}
 
@@ -98,7 +98,8 @@ func RunSSHSession(ctx context.Context, session SSHSession) error {
 			stderr.Flush()
 			return nil
 		}
-		if sshtools.ClassifyFailure(err, stderrText) == sshtools.FailureTransient {
+		failure := sshtools.ClassifyFailure(err, stderrText)
+		if failure == sshtools.FailureTransient {
 			stderr.Suppress()
 			retryLog.Log(err, stderrText)
 			if session.RemoveProcess != nil {
@@ -111,7 +112,7 @@ func RunSSHSession(ctx context.Context, session SSHSession) error {
 			}
 			continue
 		}
-		if launchManifest.SSH.Autoprovision && !provisioned && sshtools.ClassifyFailure(err, stderrText) == sshtools.FailureAuthentication {
+		if launchManifest.SSH.Autoprovision && !provisioned && failure == sshtools.FailureAuthentication {
 			stderr.Suppress()
 			if session.RemoveProcess != nil {
 				session.RemoveProcess(started)
@@ -119,7 +120,7 @@ func RunSSHSession(ctx context.Context, session SSHSession) error {
 			sessionLogger.Info("ssh authentication failed; autoprovisioning a key", "state_dir", launchManifest.ResolvedPersistenceStateDir(), "user", launchManifest.SSH.User)
 			key, keyErr := session.EnsureKey()
 			if keyErr != nil {
-				return wrapStage("ssh autoprovision", keyErr)
+				return WrapStage("ssh autoprovision", keyErr)
 			}
 			if installErr := session.InstallKey(ctx, key, watchers); installErr != nil {
 				return installErr

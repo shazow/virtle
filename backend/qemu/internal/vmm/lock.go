@@ -33,11 +33,6 @@ func (l *fileLocker) Acquire(path string) (launch.Lock, error) {
 		return nil, fmt.Errorf("reset lock %q: %w", path, err)
 	}
 
-	if _, err := file.Seek(0, 0); err != nil {
-		file.Close()
-		return nil, fmt.Errorf("seek lock %q: %w", path, err)
-	}
-
 	if _, err := file.WriteString(strconv.Itoa(os.Getpid()) + "\n"); err != nil {
 		file.Close()
 		return nil, fmt.Errorf("write lock %q: %w", path, err)

@@ -47,47 +47,80 @@ func (f managerHotplugFeature) Hotplug(ctx context.Context, req controlpkg.Hotpl
 	return controlpkg.HotplugResponse{ID: req.ID}, nil
 }
 
-func controlHotplugDevice(resolver interface {
+// hotplugResolver lowers manifest-shaped device inputs into executable
+// hotplug plans; *manifest.Manifest implements it.
+type hotplugResolver interface {
 	ResolveHotplugMount(manifest.MountEntry) (manifest.HotplugDevice, error)
 	ResolveHotplugNetwork(manifest.NetworkInput) (manifest.HotplugDevice, error)
-}, req controlpkg.DeviceRequest) (manifest.HotplugDevice, error) {
-	switch {
-	case req.Share != nil:
-		share := *req.Share
+}
+
+// hotplugDeviceFor maps the sealed vm.Device union onto manifest inputs and
+// resolves them into an executable hotplug device description. It serves the
+// public backend (Machine.Attach and Detach) and control-socket device
+// requests alike.
+func hotplugDeviceFor(resolver hotplugResolver, dev vm.Device) (manifest.HotplugDevice, error) {
+	switch d := dev.(type) {
+	case vm.Share:
+		if d.Tag == "" {
+			return manifest.HotplugDevice{}, fmt.Errorf("share device: Tag is required")
+		}
 		return resolver.ResolveHotplugMount(manifest.VirtioFSMountInput{
 			Type:       manifest.MountTypeVirtioFS,
-			MountInput: manifest.MountInput{Tag: share.Tag, SourcePath: share.HostPath, ReadOnly: share.ReadOnly},
-			Target:     share.GuestPath,
+			MountInput: manifest.MountInput{Tag: d.Tag, SourcePath: d.HostPath, ReadOnly: d.ReadOnly},
+			Target:     d.GuestPath,
 		})
-	case req.Disk != nil:
-		disk := *req.Disk
-		id := controlDeviceID("disk", disk.Path)
+	case vm.Disk:
+		if d.Path == "" {
+			return manifest.HotplugDevice{}, fmt.Errorf("disk device: Path is required")
+		}
+		id := deviceID("disk", d.Path)
 		return resolver.ResolveHotplugMount(manifest.ImageMountInput{
-			Type: manifest.MountTypeImage, SourcePath: disk.Path,
-			Image: manifest.ImageInput{Format: disk.Format, Serial: &id},
+			Type:       manifest.MountTypeImage,
+			SourcePath: d.Path,
+			Image:      manifest.ImageInput{Format: d.Format, Serial: &id},
 		})
-	case req.Forward != nil:
-		forward := *req.Forward
-		proto := forward.Proto
+	case vm.Forward:
+		proto := d.Proto
 		if proto == "" {
 			proto = vm.TCP
 		}
-		identity := string(proto) + "\x00" + forward.HostAddr + "\x00" + forward.GuestAddr
+		identity := string(proto) + "\x00" + d.HostAddr + "\x00" + d.GuestAddr
 		return resolver.ResolveHotplugNetwork(manifest.NetworkInput{
-			ID: controlDeviceID("fwd", identity), MAC: controlDeviceMAC(identity),
-			Forward: []manifest.ForwardPort{{Proto: string(proto), From: "host", Host: forward.HostAddr, Guest: forward.GuestAddr}},
+			ID:  deviceID("fwd", identity),
+			MAC: deviceMAC(identity),
+			Forward: []manifest.ForwardPort{{
+				Proto: string(proto),
+				From:  "host",
+				Host:  d.HostAddr,
+				Guest: d.GuestAddr,
+			}},
 		})
 	default:
-		return manifest.HotplugDevice{}, &controlpkg.RPCError{Code: controlpkg.ErrInvalidParams, Message: "hotplug device is required"}
+		return manifest.HotplugDevice{}, fmt.Errorf("unsupported device type %T", dev)
 	}
 }
 
-func controlDeviceID(kind, identity string) string {
+func controlHotplugDevice(resolver hotplugResolver, req controlpkg.DeviceRequest) (manifest.HotplugDevice, error) {
+	switch {
+	case req.Share != nil:
+		return hotplugDeviceFor(resolver, *req.Share)
+	case req.Disk != nil:
+		return hotplugDeviceFor(resolver, *req.Disk)
+	case req.Forward != nil:
+		return hotplugDeviceFor(resolver, *req.Forward)
+	default:
+		return manifest.HotplugDevice{}, controlpkg.InvalidParams("hotplug device is required")
+	}
+}
+
+// deviceID derives a stable, collision-resistant QEMU ID without embedding
+// caller-controlled path or address syntax.
+func deviceID(kind, identity string) string {
 	digest := sha256.Sum256([]byte(identity))
 	return fmt.Sprintf("%s-%x", kind, digest[:8])
 }
 
-func controlDeviceMAC(identity string) string {
+func deviceMAC(identity string) string {
 	digest := sha256.Sum256([]byte(identity))
 	return fmt.Sprintf("02:%02x:%02x:%02x:%02x:%02x", digest[0], digest[1], digest[2], digest[3], digest[4])
 }

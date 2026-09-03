@@ -56,7 +56,7 @@ func (s *qmpSession) EnableBalloonStatsPolling(ctx context.Context, qomPath stri
 }
 
 func (s *qmpSession) ReadBalloonStats(ctx context.Context, qomPath string) (stats, error) {
-	var value interface{}
+	var value any
 	err := s.session.WithRaw(ctx, func(monitor *rawQMP.Monitor) error {
 		var err error
 		value, err = monitor.QomGet(qomPath, "guest-stats")
@@ -84,18 +84,13 @@ func (s *qmpSession) ReadBalloonStats(ctx context.Context, qomPath string) (stat
 		return stats{}, fmt.Errorf("decode qmp guest-stats: %w", err)
 	}
 
-	snapshot := make(map[string]int64, len(decoded.Stats))
-	for key, value := range decoded.Stats {
-		snapshot[key] = value
-	}
-
 	var lastUpdate time.Time
 	if decoded.LastUpdate > 0 {
 		lastUpdate = time.Unix(decoded.LastUpdate, 0)
 	}
 
 	return stats{
-		Stats:      snapshot,
+		Stats:      decoded.Stats,
 		LastUpdate: lastUpdate,
 	}, nil
 }

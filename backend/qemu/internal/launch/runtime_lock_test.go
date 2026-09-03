@@ -13,22 +13,19 @@ import (
 func TestAcquireRuntimeLockWritesPIDAndCleanupRemovesIt(t *testing.T) {
 	cfg := runtimeLockManifest(t.TempDir())
 	locker := &recordingLocker{}
-	stopped := false
 	ctx, cancel := context.WithCancel(context.Background())
-	lifecycle := NewLifecycle(nil, func() { stopped = true }, cancel)
 
 	runtimeLock, err := AcquireRuntimeLock(RuntimeLockSpec{
-		Manifest:  cfg,
-		Locker:    locker,
-		Lifecycle: lifecycle,
-		Cancel:    cancel,
-		PID:       123,
+		Manifest: cfg,
+		Locker:   locker,
+		Cancel:   cancel,
+		PID:      123,
 	})
 	if err != nil {
 		t.Fatalf("acquire runtime lock: %v", err)
 	}
-	if got, err := ReadLaunchPID(cfg); err != nil || got != 123 {
-		t.Fatalf("launch pid: got %d err=%v want 123", got, err)
+	if data, err := os.ReadFile(LaunchPIDPath(cfg)); err != nil || string(data) != "123\n" {
+		t.Fatalf("launch pid file: got %q err=%v want %q", data, err, "123\n")
 	}
 
 	if err := runtimeLock.Cleanup(); err != nil {
@@ -39,9 +36,6 @@ func TestAcquireRuntimeLockWritesPIDAndCleanupRemovesIt(t *testing.T) {
 	}
 	if !locker.lock.released {
 		t.Fatal("expected lock release")
-	}
-	if !stopped {
-		t.Fatal("expected lifecycle stop")
 	}
 	if ctx.Err() == nil {
 		t.Fatal("expected context cancellation")

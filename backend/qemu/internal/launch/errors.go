@@ -46,14 +46,9 @@ func IsSavedSuspendExit(err error) bool {
 	return errors.Is(err, ErrSavedSuspendExit)
 }
 
-func wrapStage(stage string, err error) error {
+// WrapStage attributes err to a launch stage.
+func WrapStage(stage string, err error) error {
 	return &StageError{Stage: stage, Err: err}
-}
-
-func WrapFixedStage(stage string) func(error) error {
-	return func(err error) error {
-		return wrapStage(stage, err)
-	}
 }
 
 func wrapCommandError(stage string, command string, err error) error {
@@ -86,13 +81,13 @@ func WrapHotplugError(err error) error {
 	message := err.Error()
 	switch {
 	case strings.Contains(message, "guest command"):
-		return wrapStage("hotplug guest", err)
+		return WrapStage("hotplug guest", err)
 	case strings.Contains(message, "qmp"), strings.Contains(message, "device_del"), strings.Contains(message, "chardev"), strings.Contains(message, "netdev"), strings.Contains(message, "blockdev"):
-		return wrapStage("hotplug qmp", err)
+		return WrapStage("hotplug qmp", err)
 	case strings.Contains(message, "state"):
-		return wrapStage("hotplug state", err)
+		return WrapStage("hotplug state", err)
 	default:
-		return wrapStage("hotplug", err)
+		return WrapStage("hotplug", err)
 	}
 }
 
@@ -102,7 +97,7 @@ func firstUnexpectedExit(stage string, watchers executor.Group) error {
 		return nil
 	}
 	if err == nil {
-		return wrapStage(stage, fmt.Errorf("%s exited unexpectedly", process.Name()))
+		return WrapStage(stage, fmt.Errorf("%s exited unexpectedly", process.Name()))
 	}
 	return wrapCommandError(stage, process.Name(), err)
 }

@@ -2,8 +2,6 @@ package launch
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"time"
 
 	"github.com/shazow/virtle/backend/qemu/internal/qga"
@@ -26,32 +24,18 @@ func WaitForGuestAgent(ctx context.Context, wait GuestAgentWait) (qga.Client, er
 	if stage == "" {
 		stage = "guest agent"
 	}
-	if wait.SocketWaiter == nil {
-		return nil, fmt.Errorf("guest agent socket waiter is not configured")
-	}
-	if err := WaitForSockets(ctx, SocketWait{
+	return waitForClient(ctx, SocketWait{
 		Stage:        stage,
 		SocketPaths:  []string{wait.SocketPath},
 		SocketWaiter: wait.SocketWaiter,
 		PollDelay:    wait.PollDelay,
 		Watchers:     wait.Watchers,
-	}); err != nil {
-		return nil, err
-	}
-
-	client, err := qga.DialWithRetry(ctx, wait.Dialer, qga.DialRetry{
-		SocketPath:     wait.SocketPath,
-		ConnectTimeout: wait.ConnectTimeout,
-		RetryDelay:     wait.RetryDelay,
-		Check: func() error {
-			return firstUnexpectedExit(stage, wait.Watchers)
-		},
+	}, "guest agent", func(ctx context.Context, check func() error) (qga.Client, error) {
+		return qga.DialWithRetry(ctx, wait.Dialer, qga.DialRetry{
+			SocketPath:     wait.SocketPath,
+			ConnectTimeout: wait.ConnectTimeout,
+			RetryDelay:     wait.RetryDelay,
+			Check:          check,
+		})
 	})
-	if err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return nil, wrapStage(stage, err)
-		}
-		return nil, err
-	}
-	return client, nil
 }

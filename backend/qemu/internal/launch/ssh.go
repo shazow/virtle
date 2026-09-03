@@ -1,7 +1,6 @@
 package launch
 
 import (
-	"os"
 	"os/exec"
 
 	"github.com/shazow/virtle/internal/executor"
@@ -28,7 +27,6 @@ func buildSSHCommandWithArgv(launchManifest *manifest.Manifest, cid int, remoteC
 	}
 	cmd := executor.Command(command.Path, command.Args, renderer.Env())
 	cmd.Dir = launchManifest.Paths.WorkingDir
-	cmd.Stdin = os.Stdin
 	return cmd, nil
 }
 

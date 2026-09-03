@@ -10,7 +10,8 @@ import (
 	"github.com/shazow/virtle/internal/manifest"
 )
 
-type RuntimeConfig struct {
+// Config wires a Core to the launch it serves.
+type Config struct {
 	Manifest         *manifest.Manifest
 	Paths            launch.RuntimePaths
 	CID              int

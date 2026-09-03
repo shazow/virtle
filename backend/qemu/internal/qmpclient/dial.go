@@ -10,10 +10,10 @@ import (
 
 // DialRetry configures QMP dial retry behavior.
 type DialRetry struct {
-	SocketPath string
-	Timeout    time.Duration
-	RetryDelay time.Duration
-	Check      func() error
+	SocketPath     string
+	ConnectTimeout time.Duration
+	RetryDelay     time.Duration
+	Check          func() error
 }
 
 // DialWithRetry dials until a QMP client connects or ctx is canceled.
@@ -23,7 +23,7 @@ func DialWithRetry(ctx context.Context, dialer Dialer, retry DialRetry) (Client,
 	}
 	return qmpwire.DialWithRetry(ctx, qmpwire.Retry[Client]{
 		Dial: func(ctx context.Context) (Client, error) {
-			return dialer.Dial(ctx, retry.SocketPath, retry.Timeout)
+			return dialer.Dial(ctx, retry.SocketPath, retry.ConnectTimeout)
 		},
 		Check: retry.Check,
 		Delay: retry.RetryDelay,

@@ -53,17 +53,17 @@ type commandNotifier struct {
 	runner  launch.Runner
 }
 
-func newCommandNotifier(manifest *manifest.Manifest, logger *slog.Logger, runner launch.Runner) launch.NotificationSink {
-	if manifest == nil {
+func newCommandNotifier(mf *manifest.Manifest, logger *slog.Logger, runner launch.Runner) launch.NotificationSink {
+	if mf == nil {
 		return noopNotifier{}
 	}
-	notifications := manifest.Notifications
+	notifications := mf.Notifications
 	if notifications.Command.IsZero() || notifications.Command.Path == "" {
 		return noopNotifier{}
 	}
 	// Normalize only the working directory; the configured command path is
 	// resolved by the executor environment exactly as provided.
-	dir := manifest.Paths.WorkingDir
+	dir := mf.Paths.WorkingDir
 	if !filepath.IsAbs(dir) {
 		if absDir, err := filepath.Abs(dir); err == nil {
 			dir = absDir

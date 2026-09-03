@@ -130,6 +130,25 @@ func TestVirtioFSHelperExitStillAllowsDeviceDetach(t *testing.T) {
 	}
 }
 
+func TestVirtioFSDetachReleasesDeviceWhenHelperStopFails(t *testing.T) {
+	tmpDir := t.TempDir()
+	runner, starter, _, _ := testRunner(tmpDir, testVirtioFSDevice(tmpDir))
+	if err := runner.Attach(context.Background(), "cache"); err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+
+	starter.stopErr = errors.New("helper refused to stop")
+	if err := runner.Detach(context.Background(), "cache"); !errors.Is(err, starter.stopErr) {
+		t.Fatalf("detach: got %v, want the helper stop failure", err)
+	}
+
+	// QEMU already dropped the device, so the id and its port must be free.
+	starter.stopErr = nil
+	if err := runner.Attach(context.Background(), "cache"); err != nil {
+		t.Fatalf("re-attach after failed helper stop: %v", err)
+	}
+}
+
 func TestMultipleAdHocHotplugDevicesUseDistinctReservedPorts(t *testing.T) {
 	tmpDir := t.TempDir()
 	secondShare := testVirtioFSDevice(tmpDir)
@@ -368,6 +387,7 @@ type fakeStarter struct {
 	tracked   []int
 	processes map[int]*executortest.Process
 	forgot    chan int
+	stopErr   error
 }
 
 func (s *fakeStarter) Start(ctx context.Context, cmd *exec.Cmd) (*executor.Process, error) {
@@ -387,6 +407,9 @@ func (s *fakeStarter) Start(ctx context.Context, cmd *exec.Cmd) (*executor.Proce
 
 func (s *fakeStarter) Stop(process *executor.Process) error {
 	s.stopped = append(s.stopped, process.PID())
+	if s.stopErr != nil {
+		return s.stopErr
+	}
 	if running := s.processes[process.PID()]; running != nil {
 		running.Complete(nil)
 	}

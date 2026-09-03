@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os/exec"
+	"slices"
 	"testing"
 	"time"
 
@@ -124,7 +125,7 @@ func TestRunSSHSessionAutoprovisionsAfterAuthenticationFailure(t *testing.T) {
 		t.Fatalf("ssh starts: got %d want %d", got, want)
 	}
 	secondArgs := runner.commands[1].Args
-	if !containsString(secondArgs, "-i") || !containsString(secondArgs, "/tmp/id") || !containsString(secondArgs, "IdentitiesOnly=yes") {
+	if !slices.Contains(secondArgs, "-i") || !slices.Contains(secondArgs, "/tmp/id") || !slices.Contains(secondArgs, "IdentitiesOnly=yes") {
 		t.Fatalf("expected identity args in retry command, got %#v", secondArgs)
 	}
 }

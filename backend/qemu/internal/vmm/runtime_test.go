@@ -24,7 +24,7 @@ func TestRuntimeStatusAndBalloonUseOwnedQMP(t *testing.T) {
 	stats.Timer(launch.TimerBootStarted, time.Now())
 	stats.Timer(launch.TimerQMPReady, time.Now())
 	qmp := (&fakeQMPClient{queryBalloonActualBytes: 640 * testMiB}).withDefaultBalloonPath("/machine/peripheral/balloon0")
-	runtime := runtimepkg.New(runtimepkg.RuntimeConfig{
+	runtime := runtimepkg.New(runtimepkg.Config{
 		Manifest: cfg,
 		Paths: launch.RuntimePaths{
 			ControlSocket: filepath.Join(tmpDir, "virtle.sock"),
@@ -61,7 +61,7 @@ func TestRuntimeStatusAndBalloonUseOwnedQMP(t *testing.T) {
 func TestRuntimeBalloonMapsMissingDeviceToFailedPrecondition(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
-	runtime := runtimepkg.New(runtimepkg.RuntimeConfig{
+	runtime := runtimepkg.New(runtimepkg.Config{
 		Manifest: cfg,
 		Paths: launch.RuntimePaths{
 			ControlSocket: filepath.Join(tmpDir, "virtle.sock"),
@@ -89,7 +89,7 @@ func TestRuntimeSuspendQueuesAndWaitsForLaunchLoop(t *testing.T) {
 	cfg := validManifest(tmpDir)
 	coordinator := launch.NewSuspendCoordinator()
 	qmp := &fakeQMPClient{status: "running"}
-	runtime := runtimepkg.New(runtimepkg.RuntimeConfig{
+	runtime := runtimepkg.New(runtimepkg.Config{
 		Manifest: cfg,
 		Paths: launch.RuntimePaths{
 			ControlSocket: filepath.Join(tmpDir, "virtle.sock"),
@@ -145,7 +145,7 @@ func TestRuntimeSuspendQueuesAndWaitsForLaunchLoop(t *testing.T) {
 func TestRuntimeSuspendMapsMissingCoordinatorToFailedPrecondition(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
-	runtime := runtimepkg.New(runtimepkg.RuntimeConfig{
+	runtime := runtimepkg.New(runtimepkg.Config{
 		Manifest: cfg,
 		Paths: launch.RuntimePaths{
 			ControlSocket: filepath.Join(tmpDir, "virtle.sock"),
@@ -173,7 +173,7 @@ func TestRuntimeStartControlServesStatus(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
 	controlPath := filepath.Join(tmpDir, "virtle.sock")
-	runtime := runtimepkg.New(runtimepkg.RuntimeConfig{
+	runtime := runtimepkg.New(runtimepkg.Config{
 		Manifest: cfg,
 		Paths: launch.RuntimePaths{
 			ControlSocket: controlPath,
@@ -214,7 +214,7 @@ func TestRuntimeMarkSavedSuspendSkipsCloseWriteBack(t *testing.T) {
 	processes := launch.NewProcessSet()
 	qmp := &fakeQMPClient{}
 	var writeBackCalls int
-	runtime := runtimepkg.New(runtimepkg.RuntimeConfig{
+	runtime := runtimepkg.New(runtimepkg.Config{
 		Manifest: cfg,
 		Paths: launch.RuntimePaths{
 			ControlSocket: filepath.Join(tmpDir, "virtle.sock"),
@@ -249,7 +249,7 @@ func TestRuntimeCloseStopsProcessesAndDisconnectsQMPOnce(t *testing.T) {
 	process := (&executortest.Process{OverrideName: "qemu-system-x86_64"}).Process()
 	processes := launch.NewProcessSet()
 	processes.SetQEMU(process)
-	runtime := runtimepkg.New(runtimepkg.RuntimeConfig{
+	runtime := runtimepkg.New(runtimepkg.Config{
 		Manifest: cfg,
 		Paths: launch.RuntimePaths{
 			ControlSocket: filepath.Join(tmpDir, "virtle.sock"),

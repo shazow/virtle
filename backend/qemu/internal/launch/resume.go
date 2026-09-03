@@ -1,6 +1,7 @@
 package launch
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -27,15 +28,15 @@ func ResolveResumeState(manifest *manifest.Manifest, mode ResumeMode, stateVersi
 
 	state, err := ReadSuspendState(manifest)
 	if err != nil {
-		if os.IsNotExist(err) && mode == ResumeModeAuto {
-			return nil, nil
-		}
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
+			if mode == ResumeModeAuto {
+				return nil, nil
+			}
 			return nil, fmt.Errorf("no saved suspend state found at %q; run virtle suspend first", SuspendStatePath(manifest))
 		}
 		return nil, err
 	}
-	if state.Status != "saved" {
+	if state.Status != SuspendStatusSaved {
 		if mode == ResumeModeAuto {
 			return nil, nil
 		}

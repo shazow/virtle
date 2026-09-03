@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	shellquote "github.com/kballard/go-shellquote"
@@ -28,33 +29,31 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 
 	stats := launch.NewStats(time.Now())
 	launchCtx, cancelLaunch := context.WithCancel(ctx)
-	// Signal policy belongs to the CLI session or embedding program. The
-	// lifecycle remains the coordinator for control-socket suspend requests.
-	lifecycle := launch.NewLifecycle(nil, nil, cancelLaunch)
+	// Signal policy belongs to the CLI session or embedding program; the
+	// coordinator only queues control-socket and job-control suspend requests.
+	suspend := launch.NewSuspendCoordinator()
 	if err := launch.EnsurePersistenceDirectory(filepath.Dir(plan.Manifest.ResolvedLockPath()), plan.Manifest.QEMU.RunAsUser); err != nil {
-		stopLaunchLifecycle(lifecycle, cancelLaunch)
+		cancelLaunch()
 		return nil, &launch.StageError{Stage: "preflight", Err: fmt.Errorf("create lock directory: %w", err)}
 	}
 	runtimeLock, err := launch.AcquireRuntimeLock(launch.RuntimeLockSpec{
 		Manifest:    plan.Manifest,
 		ResumeState: plan.ResumeState,
 		Locker:      m.locker,
-		Lifecycle:   lifecycle,
 		Cancel:      cancelLaunch,
 		PID:         os.Getpid(),
 	})
 	if err != nil {
 		return nil, &launch.StageError{Stage: "preflight", Err: err}
 	}
-	if runtimeLock == nil {
-		stopLaunchLifecycle(lifecycle, cancelLaunch)
-		return nil, &launch.StageError{Stage: "preflight", Err: errors.New("runtime lock is required")}
-	}
 
 	processes := launch.NewProcessSet()
 	m.hotplugRuntime = hotplug.NewRuntime(processes)
 	var qmp qmpclient.Client
-	writeBackOnExit := false
+	// writeBackOnExit is read by the control server's shutdown path once
+	// StartControl runs, while this goroutine still updates it after guest
+	// files are provisioned.
+	var writeBackOnExit atomic.Bool
 	socketCleanupReached := false
 	cleanupRuntime := func() error { return runtimeLock.Cleanup() }
 	defer func() {
@@ -91,9 +90,6 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 	if err != nil {
 		return nil, &launch.StageError{Stage: "preflight", Err: err}
 	}
-	if qemuCmd == nil {
-		return nil, &launch.StageError{Stage: "preflight", Err: errors.New("qemu command is required")}
-	}
 	plan.CID = cid
 	plan.QEMUCommand = qemuCmd
 	if err := m.prepareRuntimeState(plan); err != nil {
@@ -115,10 +111,10 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 	stats.Timer(launch.TimerBootStarted, time.Now())
 	qemu, err := m.startQEMU(plan.QEMUCommand)
 	if err != nil {
-		return nil, launch.WrapFixedStage("vm startup")(err)
+		return nil, launch.WrapStage("vm startup", err)
 	}
 	if qemu == nil {
-		return nil, launch.WrapFixedStage("vm startup")(errors.New("qemu process is required"))
+		return nil, launch.WrapStage("vm startup", errors.New("qemu process is required"))
 	}
 	processes.SetQEMU(qemu)
 	qmp, err = m.waitForQMP(launchCtx, plan.Paths.QMPSocket, processes.Watchers())
@@ -126,7 +122,7 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 		return nil, err
 	}
 	if qmp == nil {
-		return nil, launch.WrapFixedStage("vm startup")(errors.New("qmp client is required"))
+		return nil, launch.WrapStage("vm startup", errors.New("qmp client is required"))
 	}
 	stats.Timer(launch.TimerQMPReady, time.Now())
 	qemu.SetShutdown(func() error {
@@ -177,22 +173,20 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 		if err := m.restoreLaunchRuntime(launchCtx, plan, qmp); err != nil {
 			return nil, err
 		}
-		writeBackOnExit = true
+		writeBackOnExit.Store(true)
 	}
 
-	suspendHandler := newLaunchSuspendHandler(m, plan.Paths.QMPSocket, qmp, plan.CID, plan.Notifier, func() bool {
-		return writeBackOnExit
-	})
-	runtime := runtimepkg.New(runtimepkg.RuntimeConfig{
+	suspendHandler := newLaunchSuspendHandler(m, plan.Paths.QMPSocket, qmp, plan.CID, plan.Notifier, writeBackOnExit.Load)
+	runtime := runtimepkg.New(runtimepkg.Config{
 		Manifest:        plan.Manifest,
 		Paths:           plan.Paths,
 		CID:             plan.CID,
 		Stats:           stats,
 		QMP:             qmp,
-		SuspendRequests: lifecycle.Suspend(),
+		SuspendRequests: suspend,
 		Processes:       processes,
 		WriteBack: func(ctx context.Context) error {
-			if !writeBackOnExit {
+			if !writeBackOnExit.Load() {
 				return nil
 			}
 			return m.writeBackGuestFiles(ctx, executor.Group{})
@@ -209,7 +203,7 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 		plan:           plan,
 		stats:          stats,
 		qmp:            qmp,
-		lifecycle:      lifecycle,
+		suspend:        suspend,
 		suspendHandler: suspendHandler,
 		processes:      processes,
 	}
@@ -219,9 +213,9 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 		handlers.Guest = m.guestFeature(plan.Paths.GuestAgentSocket, processes)
 	}
 	if _, err := runtime.StartControl(launchCtx, handlers); err != nil {
-		return nil, launch.WrapFixedStage("control startup")(err)
+		return nil, launch.WrapStage("control startup", err)
 	}
-	if err := launch.HandleQueuedSuspend(launchCtx, lifecycle, suspendHandler.Handle); err != nil {
+	if err := launch.HandleQueuedSuspend(launchCtx, suspend, suspendHandler.Handle); err != nil {
 		return nil, err
 	}
 	if plan.ResumeState == nil {
@@ -233,7 +227,7 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 			return nil, &launch.StageError{Stage: "guest agent", Err: errors.New("guest file writes require remote control (write_files, workspace.mount_cwd)")}
 		}
 		stats.Timer(launch.TimerFilesReady, time.Now())
-		writeBackOnExit = plan.Options.HasRemoteControl
+		writeBackOnExit.Store(plan.Options.HasRemoteControl)
 	}
 	if task := balloon.ControllerTask(qmp, plan.Manifest.QEMU.Devices.Balloon, plan.Notifier, m.balloonLogger); task != nil {
 		processes.StartTasks(launchCtx, task)
@@ -248,15 +242,6 @@ func (m *manager) writeLaunchStats(stats *launch.Stats) {
 	stats.Timer(launch.TimerCompleted, time.Now())
 	if m.logger != nil {
 		m.logger.Debug("launch stats", "stats", stats.String())
-	}
-}
-
-func stopLaunchLifecycle(lifecycle *launch.Lifecycle, cancel context.CancelFunc) {
-	if lifecycle != nil {
-		lifecycle.Stop()
-	}
-	if cancel != nil {
-		cancel()
 	}
 }
 

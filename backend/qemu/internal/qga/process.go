@@ -5,23 +5,25 @@ import (
 	"strings"
 )
 
-type Process struct {
+type process struct {
 	User    string
 	Command string
 }
 
+// FormatProcessListExecData turns the base64 output of a guest ps listing
+// into the "USER COMMAND" table shown in guest diagnostics.
 func FormatProcessListExecData(data string) string {
-	return FormatProcesses(ParseProcesses(DecodeExecData(data)))
+	return formatProcesses(parseProcesses(DecodeExecData(data)))
 }
 
-func ParseProcesses(output string) []Process {
-	var processes []Process
+func parseProcesses(output string) []process {
+	var processes []process
 	for _, line := range strings.Split(output, "\n") {
 		fields := strings.Fields(line)
 		if len(fields) < 2 {
 			continue
 		}
-		processes = append(processes, Process{
+		processes = append(processes, process{
 			User:    fields[0],
 			Command: fields[1],
 		})
@@ -29,7 +31,7 @@ func ParseProcesses(output string) []Process {
 	return processes
 }
 
-func FormatProcesses(processes []Process) string {
+func formatProcesses(processes []process) string {
 	if len(processes) == 0 {
 		return ""
 	}

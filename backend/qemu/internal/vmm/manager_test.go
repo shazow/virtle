@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"os"
 	"os/exec"
@@ -256,7 +257,7 @@ func TestManagerPlanLaunchResolvesRuntimeInputs(t *testing.T) {
 	cfg.Persistence.StateDir = ".state"
 
 	manager := &manager{}
-	plan, err := manager.planLaunch(launch.Spec{Manifest: cfg, Options: LaunchOptions{Resume: ResumeModeNo}})
+	plan, err := manager.planLaunch(launch.Spec{Manifest: cfg, Options: launch.Options{Resume: ResumeModeNo}})
 	if err != nil {
 		t.Fatalf("plan launch: %v", err)
 	}
@@ -278,7 +279,7 @@ func TestManagerPlanUsesDefaultConfig(t *testing.T) {
 	cfg := validManifest(tmpDir)
 	plan, err := newManagerFromConfig(DefaultConfig()).planLaunch(launch.Spec{
 		Manifest: cfg,
-		Options:  LaunchOptions{Resume: ResumeModeNo},
+		Options:  launch.Options{Resume: ResumeModeNo},
 	})
 	if err != nil {
 		t.Fatalf("manager plan: %v", err)
@@ -341,7 +342,7 @@ func TestManagerLaunchStartsRunCommands(t *testing.T) {
 		qmpQuitTimeout:    time.Millisecond,
 	}
 
-	if err := manager.launchWithOptions(context.Background(), cfg, LaunchOptions{Resume: ResumeModeNo}); err != nil {
+	if err := manager.launchWithOptions(context.Background(), cfg, launch.Options{Resume: ResumeModeNo}); err != nil {
 		t.Fatalf("launch with run: %v", err)
 	}
 
@@ -427,7 +428,7 @@ func TestManagerLaunchFailsWhenRunStartFails(t *testing.T) {
 		shutdownDelay: 10 * time.Millisecond,
 	}
 
-	err := manager.launchWithOptions(context.Background(), cfg, LaunchOptions{Resume: ResumeModeNo})
+	err := manager.launchWithOptions(context.Background(), cfg, launch.Options{Resume: ResumeModeNo})
 	if err == nil || !strings.Contains(err.Error(), "run startup") {
 		t.Fatalf("expected run startup error, got %v", err)
 	}
@@ -478,7 +479,7 @@ func TestManagerLaunchStopsStartedRunsWhenLaterRunFails(t *testing.T) {
 		shutdownDelay: 10 * time.Millisecond,
 	}
 
-	err := manager.launchWithOptions(context.Background(), cfg, LaunchOptions{Resume: ResumeModeNo})
+	err := manager.launchWithOptions(context.Background(), cfg, launch.Options{Resume: ResumeModeNo})
 	if err == nil || !strings.Contains(err.Error(), "run startup") || !strings.Contains(err.Error(), "start second run failed") {
 		t.Fatalf("expected second run startup error, got %v", err)
 	}
@@ -530,7 +531,7 @@ func TestManagerLaunchRemovesCleanupPathAfterQMPStartupFailure(t *testing.T) {
 		qmpConnectTimeout: time.Millisecond,
 	}
 
-	err := manager.launchWithOptions(context.Background(), cfg, LaunchOptions{Resume: ResumeModeNo})
+	err := manager.launchWithOptions(context.Background(), cfg, launch.Options{Resume: ResumeModeNo})
 	if err == nil || !strings.Contains(err.Error(), "qmp did not start") {
 		t.Fatalf("expected qmp startup error, got %v", err)
 	}
@@ -1368,7 +1369,7 @@ func TestManagerLaunchSkipsGuestFilesOnResume(t *testing.T) {
 		qmpMigrationTimeout: time.Millisecond,
 	}
 
-	if err := manager.launchWithOptions(context.Background(), cfg, LaunchOptions{Resume: ResumeModeForce}); err != nil {
+	if err := manager.launchWithOptions(context.Background(), cfg, launch.Options{Resume: ResumeModeForce}); err != nil {
 		t.Fatalf("resume launch: %v", err)
 	}
 	if guestDialer.attempts != 1 {
@@ -1582,259 +1583,11 @@ func TestLaunchSuspendHandlerSaveAndExitIsIdempotent(t *testing.T) {
 	}
 }
 
-type testSuspendControlHandler struct {
-	fakeControlCore
-	onSuspend func() error
-}
-
-func (h *testSuspendControlHandler) Suspend(context.Context, control.SuspendRequest) (control.SuspendResponse, error) {
-	if h.onSuspend != nil {
-		if err := h.onSuspend(); err != nil {
-			return control.SuspendResponse{}, err
-		}
-	}
-	return control.SuspendResponse{Saved: true, VMStatePath: "/tmp/vm-state"}, nil
-}
-
-func TestManagerSuspendControlSocketWaitsForLaunchExit(t *testing.T) {
-	tmpDir := t.TempDir()
-	cfg := validManifest(tmpDir)
-	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
-	if err := launch.WriteLaunchPID(cfg, 12345); err != nil {
-		t.Fatalf("write launch pid: %v", err)
-	}
-	controlSocketPath, err := cfg.ResolvedControlSocketPath()
-	if err != nil {
-		t.Fatalf("resolve control socket: %v", err)
-	}
-
-	allowRemove := make(chan struct{})
-	removeDone := make(chan error, 1)
-	suspendCalled := make(chan struct{})
-	startTestControlServerAt(t, controlSocketPath, &testSuspendControlHandler{
-		onSuspend: func() error {
-			close(suspendCalled)
-			go func() {
-				<-allowRemove
-				removeDone <- launch.RemoveLaunchPID(cfg, 12345)
-			}()
-			return nil
-		},
-	})
-
-	done := make(chan error, 1)
-	go func() {
-		done <- manifestBoundManager(&manager{}, cfg).suspend(context.Background())
-	}()
-
-	select {
-	case <-suspendCalled:
-	case err := <-done:
-		t.Fatalf("suspend returned before control handler ran: %v", err)
-	case <-time.After(time.Second):
-		t.Fatal("control suspend was not called")
-	}
-
-	select {
-	case err := <-done:
-		t.Fatalf("suspend returned before launch pid removal: %v", err)
-	case <-time.After(testNoReturnTimeout):
-	}
-
-	close(allowRemove)
-	select {
-	case err := <-removeDone:
-		if err != nil {
-			t.Fatalf("remove launch pid: %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("launch pid was not removed")
-	}
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("suspend: %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("suspend did not return after launch pid removal")
-	}
-}
-
-func TestManagerSuspendSignalsLaunchAndWaitsForSavedStateAndExit(t *testing.T) {
-	tmpDir := t.TempDir()
-	cfg := validManifest(tmpDir)
-	if err := launch.WriteLaunchPID(cfg, 12345); err != nil {
-		t.Fatalf("write launch pid: %v", err)
-	}
-	releaseLock := acquireTestLaunchLock(t, cfg, 12345)
-	defer releaseLock()
-
-	dialer := &fakeQMPDialer{client: &fakeQMPClient{status: "running"}}
-	signaler := &fakePIDSignaler{
-		onSignal: func(pid int, sig os.Signal) error {
-			if pid != 12345 {
-				t.Fatalf("unexpected pid: got %d want 12345", pid)
-			}
-			if sig != syscall.SIGTSTP {
-				t.Fatalf("unexpected signal: got %v want %v", sig, syscall.SIGTSTP)
-			}
-			if err := launch.WriteSuspendStateData(cfg, launch.SuspendState{
-				Version:       StateVersion,
-				QMPSocketPath: filepath.Join(tmpDir, "qmp.sock"),
-				VMStatePath:   launch.VMStatePath(cfg),
-				CID:           3,
-				Status:        "saved",
-			}); err != nil {
-				return err
-			}
-			return launch.RemoveLaunchPID(cfg, 12345)
-		},
-	}
-	manager := &manager{
-		logger:              slog.New(slog.DiscardHandler),
-		qmpDialer:           dialer,
-		qmpConnectTimeout:   100 * time.Millisecond,
-		qmpMigrationTimeout: time.Second,
-		pidSignaler:         signaler,
-	}
-
-	manager.launchManifest = cfg
-	if err := manager.suspend(context.Background()); err != nil {
-		t.Fatalf("suspend: %v", err)
-	}
-
-	if dialer.attempts != 0 {
-		t.Fatalf("expected no external qmp dial attempts, got %d", dialer.attempts)
-	}
-	if !reflect.DeepEqual(signaler.signals, []pidSignal{{pid: 12345, sig: syscall.SIGTSTP}}) {
-		t.Fatalf("unexpected signals: got %v", signaler.signals)
-	}
-	state, err := launch.ReadSuspendState(cfg)
-	if err != nil {
-		t.Fatalf("read suspend state: %v", err)
-	}
-	if state.Status != "saved" || state.CID != 3 || state.VMStatePath == "" {
-		t.Fatalf("unexpected saved state: %+v", state)
-	}
-}
-
-func TestManagerSuspendSignalsActiveLaunchWhenSavedStateAlreadyExists(t *testing.T) {
-	tmpDir := t.TempDir()
-	cfg := validManifest(tmpDir)
-	if err := launch.WriteSuspendStateData(cfg, launch.SuspendState{
-		Version:       StateVersion,
-		QMPSocketPath: filepath.Join(tmpDir, "old-qmp.sock"),
-		VMStatePath:   launch.VMStatePath(cfg),
-		CID:           3,
-		Status:        "saved",
-	}); err != nil {
-		t.Fatalf("write saved suspend state: %v", err)
-	}
-	if err := launch.WriteLaunchPID(cfg, 12345); err != nil {
-		t.Fatalf("write launch pid: %v", err)
-	}
-	releaseLock := acquireTestLaunchLock(t, cfg, 12345)
-	defer releaseLock()
-
-	signaler := &fakePIDSignaler{
-		onSignal: func(pid int, sig os.Signal) error {
-			if pid != 12345 {
-				t.Fatalf("unexpected pid: got %d want 12345", pid)
-			}
-			if sig != syscall.SIGTSTP {
-				t.Fatalf("unexpected signal: got %v want %v", sig, syscall.SIGTSTP)
-			}
-			return launch.RemoveLaunchPID(cfg, 12345)
-		},
-	}
-	manager := &manager{
-		logger:              slog.New(slog.DiscardHandler),
-		qmpMigrationTimeout: time.Second,
-		pidSignaler:         signaler,
-	}
-
-	manager.launchManifest = cfg
-	if err := manager.suspend(context.Background()); err != nil {
-		t.Fatalf("suspend: %v", err)
-	}
-
-	if !reflect.DeepEqual(signaler.signals, []pidSignal{{pid: 12345, sig: syscall.SIGTSTP}}) {
-		t.Fatalf("unexpected signals: got %v", signaler.signals)
-	}
-}
-
-func TestManagerSuspendPreservesExistingSavedStateWithoutSignal(t *testing.T) {
-	tmpDir := t.TempDir()
-	cfg := validManifest(tmpDir)
-	if err := launch.WriteSuspendStateData(cfg, launch.SuspendState{
-		Version:       StateVersion,
-		QMPSocketPath: filepath.Join(tmpDir, "qmp.sock"),
-		VMStatePath:   launch.VMStatePath(cfg),
-		CID:           3,
-		Status:        "saved",
-	}); err != nil {
-		t.Fatalf("write saved suspend state: %v", err)
-	}
-
-	signaler := &fakePIDSignaler{}
-	manager := &manager{
-		logger:      slog.New(slog.DiscardHandler),
-		qmpDialer:   &fakeQMPDialer{},
-		pidSignaler: signaler,
-	}
-
-	manager.launchManifest = cfg
-	if err := manager.suspend(context.Background()); err != nil {
-		t.Fatalf("suspend: %v", err)
-	}
-
-	if len(signaler.signals) != 0 {
-		t.Fatalf("expected no signal for repeated suspend, got %v", signaler.signals)
-	}
-}
-
-func TestEffectiveSuspendSignalTimeoutIncludesMigrationAndTeardown(t *testing.T) {
-	tmpDir := t.TempDir()
-	cfg := validManifest(tmpDir)
-	cfg.Run = append(cfg.Run, manifest.Run{
-		Exec: []string{"/tmp/virtiofsd-cache"},
-	})
-
-	manager := &manager{
-		logger:              slog.New(slog.DiscardHandler),
-		shutdownDelay:       4 * time.Second,
-		qmpQuitTimeout:      3 * time.Second,
-		qmpMigrationTimeout: 2 * time.Second,
-		qmpConnectTimeout:   time.Second,
-	}
-
-	manager.launchManifest = cfg
-	got := manager.effectiveSuspendSignalTimeout()
-	want := defaultLaunchSignalTimeout + 2*time.Second + 3*time.Second +
-		time.Second + guestShutdownResponseTimeout + 3*4*time.Second
-	if got != want {
-		t.Fatalf("unexpected suspend signal timeout: got %s want %s", got, want)
-	}
-}
-
-func TestManagerSuspendMissingPIDReportsLaunchError(t *testing.T) {
-	tmpDir := t.TempDir()
-	cfg := validManifest(tmpDir)
-
-	err := manifestBoundManager(&manager{pidSignaler: &fakePIDSignaler{}}, cfg).suspend(context.Background())
-	if err == nil {
-		t.Fatal("expected missing pid error")
-	}
-	if !strings.Contains(err.Error(), "launch pid file") || !strings.Contains(err.Error(), "does not exist") {
-		t.Fatalf("unexpected missing pid error: %v", err)
-	}
-}
-
 func TestManagerLaunchResumeForceMissingSavedStateReportsRestoreError(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
 
-	err := (&manager{}).launchWithOptions(context.Background(), cfg, LaunchOptions{Resume: ResumeModeForce})
+	err := (&manager{}).launchWithOptions(context.Background(), cfg, launch.Options{Resume: ResumeModeForce})
 	if err == nil {
 		t.Fatal("expected missing saved state error")
 	}
@@ -1854,7 +1607,7 @@ func TestManagerLaunchResumeForceNonSavedStateReportsRestoreError(t *testing.T) 
 		t.Fatalf("write initial suspend state: %v", err)
 	}
 
-	err := (&manager{}).launchWithOptions(context.Background(), cfg, LaunchOptions{Resume: ResumeModeForce})
+	err := (&manager{}).launchWithOptions(context.Background(), cfg, launch.Options{Resume: ResumeModeForce})
 	if err == nil {
 		t.Fatal("expected non-saved state error")
 	}
@@ -1886,7 +1639,7 @@ func TestManagerLaunchResumeAutoFreshLaunchesWithoutSavedState(t *testing.T) {
 		qmpQuitTimeout:    time.Millisecond,
 	}
 
-	if err := manager.launchWithOptions(context.Background(), cfg, LaunchOptions{Resume: ResumeModeAuto}); err != nil {
+	if err := manager.launchWithOptions(context.Background(), cfg, launch.Options{Resume: ResumeModeAuto}); err != nil {
 		t.Fatalf("launch: %v", err)
 	}
 	if containsString(runner.qemuArgs(), "-incoming") {
@@ -1938,7 +1691,7 @@ func TestManagerLaunchResumeForceRestoresAndRemovesSavedState(t *testing.T) {
 		qmpMigrationTimeout: time.Second,
 	}
 
-	if err := manager.launchWithOptions(context.Background(), cfg, LaunchOptions{Resume: ResumeModeForce}); err != nil {
+	if err := manager.launchWithOptions(context.Background(), cfg, launch.Options{Resume: ResumeModeForce}); err != nil {
 		t.Fatalf("launch resume: %v", err)
 	}
 	if !containsString(runner.qemuArgs(), "-incoming") || !containsString(runner.qemuArgs(), "defer") {
@@ -2307,37 +2060,6 @@ func TestBuildQEMUCommandAddsPCIEHotplugPorts(t *testing.T) {
 	}
 }
 
-type testHotplugControlHandler struct {
-	fakeControlCore
-	requests []control.HotplugRequest
-}
-
-func (h *testHotplugControlHandler) Hotplug(ctx context.Context, req control.HotplugRequest) (control.HotplugResponse, error) {
-	h.requests = append(h.requests, req)
-	return control.HotplugResponse{ID: req.ID, Detach: req.Detach}, nil
-}
-
-func TestManagerHotplugUsesControlSocket(t *testing.T) {
-	tmpDir := t.TempDir()
-	cfg := validManifest(tmpDir)
-	cfg.Persistence.StateDir = ".virtle"
-	cfg.Paths.RuntimeDir = manifest.RuntimeDir{Mode: manifest.RuntimeDirPath, Path: ".virtle"}
-
-	controlSocketPath, err := cfg.ResolvedControlSocketPath()
-	if err != nil {
-		t.Fatalf("resolve control socket: %v", err)
-	}
-	handler := &testHotplugControlHandler{}
-	startTestControlServerAt(t, controlSocketPath, handler)
-
-	if err := manifestBoundManager(&manager{}, cfg).hotplug(context.Background(), "cache", true); err != nil {
-		t.Fatalf("hotplug: %v", err)
-	}
-	if got, want := handler.requests, []control.HotplugRequest{{ID: "cache", Detach: true}}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("unexpected control requests: got %#v want %#v", got, want)
-	}
-}
-
 func TestLaunchRuntimeRegistersHotplugAtControlPeriphery(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
@@ -2364,7 +2086,7 @@ func TestLaunchRuntimeRegistersHotplugAtControlPeriphery(t *testing.T) {
 		qmpRetryDelay:     time.Millisecond,
 		shutdownDelay:     time.Millisecond,
 	}
-	plan, err := manager.planLaunch(launch.Spec{Manifest: cfg, Options: LaunchOptions{Resume: ResumeModeNo}})
+	plan, err := manager.planLaunch(launch.Spec{Manifest: cfg, Options: launch.Options{Resume: ResumeModeNo}})
 	if err != nil {
 		t.Fatalf("plan launch: %v", err)
 	}
@@ -2438,7 +2160,7 @@ func TestLaunchRuntimeRegistersGuestRPCsAtControlPeriphery(t *testing.T) {
 		qmpRetryDelay:     time.Millisecond,
 		shutdownDelay:     time.Millisecond,
 	}
-	plan, err := manager.planLaunch(launch.Spec{Manifest: cfg, Options: LaunchOptions{Resume: ResumeModeNo, HasRemoteControl: true}})
+	plan, err := manager.planLaunch(launch.Spec{Manifest: cfg, Options: launch.Options{Resume: ResumeModeNo, HasRemoteControl: true}})
 	if err != nil {
 		t.Fatalf("plan launch: %v", err)
 	}
@@ -2528,7 +2250,7 @@ func TestLaunchRuntimeWithoutRemoteControlOmitsGuestRPCs(t *testing.T) {
 		qmpRetryDelay:     time.Millisecond,
 		shutdownDelay:     time.Millisecond,
 	}
-	plan, err := manager.planLaunch(launch.Spec{Manifest: cfg, Options: LaunchOptions{Resume: ResumeModeNo}})
+	plan, err := manager.planLaunch(launch.Spec{Manifest: cfg, Options: launch.Options{Resume: ResumeModeNo}})
 	if err != nil {
 		t.Fatalf("plan launch: %v", err)
 	}
@@ -2857,7 +2579,9 @@ func TestBuildQEMUCommandAllowsInitrdApplianceWithoutStorageDevices(t *testing.T
 
 func TestBuildQEMUCommandUsesRuntimeDirForRelativeQMP(t *testing.T) {
 	runtimeDir := t.TempDir()
-	setXDGTestRuntimeDir(t, runtimeDir)
+	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
+	xdg.Reload()
+	t.Cleanup(xdg.Reload)
 
 	cfg := validManifest("/tmp/work")
 	cfg.Paths.RuntimeDir = manifest.RuntimeDir{Mode: manifest.RuntimeDirXDG}
@@ -2884,7 +2608,9 @@ func TestBuildQEMUCommandUsesRuntimeDirForRelativeQMP(t *testing.T) {
 
 func TestStartRunsUsesNamedVirtioFSRunEnv(t *testing.T) {
 	runtimeDir := t.TempDir()
-	setXDGTestRuntimeDir(t, runtimeDir)
+	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
+	xdg.Reload()
+	t.Cleanup(xdg.Reload)
 
 	cfg := validManifest(t.TempDir())
 	cfg.Paths.RuntimeDir = manifest.RuntimeDir{Mode: manifest.RuntimeDirXDG}
@@ -3525,68 +3251,6 @@ func (m *manager) launch(ctx context.Context, manifest *manifest.Manifest) error
 	return m.launchWithOptions(ctx, manifest, launch.Options{Resume: launch.ResumeModeNo})
 }
 
-func manifestBoundManager(m *manager, cfg *manifest.Manifest) *manager {
-	m.launchManifest = cfg
-	return m
-}
-
-type pidSignal struct {
-	pid int
-	sig os.Signal
-}
-
-type fakePIDSignaler struct {
-	existsErr error
-	signalErr error
-	signals   []pidSignal
-	onSignal  func(pid int, sig os.Signal) error
-}
-
-func (s *fakePIDSignaler) Exists(pid int) error {
-	return s.existsErr
-}
-
-func (s *fakePIDSignaler) Signal(pid int, sig os.Signal) error {
-	s.signals = append(s.signals, pidSignal{pid: pid, sig: sig})
-	if s.onSignal != nil {
-		return s.onSignal(pid, sig)
-	}
-	return s.signalErr
-}
-
-func acquireTestLaunchLock(t *testing.T, manifest *manifest.Manifest, pid int) func() {
-	t.Helper()
-
-	path := manifest.ResolvedLockPath()
-	return acquireTestLockFile(t, path, pid)
-}
-
-func acquireTestLockFile(t *testing.T, path string, pid int) func() {
-	t.Helper()
-
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatalf("create lock directory: %v", err)
-	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0o600)
-	if err != nil {
-		t.Fatalf("open lock: %v", err)
-	}
-	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		file.Close()
-		t.Fatalf("flock lock: %v", err)
-	}
-	if _, err := file.WriteString(fmt.Sprintf("%d\n", pid)); err != nil {
-		_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
-		file.Close()
-		t.Fatalf("write lock pid: %v", err)
-	}
-
-	return func() {
-		_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
-		_ = file.Close()
-	}
-}
-
 type fakeQMPClient struct {
 	mu                      sync.Mutex
 	quitCalls               int
@@ -3607,6 +3271,7 @@ type fakeQMPClient struct {
 	onStop                  func()
 	onCont                  func()
 	onEnableBalloonStats    func()
+	onSetBalloon            func()
 	listQOMProperties       map[string][]fakeQOMProperty
 	listQOMPropertiesErr    map[string]error
 	enableBalloonStatsErr   error
@@ -3614,7 +3279,6 @@ type fakeQMPClient struct {
 	queryBalloonErr         error
 	readBalloonStats        map[string]int64
 	readBalloonStatsErr     error
-	readBalloonStatsDelay   time.Duration
 	readBalloonStatsUpdated time.Time
 	onReadBalloonStats      func()
 	setBalloonLogicalSizes  []int64
@@ -3845,7 +3509,11 @@ func (c *fakeQMPClient) handleQMP(message map[string]any) (map[string]any, error
 		c.mu.Lock()
 		c.setBalloonLogicalSizes = append(c.setBalloonLogicalSizes, int64(value))
 		err := c.setBalloonErr
+		onSet := c.onSetBalloon
 		c.mu.Unlock()
+		if onSet != nil {
+			onSet()
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -3867,15 +3535,10 @@ func (c *fakeQMPClient) handleQMP(message map[string]any) (map[string]any, error
 		return map[string]any{"return": map[string]any{}}, nil
 	case "qom-get":
 		c.mu.Lock()
-		delay := c.readBalloonStatsDelay
 		err := c.readBalloonStatsErr
-		snapshot := mapsClone(c.readBalloonStats)
+		snapshot := maps.Clone(c.readBalloonStats)
 		updated := c.readBalloonStatsUpdated
 		c.mu.Unlock()
-
-		if delay > 0 {
-			time.Sleep(delay)
-		}
 
 		c.mu.Lock()
 		onRead := c.onReadBalloonStats
@@ -3926,17 +3589,6 @@ func (c *fakeQMPClient) handleQMP(message map[string]any) (map[string]any, error
 	}
 }
 
-func mapsClone(src map[string]int64) map[string]int64 {
-	if src == nil {
-		return nil
-	}
-	dst := make(map[string]int64, len(src))
-	for key, value := range src {
-		dst[key] = value
-	}
-	return dst
-}
-
 func containsString(values []string, needle string) bool {
 	for _, value := range values {
 		if strings.Contains(value, needle) {
@@ -3964,25 +3616,10 @@ func indexStringContaining(values []string, needle string) int {
 	return -1
 }
 
-func setXDGTestRuntimeDir(t *testing.T, runtimeDir string) {
-	t.Helper()
-
-	original, hadOriginal := os.LookupEnv("XDG_RUNTIME_DIR")
-	if err := os.Setenv("XDG_RUNTIME_DIR", runtimeDir); err != nil {
-		t.Fatalf("set XDG_RUNTIME_DIR: %v", err)
-	}
-	xdg.Reload()
-
-	t.Cleanup(func() {
-		var err error
-		if hadOriginal {
-			err = os.Setenv("XDG_RUNTIME_DIR", original)
-		} else {
-			err = os.Unsetenv("XDG_RUNTIME_DIR")
-		}
-		if err != nil {
-			t.Fatalf("restore XDG_RUNTIME_DIR: %v", err)
-		}
-		xdg.Reload()
-	})
+// TestMain drops the race detector's one-second exit sleep for the helper
+// processes these tests spawn from the test binary (GORACE is read at process
+// start, so the parent binary keeps its own).
+func TestMain(m *testing.M) {
+	os.Setenv("GORACE", "atexit_sleep_ms=0")
+	os.Exit(m.Run())
 }

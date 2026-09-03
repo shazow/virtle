@@ -213,20 +213,18 @@ func TestClientRejectsOversizedWireFrame(t *testing.T) {
 func TestClientCancellationInterruptsBlockedRead(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	defer serverConn.Close()
+	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
-		// Swallow the request and never respond.
+		// Swallow the request, never respond, and cancel the caller while it
+		// is blocked waiting for the reply.
 		buf := make([]byte, 1024)
 		_, _ = serverConn.Read(buf)
+		cancel()
 	}()
 
 	client := newSocketClient(clientConn, time.Hour)
 	defer client.Disconnect()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		time.Sleep(10 * time.Millisecond)
-		cancel()
-	}()
 	start := time.Now()
 	err := client.Ping(ctx)
 	if !errors.Is(err, context.Canceled) {
@@ -348,4 +346,20 @@ func assertCommand(t *testing.T, commands <-chan map[string]any, execute string)
 		t.Fatalf("timed out waiting for command %q", execute)
 	}
 	return nil
+}
+
+func TestShutdownTreatsUnresponsiveAgentAsPoweredOff(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	go func() {
+		// A guest that powers off mid-request never answers.
+		buf := make([]byte, 1024)
+		_, _ = serverConn.Read(buf)
+	}()
+
+	client := newSocketClient(clientConn, 20*time.Millisecond)
+	defer client.Disconnect()
+	if err := client.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown with an unresponsive agent: %v", err)
+	}
 }

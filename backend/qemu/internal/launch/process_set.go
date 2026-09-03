@@ -57,15 +57,6 @@ func (p *ProcessSet) Watchers() executor.Group {
 	return p.group.Snapshot()
 }
 
-func (p *ProcessSet) VMWatchers() executor.Group {
-	p.mu.Lock()
-	watchers := p.group.Snapshot()
-	qemu := p.qemu
-	p.mu.Unlock()
-	watchers.Remove(qemu)
-	return watchers
-}
-
 func (p *ProcessSet) StartTasks(ctx context.Context, tasks ...func(context.Context) error) {
 	var started taskGroup
 	for _, task := range tasks {

@@ -11,6 +11,7 @@ import (
 	"github.com/shazow/virtle/backend/qemu/internal/qga"
 	"github.com/shazow/virtle/internal/control"
 	"github.com/shazow/virtle/internal/manifest"
+	"github.com/shazow/virtle/vm"
 )
 
 // StartOptions configures a non-blocking StartVM.
@@ -39,9 +40,9 @@ type StartOptions struct {
 // the balloon controller run as they do for CLI launches. Canceling ctx stops
 // the returned VM and releases its runtime state.
 func StartVM(ctx context.Context, mf *manifest.Manifest, options StartOptions, configs ...Config) (*VM, error) {
-	config := DefaultConfig()
+	var config Config
 	if len(configs) > 0 {
-		config = mergeConfig(config, configs[0])
+		config = configs[0]
 	}
 	m := newManagerFromConfig(config)
 	v, err := m.startVM(ctx, launch.Spec{Manifest: mf, Options: launch.Options{
@@ -218,9 +219,6 @@ func (v *VM) CommitResume() error {
 	return v.commitErr
 }
 
-// StateDir returns the resolved persistence state directory.
-func (v *VM) StateDir() string { return v.running.plan.Paths.StateDir }
-
 // Status reports the in-process runtime status using the control-socket shape.
 func (v *VM) Status(ctx context.Context) (control.StatusResponse, error) {
 	return v.running.runtime.Status(ctx, control.StatusRequest{})
@@ -247,9 +245,8 @@ func (v *VM) ShutdownGuest(ctx context.Context) error {
 }
 
 // Suspend saves the VM state to the manifest's state directory and tears
-// the VM down, skipping guest file write-back exactly like a CLI suspend.
-// The VM is not usable afterwards; resume with StartVM and
-// ResumeModeForce.
+// the VM down without guest file write-back. The VM is not usable
+// afterwards; resume with StartVM and ResumeModeForce.
 func (v *VM) Suspend(ctx context.Context) error {
 	plan := v.running.plan
 	if err := v.m.saveSuspendStateConnected(ctx, plan.Paths.QMPSocket, v.running.qmp, plan.CID, plan.Notifier); err != nil {
@@ -261,13 +258,13 @@ func (v *VM) Suspend(ctx context.Context) error {
 
 // SuspendRequests reports suspend work queued by the control server.
 func (v *VM) SuspendRequests() <-chan struct{} {
-	return v.running.lifecycle.Suspend().Notify()
+	return v.running.suspend.Notify()
 }
 
 // HandleSuspendRequest services one queued suspend request and tears down the
 // runtime after the coordinator has reported the saved state to its waiter.
 func (v *VM) HandleSuspendRequest(ctx context.Context) error {
-	err := v.running.suspendHandler.Handle(ctx, v.running.lifecycle.Suspend())
+	err := v.running.suspendHandler.Handle(ctx, v.running.suspend)
 	if !launch.IsSavedSuspendExit(err) {
 		return err
 	}
@@ -277,7 +274,7 @@ func (v *VM) HandleSuspendRequest(ctx context.Context) error {
 
 // SuspendSession queues and services a foreground job-control suspend.
 func (v *VM) SuspendSession(ctx context.Context) error {
-	v.running.lifecycle.Suspend().Request()
+	v.running.suspend.Request()
 	return v.HandleSuspendRequest(ctx)
 }
 
@@ -290,12 +287,10 @@ func (v *VM) ResizeMemory(ctx context.Context, sizeBytes int64) error {
 	return balloon.SetActual(ctx, v.running.qmp, sizeBytes)
 }
 
-func (v *VM) ResolveHotplugMount(entry manifest.MountEntry) (manifest.HotplugDevice, error) {
-	return v.running.plan.Manifest.ResolveHotplugMount(entry)
-}
-
-func (v *VM) ResolveHotplugNetwork(entry manifest.NetworkInput) (manifest.HotplugDevice, error) {
-	return v.running.plan.Manifest.ResolveHotplugNetwork(entry)
+// HotplugDevice lowers a vm.Device onto the manifest's hotplug defaults,
+// producing the executable description AttachHotplugDevice expects.
+func (v *VM) HotplugDevice(dev vm.Device) (manifest.HotplugDevice, error) {
+	return hotplugDeviceFor(v.running.plan.Manifest, dev)
 }
 
 // AttachHotplugDevice attaches an ad hoc hotplug device to the running VM.

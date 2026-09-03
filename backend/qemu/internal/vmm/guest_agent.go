@@ -25,11 +25,7 @@ const (
 // command. QEMU exit is the authoritative completion signal; this only issues
 // the request.
 func (m *manager) requestGuestShutdown(ctx context.Context, socketPath string, exec []string) error {
-	dialer := m.guestAgentDialer
-	if dialer == nil {
-		dialer = &qga.SocketDialer{}
-	}
-	client, err := dialer.Dial(ctx, socketPath, m.effectiveQMPConnectTimeout())
+	client, err := m.effectiveGuestAgentDialer().Dial(ctx, socketPath, m.effectiveQMPConnectTimeout())
 	if err != nil {
 		return fmt.Errorf("connect guest agent: %w", err)
 	}
@@ -228,7 +224,7 @@ func (m *manager) writeGuestFile(ctx context.Context, client qga.Client, guestPa
 func (m *manager) readGuestFile(ctx context.Context, client qga.Client, guestPath string) ([]byte, error) {
 	ctx, cancel := m.launchManifest.GuestCommandContext(ctx)
 	defer cancel()
-	return qga.ReadFile(ctx, client, guestPath, qga.DefaultFileReadChunkSize)
+	return qga.ReadFile(ctx, client, guestPath, qga.DefaultFileReadChunkSize, 0)
 }
 
 func (m *manager) chownGuestFile(ctx context.Context, client qga.Client, guestPath string, owner string) error {
@@ -270,21 +266,13 @@ func (m *manager) waitForGuestAgent(ctx context.Context, socketPath string, watc
 }
 
 func (m *manager) waitForGuestAgentStage(ctx context.Context, stage string, socketPath string, watchers executor.Group) (qga.Client, error) {
-	dialer := m.guestAgentDialer
-	if dialer == nil {
-		dialer = &qga.SocketDialer{}
-	}
-	retryDelay := m.qmpRetryDelay
-	if retryDelay <= 0 {
-		retryDelay = defaultQMPRetryDelay
-	}
 	return launch.WaitForGuestAgent(ctx, launch.GuestAgentWait{
 		Stage:          stage,
 		SocketPath:     socketPath,
 		SocketWaiter:   m.socketWaiter,
-		Dialer:         dialer,
+		Dialer:         m.effectiveGuestAgentDialer(),
 		ConnectTimeout: m.effectiveQMPConnectTimeout(),
-		RetryDelay:     retryDelay,
+		RetryDelay:     m.effectiveQMPRetryDelay(),
 		PollDelay:      defaultSocketPollInterval,
 		Watchers:       watchers,
 	})

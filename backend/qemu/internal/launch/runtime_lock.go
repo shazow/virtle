@@ -13,31 +13,32 @@ type RuntimeLockSpec struct {
 	Manifest    *manifest.Manifest
 	ResumeState *SuspendState
 	Locker      Locker
-	Lifecycle   *Lifecycle
-	Cancel      context.CancelFunc
-	PID         int
+	// Cancel is called once the lock is released (or could not be acquired)
+	// so the launch context ends with the runtime state.
+	Cancel context.CancelFunc
+	PID    int
 }
 
 type RuntimeLock struct {
-	manifest  *manifest.Manifest
-	lock      Lock
-	lifecycle *Lifecycle
-	cancel    context.CancelFunc
-	pid       int
+	manifest *manifest.Manifest
+	lock     Lock
+	cancel   context.CancelFunc
+	pid      int
 }
 
 func AcquireRuntimeLock(spec RuntimeLockSpec) (*RuntimeLock, error) {
 	lock, err := spec.Locker.Acquire(spec.Manifest.ResolvedLockPath())
 	if err != nil {
-		stopRuntimeLockLifecycle(spec.Lifecycle, spec.Cancel)
+		if spec.Cancel != nil {
+			spec.Cancel()
+		}
 		return nil, err
 	}
 	runtimeLock := &RuntimeLock{
-		manifest:  spec.Manifest,
-		lock:      lock,
-		lifecycle: spec.Lifecycle,
-		cancel:    spec.Cancel,
-		pid:       spec.PID,
+		manifest: spec.Manifest,
+		lock:     lock,
+		cancel:   spec.Cancel,
+		pid:      spec.PID,
 	}
 
 	if spec.ResumeState == nil {
@@ -60,20 +61,12 @@ func (l *RuntimeLock) Cleanup() error {
 	if l == nil {
 		return nil
 	}
-	var cleanupErr error
-	cleanupErr = errors.Join(cleanupErr, RemoveLaunchPID(l.manifest, l.pid))
+	cleanupErr := RemoveLaunchPID(l.manifest, l.pid)
 	if l.lock != nil {
 		cleanupErr = errors.Join(cleanupErr, l.lock.Release())
 	}
-	stopRuntimeLockLifecycle(l.lifecycle, l.cancel)
+	if l.cancel != nil {
+		l.cancel()
+	}
 	return cleanupErr
-}
-
-func stopRuntimeLockLifecycle(lifecycle *Lifecycle, cancel context.CancelFunc) {
-	if lifecycle != nil {
-		lifecycle.Stop()
-	}
-	if cancel != nil {
-		cancel()
-	}
 }

@@ -27,9 +27,6 @@ func guestFilePayloadBase64(file manifest.ResolvedWriteFile) (string, error) {
 }
 
 func readHostFileForGuest(file manifest.ResolvedWriteFile) ([]byte, error) {
-	if file.Content.Kind != manifest.WriteFileContentPath {
-		return nil, fmt.Errorf("guest file %q has no host path", file.GuestPath)
-	}
 	if !file.FollowLinks {
 		info, err := os.Lstat(file.Content.Path)
 		if err != nil {
@@ -132,7 +129,7 @@ func WriteGuestFiles(ctx context.Context, files []manifest.ResolvedWriteFile, wr
 		if !file.Overwrite {
 			exists, err := writer.PathExists(ctx, file.GuestPath)
 			if err != nil {
-				return wrapStage("guest file write", err)
+				return WrapStage("guest file write", err)
 			}
 			if exists {
 				if writer.SkipExisting != nil {
@@ -143,22 +140,22 @@ func WriteGuestFiles(ctx context.Context, files []manifest.ResolvedWriteFile, wr
 		}
 		payloadBase64, err := guestFilePayloadBase64(file)
 		if err != nil {
-			return wrapStage("guest file write", err)
+			return WrapStage("guest file write", err)
 		}
 		if err := writer.InstallDirectory(ctx, file); err != nil {
-			return wrapStage("guest file write", err)
+			return WrapStage("guest file write", err)
 		}
 		if err := writer.WriteFile(ctx, file.GuestPath, payloadBase64); err != nil {
-			return wrapStage("guest file write", err)
+			return WrapStage("guest file write", err)
 		}
 		if file.Chown != "" {
 			if err := writer.Chown(ctx, file.GuestPath, file.Chown); err != nil {
-				return wrapStage("guest file write", err)
+				return WrapStage("guest file write", err)
 			}
 		}
 		if file.Mode != "" {
 			if err := writer.Chmod(ctx, file.GuestPath, file.Mode); err != nil {
-				return wrapStage("guest file write", err)
+				return WrapStage("guest file write", err)
 			}
 		}
 		if writer.Wrote != nil {
@@ -171,18 +168,18 @@ func WriteGuestFiles(ctx context.Context, files []manifest.ResolvedWriteFile, wr
 func MountWorkspaceCWD(ctx context.Context, launchManifest *manifest.Manifest, mounter WorkspaceCWDMounter) error {
 	baseDir := launchManifest.Workspace.GuestDir
 	if baseDir == "" {
-		return wrapStage("workspace cwd mount", fmt.Errorf("workspace.guest_dir is required when workspace.mount_cwd is true"))
+		return WrapStage("workspace cwd mount", fmt.Errorf("workspace.guest_dir is required when workspace.mount_cwd is true"))
 	}
 	name := filepath.Base(launchManifest.Paths.WorkingDir)
 	if name == "." || name == string(filepath.Separator) || name == "" {
-		return wrapStage("workspace cwd mount", fmt.Errorf("derive workspace cwd name from working directory %q", launchManifest.Paths.WorkingDir))
+		return WrapStage("workspace cwd mount", fmt.Errorf("derive workspace cwd name from working directory %q", launchManifest.Paths.WorkingDir))
 	}
 	target := path.Join(baseDir, name)
 	if err := mounter.InstallDir(ctx, target, []string{"-d", baseDir, target}); err != nil {
-		return wrapStage("workspace cwd mount", err)
+		return WrapStage("workspace cwd mount", err)
 	}
 	if err := mounter.MountBind(ctx, workspaceCWDSource, target, []string{"--bind", workspaceCWDSource, target}); err != nil {
-		return wrapStage("workspace cwd mount", err)
+		return WrapStage("workspace cwd mount", err)
 	}
 	if mounter.Mounted != nil {
 		mounter.Mounted(workspaceCWDSource, target)
@@ -204,14 +201,14 @@ func WriteBackGuestFiles(ctx context.Context, files []manifest.ResolvedWriteFile
 	for _, file := range files {
 		data, err := backer.ReadFile(ctx, file.GuestPath)
 		if err != nil {
-			return wrapStage("guest file write-back", err)
+			return WrapStage("guest file write-back", err)
 		}
 		hostPath, err := writeBackHostPath(file)
 		if err != nil {
-			return wrapStage("guest file write-back", err)
+			return WrapStage("guest file write-back", err)
 		}
 		if err := backer.WriteHostFile(hostPath, data); err != nil {
-			return wrapStage("guest file write-back", fmt.Errorf("write host file %q from guest path %q: %w", hostPath, file.GuestPath, err))
+			return WrapStage("guest file write-back", fmt.Errorf("write host file %q from guest path %q: %w", hostPath, file.GuestPath, err))
 		}
 		if backer.Wrote != nil {
 			backer.Wrote(file.GuestPath, hostPath)

@@ -158,12 +158,15 @@ func TestBalloonControllerTaskWithNilLoggerDoesNotPanicOnAdjustment(t *testing.T
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// The fake stamps each stats read with the current time (whole seconds,
+	// as QEMU reports last-update) and cancels the task once the controller
+	// applies its first resize, so the test waits for exactly one poll tick.
 	qmpClient := (&fakeQMPClient{
 		readBalloonStats: map[string]int64{
 			"stat-available-memory": 500 * testMiB,
 		},
-		readBalloonStatsUpdated: time.Now(),
 		queryBalloonActualBytes: 512 * testMiB,
+		onSetBalloon:            cancel,
 	}).withDefaultBalloonPath("/machine/peripheral/balloon0")
 	task := balloon.ControllerTask(qmpClient, &imanifest.BalloonDevice{
 		ID:        "balloon0",
@@ -174,8 +177,8 @@ func TestBalloonControllerTaskWithNilLoggerDoesNotPanicOnAdjustment(t *testing.T
 			GrowBelowAvailable:    600,
 			ReclaimAboveAvailable: 900,
 			Step:                  256,
-			PollInterval:          1 * time.Second,
-			ReclaimHoldoff:        1 * time.Second,
+			PollInterval:          time.Second,
+			ReclaimHoldoff:        time.Second,
 		},
 	}, nil, nil)
 	if task == nil {
@@ -186,8 +189,6 @@ func TestBalloonControllerTaskWithNilLoggerDoesNotPanicOnAdjustment(t *testing.T
 	go func() {
 		done <- task(ctx)
 	}()
-	time.Sleep(1100 * time.Millisecond)
-	cancel()
 
 	if err := <-done; err != nil {
 		t.Fatalf("expected nil task error, got %v", err)

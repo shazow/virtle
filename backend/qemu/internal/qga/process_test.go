@@ -16,14 +16,14 @@ func TestFormatProcessListExecDataSortsProcesses(t *testing.T) {
 }
 
 func TestParseProcessesSkipsMalformedLines(t *testing.T) {
-	got := ParseProcesses("root\nagent sshd\n\n")
+	got := parseProcesses("root\nagent sshd\n\n")
 	if len(got) != 1 || got[0].User != "agent" || got[0].Command != "sshd" {
 		t.Fatalf("processes: %#v", got)
 	}
 }
 
 func TestFormatProcessesEmpty(t *testing.T) {
-	if got := FormatProcesses(nil); got != "" {
+	if got := formatProcesses(nil); got != "" {
 		t.Fatalf("empty process list: %q", got)
 	}
 }

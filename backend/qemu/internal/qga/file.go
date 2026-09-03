@@ -30,15 +30,9 @@ func WriteFile(ctx context.Context, client FileWriter, guestPath string, payload
 	return closeErr
 }
 
-// ReadFile reads guestPath through client and decodes at most
-// limits.DefaultMaxFileReadSize bytes.
-func ReadFile(ctx context.Context, client FileReader, guestPath string, chunkSize int) ([]byte, error) {
-	return ReadFileLimit(ctx, client, guestPath, chunkSize, limits.DefaultMaxFileReadSize)
-}
-
-// ReadFileLimit reads guestPath through client and rejects content larger than
+// ReadFile reads guestPath through client and rejects content larger than
 // maxSize. A non-positive maxSize uses limits.DefaultMaxFileReadSize.
-func ReadFileLimit(ctx context.Context, client FileReader, guestPath string, chunkSize int, maxSize int64) ([]byte, error) {
+func ReadFile(ctx context.Context, client FileReader, guestPath string, chunkSize int, maxSize int64) ([]byte, error) {
 	if chunkSize <= 0 {
 		chunkSize = DefaultFileReadChunkSize
 	}

@@ -18,7 +18,6 @@ package qemu
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -64,10 +63,10 @@ type Backend struct {
 	CPUModel       string            // QEMU CPU model; default derived per host
 	Accel          Accel             // acceleration; default AccelAuto
 	ExtraArgs      []string          // passthrough QEMU arguments
-	Console        Console
-	Seccomp        bool   // enable QEMU seccomp sandboxing
-	Balloon        bool   // attach a virtio-balloon device (required for ResizeMemory)
-	HostName       string // guest-visible name; default: "virtle"
+	Console        Console           // serial console wiring; the zero value keeps the manifest's kernel.serial (default ConsoleOff)
+	Seccomp        bool              // enable QEMU seccomp sandboxing
+	Balloon        bool              // attach a virtio-balloon device (required for ResizeMemory)
+	HostName       string            // guest-visible name; default: "virtle"
 
 	// HotplugPorts reserves PCIe hotplug ports at boot so devices can be
 	// attached later via backend.DeviceAttacher. Reserving ports forces
@@ -90,7 +89,7 @@ type Backend struct {
 	// is os.Stderr.
 	ConsoleOutput io.Writer
 
-	doc *imanifest.Document // transitional manifest.Load overlay; removed with consolidation
+	doc *imanifest.Document // base document of a manifest.Load backend; nil when configured in Go
 
 	disableVSock bool // integration-only: nested CI guests have no vhost-vsock device
 }
@@ -149,6 +148,9 @@ func NewBackendFromDocument(doc imanifest.Document, b Backend) backend.Backend {
 	return &b
 }
 
+// Start implements backend.Backend: it lowers spec through the manifest
+// pipeline (overlaid on the loaded document for manifest.Load backends),
+// launches QEMU, and returns the running machine.
 func (b *Backend) Start(ctx context.Context, spec *vm.Spec) (backend.Machine, error) {
 	return b.start(ctx, spec, vmm.ResumeModeNo)
 }
@@ -207,14 +209,20 @@ type Machine struct {
 	hasRemoteControl bool
 }
 
+// Wait blocks until the machine exits or ctx ends and returns the exit result.
 func (m *Machine) Wait(ctx context.Context) error { return m.vm.Wait(ctx) }
 
+// Done closes after the machine exits and its runtime state is released.
 func (m *Machine) Done() <-chan struct{} { return m.vm.Done() }
 
+// Err reports the exit result after Done closes.
 func (m *Machine) Err() error { return m.vm.Err() }
 
+// Kill hard-stops QEMU and releases runtime state.
 func (m *Machine) Kill() error { return m.vm.Kill() }
 
+// RemoteControl returns the guest-agent-backed vm.Guest, or an error wrapping
+// errors.ErrUnsupported when Backend.RemoteControl was nil at Start.
 func (m *Machine) RemoteControl() (vm.Guest, error) {
 	if !m.hasRemoteControl {
 		return nil, fmt.Errorf("vm has no guest control agent: %w", errors.ErrUnsupported)
@@ -264,7 +272,7 @@ func (m *Machine) ResizeMemory(ctx context.Context, size units.Bytes) error {
 // (or a manifest [hotplug] section / hotplug.ports for manifest.Load
 // backends).
 func (m *Machine) Attach(ctx context.Context, dev vm.Device) error {
-	hdev, err := hotplugDevice(m.vm, dev)
+	hdev, err := m.vm.HotplugDevice(dev)
 	if err != nil {
 		return err
 	}
@@ -273,7 +281,7 @@ func (m *Machine) Attach(ctx context.Context, dev vm.Device) error {
 
 // Detach implements backend.DeviceAttacher; see Attach.
 func (m *Machine) Detach(ctx context.Context, dev vm.Device) error {
-	hdev, err := hotplugDevice(m.vm, dev)
+	hdev, err := m.vm.HotplugDevice(dev)
 	if err != nil {
 		return err
 	}
@@ -283,73 +291,9 @@ func (m *Machine) Detach(ctx context.Context, dev vm.Device) error {
 var (
 	_ backend.Backend        = (*Backend)(nil)
 	_ backend.Resumer        = (*Backend)(nil)
+	_ backend.Machine        = (*Machine)(nil)
 	_ backend.Suspender      = (*Machine)(nil)
 	_ backend.MemoryResizer  = (*Machine)(nil)
 	_ backend.DeviceAttacher = (*Machine)(nil)
 	_ backend.StatusReporter = (*Machine)(nil)
 )
-
-type hotplugResolver interface {
-	ResolveHotplugMount(imanifest.MountEntry) (imanifest.HotplugDevice, error)
-	ResolveHotplugNetwork(imanifest.NetworkInput) (imanifest.HotplugDevice, error)
-}
-
-// hotplugDevice maps the sealed vm.Device union onto manifest inputs, then
-// resolves them into an executable internal hotplug device description.
-func hotplugDevice(resolver hotplugResolver, dev vm.Device) (imanifest.HotplugDevice, error) {
-	switch d := dev.(type) {
-	case vm.Share:
-		if d.Tag == "" {
-			return imanifest.HotplugDevice{}, fmt.Errorf("share device: Tag is required")
-		}
-		return resolver.ResolveHotplugMount(imanifest.VirtioFSMountInput{
-			Type: imanifest.MountTypeVirtioFS,
-			MountInput: imanifest.MountInput{
-				Tag:        d.Tag,
-				SourcePath: d.HostPath,
-				ReadOnly:   d.ReadOnly,
-			},
-			Target: d.GuestPath,
-		})
-	case vm.Disk:
-		if d.Path == "" {
-			return imanifest.HotplugDevice{}, fmt.Errorf("disk device: Path is required")
-		}
-		id := deviceID("disk", d.Path)
-		return resolver.ResolveHotplugMount(imanifest.ImageMountInput{
-			Type:       imanifest.MountTypeImage,
-			SourcePath: d.Path,
-			Image:      imanifest.ImageInput{Format: d.Format, Serial: &id},
-		})
-	case vm.Forward:
-		proto := d.Proto
-		if proto == "" {
-			proto = vm.TCP
-		}
-		identity := string(proto) + "\x00" + d.HostAddr + "\x00" + d.GuestAddr
-		return resolver.ResolveHotplugNetwork(imanifest.NetworkInput{
-			ID:  deviceID("fwd", identity),
-			MAC: deviceMAC(identity),
-			Forward: []imanifest.ForwardPort{{
-				Proto: string(proto),
-				From:  "host",
-				Host:  d.HostAddr,
-				Guest: d.GuestAddr,
-			}},
-		})
-	default:
-		return imanifest.HotplugDevice{}, fmt.Errorf("unsupported device type %T", dev)
-	}
-}
-
-// deviceID derives a stable, collision-resistant QEMU ID without embedding
-// caller-controlled path or address syntax.
-func deviceID(kind, identity string) string {
-	digest := sha256.Sum256([]byte(identity))
-	return fmt.Sprintf("%s-%x", kind, digest[:8])
-}
-
-func deviceMAC(identity string) string {
-	digest := sha256.Sum256([]byte(identity))
-	return fmt.Sprintf("02:%02x:%02x:%02x:%02x:%02x", digest[0], digest[1], digest[2], digest[3], digest[4])
-}

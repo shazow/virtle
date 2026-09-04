@@ -19,6 +19,15 @@ $ nix build .#virtle --no-link
 $ nix flake check
 ```
 
+CI also posts a diff of the Go API between the pull request and its merge-base
+as a pull request comment, using
+[go-whatchanged](https://github.com/shazow/go-whatchanged). It is informational
+and never fails the build. To see it locally:
+
+```console
+$ go run github.com/shazow/go-whatchanged@latest @origin/main
+```
+
 `nix flake check` runs the `integration`-tagged tests inside a small VM. After
 changing `go.mod` or `go.sum`, run `scripts/update-release-nix` (with no
 argument it keeps the current version) to refresh the vendor hash in

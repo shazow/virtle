@@ -14,6 +14,11 @@
 - When writing a test to validate the removal of some functionality, comment that it is temporary. Mention the tested scenario in the validation report but remove temporary tests before the task is completed.
 - Avoid using timed sleeps in tests, prefer signal-based control flows whenever possible. If sleep is the only way, then use a module-global constant to have uniform values for slow and fast sleep durations.
 
+## Harnesses
+
+- `.mcp.json` registers Codex as an MCP server (`codex mcp-server`), so Claude can drive a Codex session through the `codex` and `codex-reply` tools. Pass `cwd` and a `sandbox`/`approval-policy` suited to the task; keep the `threadId` to continue a session.
+- On Claude Code on the web, `.claude/hooks/session-start.sh` installs the `codex` CLI and logs in from `OPENAI_API_KEY` when the environment provides it.
+
 ## Commit
 
 - First line: `<component name>: <short description of changes>`

@@ -239,6 +239,7 @@ func overlayDisk(input imanifest.ImageMountInput, disk vm.Disk) (imanifest.Image
 		return imanifest.ImageMountInput{}, fmt.Errorf("disk %q: size %s is not MiB-aligned", disk.Path, disk.Size)
 	}
 	input.Type = imanifest.MountTypeImage
+	input.ReadOnly = disk.ReadOnly
 	input.SourcePath = disk.Path
 	input.Image.Size = disk.Size.Mebibytes()
 	input.Image.Format = disk.Format

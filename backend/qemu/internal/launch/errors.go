@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/shazow/virtle/internal/executor"
+	"github.com/shazow/virtle/internal/sessionbridge"
 )
 
 type CommandError struct {
@@ -40,7 +41,7 @@ func (e *StageError) Unwrap() error {
 	return e.Err
 }
 
-var ErrSavedSuspendExit = errors.New("saved suspend requested")
+var ErrSavedSuspendExit = sessionbridge.ErrSavedSuspendExit
 
 func IsSavedSuspendExit(err error) bool {
 	return errors.Is(err, ErrSavedSuspendExit)
@@ -101,3 +102,5 @@ func firstUnexpectedExit(stage string, watchers executor.Group) error {
 	}
 	return wrapCommandError(stage, process.Name(), err)
 }
+
+func (e *CommandError) SessionExitCode() int { return e.ExitCode }

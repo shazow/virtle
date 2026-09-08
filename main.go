@@ -1,4 +1,4 @@
-// Command virtle launches and controls QEMU sandbox VMs described by a
+// Command virtle launches and controls sandbox VMs described by a
 // manifest. Run virtle --help for the command list; see README.md for the
 // manifest format.
 package main
@@ -19,11 +19,12 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/jessevdk/go-flags"
 	"github.com/shazow/virtle/backend"
+	"github.com/shazow/virtle/backend/firecracker"
 	"github.com/shazow/virtle/backend/qemu"
-	"github.com/shazow/virtle/backend/qemu/session"
 	"github.com/shazow/virtle/internal/control"
 	"github.com/shazow/virtle/internal/manifest"
 	manifestschema "github.com/shazow/virtle/internal/manifest/schema"
+	"github.com/shazow/virtle/internal/session"
 	manifestapi "github.com/shazow/virtle/manifest"
 )
 
@@ -39,7 +40,7 @@ type Options struct {
 		Args struct {
 			RemoteCommand []string `positional-arg-name:"remote-cmd"`
 		} `positional-args:"yes"`
-	} `command:"launch" description:"Launch a virtiofs + ssh sandbox session" long-description:"Start configured host-side run processes, launch QEMU directly, then optionally attach over ssh."`
+	} `command:"launch" description:"Launch a virtual machine session" long-description:"Launch the selected backend, then optionally attach over SSH when supported."`
 
 	Suspend struct{} `command:"suspend" description:"Suspend a running sandbox session" long-description:"Save QEMU state to disk and exit the launch session."`
 
@@ -94,6 +95,10 @@ func runLaunch(options *Options) error {
 	if qemuBackend, ok := b.(*qemu.Backend); ok {
 		qemuBackend.Logger = rootLogger
 		qemuBackend.ConsoleOutput = os.Stderr
+	}
+	if fcBackend, ok := b.(*firecracker.Backend); ok {
+		fcBackend.Logger = rootLogger
+		fcBackend.ConsoleOutput = os.Stderr
 	}
 	loaded, err := doc.ManifestWithOptions(manifest.ResolveOptions{Logger: rootLogger.With("package", "manifest")})
 	if err != nil {

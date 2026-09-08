@@ -15,8 +15,9 @@ import (
 	"github.com/shazow/virtle/backend"
 	"github.com/shazow/virtle/backend/backendtest"
 	"github.com/shazow/virtle/backend/qemu/internal/launch"
-	"github.com/shazow/virtle/backend/qemu/internal/sessionbridge"
 	"github.com/shazow/virtle/internal/manifest"
+	shared "github.com/shazow/virtle/internal/session"
+	"github.com/shazow/virtle/internal/sessionbridge"
 	"github.com/shazow/virtle/vm"
 	"github.com/shazow/virtle/vm/vmtest"
 )
@@ -287,7 +288,7 @@ func TestRunPrintsSSHHintToStdout(t *testing.T) {
 }
 
 func TestWaitReadyHasDeadline(t *testing.T) {
-	t.Setenv(sshReadyTimeoutEnv, "20ms")
+	t.Setenv("VIRTLE_SSH_READY_TIMEOUT", "20ms")
 	path := filepath.Join(t.TempDir(), "ready.sock")
 	listener, err := net.Listen("unix", path)
 	if err != nil {
@@ -295,7 +296,7 @@ func TestWaitReadyHasDeadline(t *testing.T) {
 	}
 	defer listener.Close()
 	m := &sessionTestMachine{Machine: newMemoryMachine(t), readyPath: path}
-	err = waitReady(context.Background(), m, &sessionbridge.Bridge{}, make(chan os.Signal), slog.New(slog.DiscardHandler))
+	err = shared.WaitReady(context.Background(), m, &sessionbridge.Bridge{}, make(chan os.Signal), slog.New(slog.DiscardHandler))
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("waitReady error = %v, want context.DeadlineExceeded", err)
 	}

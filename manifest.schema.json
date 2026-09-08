@@ -1,6 +1,30 @@
 {
   "type": "object",
   "properties": {
+    "backend": {
+      "type": "string",
+      "description": "Virtual machine backend: qemu (default) or firecracker.",
+      "default": "qemu"
+    },
+    "firecracker": {
+      "type": "object",
+      "properties": {
+        "binary": {
+          "type": "string",
+          "description": "Firecracker executable; default firecracker. No shell expansion."
+        },
+        "startup_timeout": {
+          "type": "string",
+          "description": "Maximum time for API startup and configuration; zero uses 10s."
+        },
+        "shutdown_timeout": {
+          "type": "string",
+          "description": "Maximum graceful shutdown time; zero uses 10s."
+        }
+      },
+      "description": "Firecracker executable and lifecycle timeouts.",
+      "additionalProperties": false
+    },
     "host_name": {
       "type": "string",
       "description": "Guest-visible VM name used for QEMU naming and derived runtime files.",
@@ -163,8 +187,7 @@
       },
       "description": "Guest kernel initrd and kernel command-line settings.",
       "required": [
-        "path",
-        "initrd_path"
+        "path"
       ],
       "additionalProperties": false
     },
@@ -918,5 +941,26 @@
   "required": [
     "kernel"
   ],
-  "additionalProperties": false
+  "additionalProperties": false,
+  "if": {
+    "properties": {
+      "backend": {
+        "enum": [
+          "firecracker"
+        ]
+      }
+    },
+    "required": [
+      "backend"
+    ]
+  },
+  "else": {
+    "properties": {
+      "kernel": {
+        "required": [
+          "initrd_path"
+        ]
+      }
+    }
+  }
 }

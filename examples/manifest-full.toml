@@ -174,6 +174,7 @@ retry_delay = "500ms"  # Default: "500ms"
 autoprovision = true  # Default: false
 
 [vsock]
+enabled = true  # Default: true; disable for guests that do not use vsock.
 # virtle allocates a runtime vsock CID to avoid collisions between concurrent
 # VMs. The range exists for hosts or orchestrators that reserve parts of the
 # CID space; narrowing it too much can make launch fail under concurrency.

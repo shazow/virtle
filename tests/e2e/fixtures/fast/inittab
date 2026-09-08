@@ -1,0 +1,2 @@
+::sysinit:/bin/ready
+::ctrlaltdel:/bin/shutdown

@@ -16,7 +16,15 @@ func TestStartControlServesRuntimeHandler(t *testing.T) {
 	if err != nil {
 		t.Fatalf("router: %v", err)
 	}
-	server, err := startControl(context.Background(), socketPath, router, nil)
+	server, err := control.NewServer(router)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := control.Listen(socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = serveControl(context.Background(), listener, server, nil)
 	if err != nil {
 		t.Fatalf("start control: %v", err)
 	}
@@ -36,11 +44,7 @@ func TestStartControlServesRuntimeHandler(t *testing.T) {
 }
 
 func TestStartControlEmptySocketPath(t *testing.T) {
-	router, err := control.NewRouter(control.Handlers{Core: fakeRuntimeHandler{}})
-	if err != nil {
-		t.Fatalf("router: %v", err)
-	}
-	server, err := startControl(context.Background(), "", router, nil)
+	server, err := New(Config{}).StartControl(context.Background(), control.Handlers{})
 	if err != nil {
 		t.Fatalf("empty start control: %v", err)
 	}

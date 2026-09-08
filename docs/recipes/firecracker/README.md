@@ -1,5 +1,9 @@
 # Firecracker appliance
 
+For a much smaller shared Firecracker/QEMU guest and a counterbalanced CLI
+benchmark, see [the fast E2E fixture](../../../tests/e2e/README.md). This recipe
+continues to cover the distribution kernel, module loading and raw-disk I/O.
+
 This recipe builds all boot artifacts from the repository's locked nixpkgs:
 an ELF kernel, a BusyBox initrd, an ext4 raw disk containing `21`, and a virtle
 manifest. The guest mounts the disk read-only, reads its input, doubles it,

@@ -92,9 +92,14 @@ func (c *SuspendCoordinator) Begin() {
 	c.inFlight = true
 }
 
-// Complete records the outcome and releases every waiter.
+// Complete records the first outcome and releases every waiter. Later calls
+// preserve that outcome, so teardown can safely complete an unserviced request.
 func (c *SuspendCoordinator) Complete(err error) {
 	c.mu.Lock()
+	if c.completed {
+		c.mu.Unlock()
+		return
+	}
 	c.inFlight = false
 	c.completed = true
 	c.result = err

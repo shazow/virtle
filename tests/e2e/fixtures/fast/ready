@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+read -r value < /input
+echo "$((value * 2))" > /tmp/result
+read -r result < /tmp/result
+test "$result" = 42
+echo "VIRTLE_READY:$result"

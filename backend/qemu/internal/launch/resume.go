@@ -54,7 +54,8 @@ func ResolveResumeState(manifest *manifest.Manifest, mode ResumeMode, stateVersi
 			"suspend state %q has %s; this virtle resumes %q — resume with the virtle that wrote it or discard the state",
 			SuspendStatePath(manifest), written, stateVersion)
 	}
-	if state.CID <= 0 {
+	// CID 0 records a VM suspended with the vsock device disabled.
+	if state.CID < 0 || (state.CID == 0 && manifest.QEMU.Devices.VSOCK.ID != "") {
 		if mode == ResumeModeAuto {
 			return nil, nil
 		}

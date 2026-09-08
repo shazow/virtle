@@ -66,6 +66,23 @@ func (r *Core) QMP() qmpclient.Client {
 }
 
 func (r *Core) StartControl(ctx context.Context, handlers control.Handlers) (*control.Server, error) {
+	if r.paths.ControlSocket == "" {
+		return nil, nil
+	}
+	listener, err := control.Listen(r.paths.ControlSocket)
+	if err != nil {
+		return nil, err
+	}
+	server, err := r.startControl(handlers, func(server *control.Server) error {
+		return serveControl(ctx, listener, server, r.logger)
+	})
+	if err != nil {
+		_ = listener.Close()
+	}
+	return server, err
+}
+
+func (r *Core) startControl(handlers control.Handlers, serve func(*control.Server) error) (*control.Server, error) {
 	handlers.Core = r
 	handlers.Kill = r
 	handlers.Shutdown = r
@@ -75,11 +92,18 @@ func (r *Core) StartControl(ctx context.Context, handlers control.Handlers) (*co
 	if err != nil {
 		return nil, err
 	}
-	controlServer, err := startControl(ctx, r.paths.ControlSocket, router, r.logger)
-	if err == nil {
-		r.control = controlServer
+	controlServer, err := control.NewServer(router)
+	if err != nil {
+		return nil, err
 	}
-	return controlServer, err
+	// Lifecycle handlers may run as soon as serving starts. Publish once,
+	// before those goroutines exist, so even the first RPC closes this server.
+	r.control = controlServer
+	if err := serve(controlServer); err != nil {
+		// Keep ownership for Shutdown to drain any already accepted responses.
+		return nil, errors.Join(err, controlServer.Close())
+	}
+	return controlServer, nil
 }
 
 // Kill hard-stops QEMU and tears the runtime down. It ignores ctx: a hard
@@ -89,14 +113,28 @@ func (r *Core) Kill(_ context.Context, _ control.KillRequest) (control.KillRespo
 	if r.processes != nil && r.processes.QEMU() != nil {
 		err = r.processes.QEMU().KillAndWait()
 	}
-	return control.KillResponse{}, errors.Join(err, r.Shutdown(context.Background()))
+	return control.KillResponse{}, errors.Join(err, r.shutdown(context.Background()))
 }
 
 func (r *Core) ShutdownRPC(ctx context.Context, _ control.ShutdownRequest) (control.ShutdownResponse, error) {
-	return control.ShutdownResponse{}, r.Shutdown(ctx)
+	return control.ShutdownResponse{}, r.shutdown(ctx)
 }
 
+// Shutdown tears down the runtime and drains accepted lifecycle responses before
+// the launcher can report completion. Lifecycle RPC handlers must use shutdown
+// instead: they are themselves included in control.WaitLifecycle.
 func (r *Core) Shutdown(ctx context.Context) error {
+	err := r.shutdown(ctx)
+	if r.suspendRequests != nil {
+		// The foreground loop may have entered teardown without servicing a
+		// queued suspend. Release those handlers before draining responses.
+		r.suspendRequests.Complete(control.FailedPrecondition(errors.New("runtime stopped before suspend completed")))
+	}
+	r.control.WaitLifecycle()
+	return err
+}
+
+func (r *Core) shutdown(ctx context.Context) error {
 	return r.closer.Close(ctx, closeActions{
 		Processes:        r.processes,
 		QMP:              r.qmp,

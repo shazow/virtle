@@ -33,6 +33,7 @@ type Server struct {
 	done     chan struct{}
 	started  chan struct{}
 	start    sync.Once
+	handlers sync.WaitGroup
 }
 
 // NewServer returns a closable control server for router.
@@ -98,20 +99,25 @@ func (s *Server) Serve(l net.Listener) error {
 			}
 			return err
 		}
+		s.handlers.Add(1)
 		select {
 		case handlerSlots <- struct{}{}:
 			go func() {
+				defer s.handlers.Done()
 				defer func() { <-handlerSlots }()
 				s.handleConn(conn)
 			}()
 		default:
 			// Reject asynchronously so a peer that never reads its response
 			// cannot stall the accept loop for the write deadline.
-			go s.rejectConn(conn, &limits.Error{
-				Resource: "concurrent control requests",
-				Limit:    int64(maxHandlers),
-				Unit:     "handlers",
-			})
+			go func() {
+				defer s.handlers.Done()
+				s.rejectConn(conn, &limits.Error{
+					Resource: "concurrent control requests",
+					Limit:    int64(maxHandlers),
+					Unit:     "handlers",
+				})
+			}()
 		}
 	}
 }
@@ -134,11 +140,33 @@ func (s *Server) Close() error {
 	return listener.Close()
 }
 
+// Wait waits for Serve and all accepted connections, including response
+// writes, to finish. Call Close first and release any blocked handlers before
+// waiting. Close itself never waits, so handlers can safely initiate teardown.
+func (s *Server) Wait() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	done := s.done
+	s.mu.Unlock()
+	if done != nil {
+		<-done
+	}
+	s.handlers.Wait()
+}
+
 func (s *Server) handleConn(conn net.Conn) {
 	defer conn.Close()
+	// Bound writes separately from handler execution: lifecycle requests can
+	// legitimately wait longer than the transport timeout for the VM to exit.
+	reply := func(resp responseEnvelope) {
+		_ = conn.SetWriteDeadline(time.Now().Add(s.effectiveRequestReadTimeout()))
+		writeResponse(conn, resp)
+	}
 	readTimeout := s.effectiveRequestReadTimeout()
 	if err := conn.SetReadDeadline(time.Now().Add(readTimeout)); err != nil {
-		writeResponse(conn, responseEnvelope{Error: &RPCError{Code: ErrInternal, Message: err.Error()}})
+		reply(responseEnvelope{Error: &RPCError{Code: ErrInternal, Message: err.Error()}})
 		return
 	}
 	var req requestEnvelope
@@ -147,11 +175,11 @@ func (s *Server) handleConn(conn net.Conn) {
 		if errors.Is(err, limits.ErrExceeded) {
 			code = ErrResourceLimit
 		}
-		writeResponse(conn, responseEnvelope{Error: &RPCError{Code: code, Message: err.Error()}})
+		reply(responseEnvelope{Error: &RPCError{Code: code, Message: err.Error()}})
 		return
 	}
 	if err := conn.SetReadDeadline(time.Time{}); err != nil {
-		writeResponse(conn, responseEnvelope{Error: &RPCError{Code: ErrInternal, Message: err.Error()}})
+		reply(responseEnvelope{Error: &RPCError{Code: ErrInternal, Message: err.Error()}})
 		return
 	}
 	// Cancel the handler when the peer goes away so an abandoned request does
@@ -164,7 +192,7 @@ func (s *Server) handleConn(conn net.Conn) {
 		var buf [1]byte
 		_, _ = conn.Read(buf[:])
 	}()
-	writeResponse(conn, s.handler.handle(ctx, req))
+	reply(s.handler.handle(ctx, req))
 }
 
 func (s *Server) effectiveMaxRequestSize() int64 {

@@ -19,6 +19,8 @@ type ResolveOptions struct {
 }
 
 type Manifest struct {
+	Backend       string          `json:"backend"`
+	Firecracker   *Firecracker    `json:"firecracker,omitempty"`
 	Identity      Identity        `json:"identity"`
 	Paths         Paths           `json:"paths"`
 	Persistence   Persistence     `json:"persistence"`

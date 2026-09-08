@@ -15,8 +15,8 @@ import (
 // no live resources and is reusable across Start and Resume calls, with
 // one caveat: Files content readers are consumed by Start (see File).
 type Spec struct {
-	CPUs   int         // default: runtime.NumCPU
-	Memory units.Bytes // default: 2048 * units.Mebibyte
+	CPUs   int         // backend default: QEMU runtime.NumCPU, Firecracker 1
+	Memory units.Bytes // backend default: QEMU 2048 MiB, Firecracker 1024 MiB
 	Kernel Kernel      // direct kernel boot (microVM style); zero value: none
 	Shares []Share     // host dirs shared into the guest (virtio-fs or similar)
 	Disks  []Disk      // block devices / volume images
@@ -42,6 +42,7 @@ type Share struct {
 
 // Disk is a block device or volume image attached to the guest.
 type Disk struct {
+	ReadOnly  bool        // attach without allowing guest writes
 	Path      string      // host image path
 	GuestPath string      // guest mount point; optional
 	Format    string      // image format (e.g. "qcow2", "raw"); backend default when empty

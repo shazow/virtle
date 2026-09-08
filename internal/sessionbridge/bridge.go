@@ -5,6 +5,7 @@ package sessionbridge
 
 import (
 	"context"
+	"errors"
 	"sync"
 )
 
@@ -85,3 +86,8 @@ func (b *Bridge) Commit() error {
 	}
 	return commit()
 }
+
+// ErrSavedSuspendExit marks a successful session suspend.
+var ErrSavedSuspendExit = errors.New("saved suspend requested")
+
+func IsSavedSuspendExit(err error) bool { return errors.Is(err, ErrSavedSuspendExit) }

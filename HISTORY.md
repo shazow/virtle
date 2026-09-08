@@ -7,6 +7,33 @@ Keep entries terse. When a day includes both CLI and library changes, group
 them by type, CLI first. For compatibility-breaking usage migrations, include
 compact before/after examples.
 
+## 2026-09-08
+
+- `backend = "firecracker"` selects Firecracker through `manifest.Load` and the
+  CLI. QEMU remains the default. Firecracker supports kernel boot with an optional
+  initrd, raw disks, serial output, and status/wait/kill/shutdown RPCs, with private API
+  sockets, exclusive state ownership, bounded API responses, and startup rollback.
+  Unsupported QEMU/guest features, including explicit SSH readiness and vsock
+  settings, fail validation. Shutdown RPC responses drain before launcher exit.
+  Startup rollback stops wrapper descendants before releasing runtime ownership;
+  state-directory symlinks are rejected even with trailing separators.
+  Linux and KVM are required.
+- A Firecracker recipe built from locked nixpkgs and
+  `checks.x86_64-linux.firecracker` boot a guest, verify a raw-disk computation,
+  and require clean guest shutdown.
+  The rootfs normalizes and verifies root ownership; its rebuild comparison
+  verifies identical output.
+- The CLI foreground lifecycle is shared across backends. Signal handling now
+  gives `Machine.Shutdown` the opportunity to stop gracefully before canceling
+  the machine's lifetime. QEMU SSH and suspend behavior remains in its adapter.
+- `vm.Disk.ReadOnly` now represents manifest `read_only` on both backends.
+  **Library compatibility:** when replacing a manifest disk through `vm.Spec`,
+  explicitly retain `ReadOnly: true` if needed; false now makes it writable.
+  Manifest-only QEMU launches retain their configured read-only behavior.
+- Resolved manifests include their backend and Firecracker configuration.
+  Control status retains legacy JSON field names: `paths.qmpSocket` contains
+  the Firecracker API socket for Firecracker machines.
+
 ## 2026-09-03
 
 - `virtle launch --ssh` now exits 1, not 255, when the SSH client is killed by

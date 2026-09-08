@@ -1,0 +1,401 @@
+//go:build linux
+
+package firecracker
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"os"
+	"os/exec"
+	"os/signal"
+	"path/filepath"
+	"strings"
+	"sync"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/shazow/virtle/backend"
+	"github.com/shazow/virtle/internal/control"
+	"github.com/shazow/virtle/vm"
+)
+
+const testTimeout = 5 * time.Second
+const shortTimeout = 100 * time.Millisecond
+
+// TestMain doubles as a real child process speaking Firecracker's Unix HTTP
+// protocol. Filesystem use here exercises the actual socket/process boundary.
+func TestMain(m *testing.M) {
+	if mode := os.Getenv("VIRTLE_TEST_FIRECRACKER"); mode != "" {
+		if mode == "wrapper" || mode == "descendant" {
+			runWrapperHelper(mode)
+			os.Exit(17)
+		}
+		if mode == "diagnostic" {
+			fmt.Fprintln(os.Stderr, "KVM unavailable test")
+			os.Exit(1)
+		}
+		if mode == "exit" {
+			os.Exit(17)
+		}
+		if mode == "no-socket" {
+			signals := make(chan os.Signal, 1)
+			signal.Notify(signals, syscall.SIGTERM)
+			fmt.Println("WAIT")
+			<-signals
+			os.Exit(0)
+		}
+		listener, err := net.Listen("unix", os.Args[2])
+		if err != nil {
+			panic(err)
+		}
+		stop := make(chan struct{})
+		stopped := make(chan struct{})
+		server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if mode == "reject" && r.URL.Path == "/boot-source" {
+				http.Error(w, `{"fault_message":"test rejection"}`, 400)
+				return
+			}
+			if mode == "hung-api" {
+				<-r.Context().Done()
+				return
+			}
+			var a action
+			_ = json.NewDecoder(r.Body).Decode(&a)
+			w.WriteHeader(http.StatusNoContent)
+			if a.Type == "SendCtrlAltDel" && mode != "ignore-shutdown" {
+				close(stop)
+			}
+		})}
+		go func() { <-stop; _ = server.Shutdown(context.Background()); close(stopped) }()
+		_ = server.Serve(listener)
+		// Serve returns when Shutdown closes the listener, before in-flight
+		// handlers have necessarily flushed their replies. Reap only after
+		// Shutdown has drained those handlers, just as a real API server does.
+		<-stopped
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
+
+func helperBackend(t *testing.T, mode string) (*Backend, *vm.Spec) {
+	t.Helper()
+	t.Setenv("VIRTLE_TEST_FIRECRACKER", mode)
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &Backend{Binary: binary, StartupTimeout: testTimeout, ShutdownTimeout: testTimeout}, &vm.Spec{Dir: t.TempDir(), Kernel: vm.Kernel{Path: "kernel"}}
+}
+
+func TestLifecycle(t *testing.T) {
+	b, spec := helperBackend(t, "normal")
+	m, err := b.Start(t.Context(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill() })
+	status, err := m.(backend.StatusReporter).Status(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.PID <= 0 || status.State != backend.StateReady || status.Paths.MonitorSocket == "" {
+		t.Fatal(status)
+	}
+	if _, err := m.RemoteControl(); !errors.Is(err, errors.ErrUnsupported) {
+		t.Fatal(err)
+	}
+	if _, err := b.Start(t.Context(), spec); err == nil {
+		t.Fatal("concurrent state ownership succeeded")
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := m.Wait(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+	if err := m.Shutdown(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Wait(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Shutdown(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Kill(status.PID, 0); !errors.Is(err, syscall.ESRCH) {
+		t.Fatalf("child still exists: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Dir(status.Paths.MonitorSocket)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("runtime directory remains: %v", err)
+	}
+	m, err = b.Start(t.Context(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Kill(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestStartupRollback(t *testing.T) {
+	for _, mode := range []string{"exit", "reject", "hung-api", "missing-binary"} {
+		t.Run(mode, func(t *testing.T) {
+			b, spec := helperBackend(t, mode)
+			b.StartupTimeout = shortTimeout
+			if mode == "missing-binary" {
+				b.Binary = "/nonexistent/virtle-firecracker"
+			}
+			if m, err := b.Start(t.Context(), spec); err == nil {
+				_ = m.Kill()
+				t.Fatal("expected startup failure")
+			}
+			// Acquiring the same state after failed startup verifies rollback.
+			t.Setenv("VIRTLE_TEST_FIRECRACKER", "normal")
+			b.Binary, _ = os.Executable()
+			b.StartupTimeout = testTimeout
+			m, err := b.Start(t.Context(), spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := m.Kill(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestCancellationAndShutdownDeadline(t *testing.T) {
+	for _, mode := range []string{"cancel", "deadline"} {
+		t.Run(mode, func(t *testing.T) {
+			b, spec := helperBackend(t, "ignore-shutdown")
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			m, err := b.Start(ctx, spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = m.Kill() })
+			if mode == "cancel" {
+				cancel()
+			} else {
+				shutdownCtx, stop := context.WithCancel(t.Context())
+				stop()
+				if err := m.Shutdown(shutdownCtx); !errors.Is(err, context.Canceled) {
+					t.Fatal(err)
+				}
+			}
+			waitCtx, stop := context.WithTimeout(t.Context(), testTimeout)
+			defer stop()
+			if err := m.Wait(waitCtx); errors.Is(err, context.DeadlineExceeded) {
+				t.Fatal("child was not reaped")
+			}
+		})
+	}
+}
+
+type eventWriter struct {
+	once  sync.Once
+	ready chan struct{}
+}
+
+func (w *eventWriter) Write(p []byte) (int, error) {
+	w.once.Do(func() { close(w.ready) })
+	return len(p), nil
+}
+
+func TestStartupCancellation(t *testing.T) {
+	b, spec := helperBackend(t, "no-socket")
+	w := &eventWriter{ready: make(chan struct{})}
+	b.Console = "print"
+	b.ConsoleOutput = w
+	ctx, cancel := context.WithTimeout(t.Context(), testTimeout)
+	defer cancel()
+	result := make(chan error, 1)
+	go func() { _, err := b.Start(ctx, spec); result <- err }()
+	select {
+	case <-w.ready:
+		cancel()
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	if err := <-result; !errors.Is(err, context.Canceled) {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestPrivateStateDirectory(t *testing.T) {
+	b, spec := helperBackend(t, "normal")
+	target := t.TempDir()
+	if err := os.Symlink(target, filepath.Join(spec.Dir, ".virtle")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Start(t.Context(), spec); err == nil || !strings.Contains(err.Error(), "directory") {
+		t.Fatalf("got %v", err)
+	}
+	entries, err := os.ReadDir(target)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("symlink target changed: %v %v", entries, err)
+	}
+}
+
+func TestControlSocket(t *testing.T) {
+	b, spec := helperBackend(t, "normal")
+	m, err := b.Start(t.Context(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill() })
+	status, _ := m.(backend.StatusReporter).Status(t.Context())
+	if status.Paths.ControlSocket != filepath.Join(spec.Dir, ".virtle", "virtle.sock") {
+		t.Fatalf("control socket: %q", status.Paths.ControlSocket)
+	}
+	client, err := control.Dial(t.Context(), status.Paths.ControlSocket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote, err := client.(backend.StatusReporter).Status(t.Context())
+	if err != nil || remote.PID != status.PID {
+		t.Fatalf("status %+v: %v", remote, err)
+	}
+	methods, err := control.Raw(t.Context(), status.Paths.ControlSocket, "methods", nil)
+	if err != nil || strings.Contains(string(methods), `"suspend"`) {
+		t.Fatalf("methods %s: %v", methods, err)
+	}
+	if err := client.Shutdown(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Wait(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(status.Paths.ControlSocket); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("control socket remains: %v", err)
+	}
+}
+
+func TestControlPathPreserved(t *testing.T) {
+	b, spec := helperBackend(t, "normal")
+	state := filepath.Join(spec.Dir, ".virtle")
+	if err := os.Mkdir(state, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(state, "virtle.sock")
+	if err := os.WriteFile(path, []byte("keep"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if m, err := b.Start(t.Context(), spec); err == nil {
+		_ = m.Kill()
+		t.Fatal("occupied control path accepted")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != "keep" {
+		t.Fatalf("existing path changed: %q %v", data, err)
+	}
+}
+
+func TestStartupDiagnostics(t *testing.T) {
+	b, spec := helperBackend(t, "diagnostic")
+	_, err := b.Start(t.Context(), spec)
+	if err == nil || !strings.Contains(err.Error(), "KVM unavailable test") {
+		t.Fatalf("lost child diagnostic: %v", err)
+	}
+}
+
+func TestEarlyProcessExitPreservesStatus(t *testing.T) {
+	b, spec := helperBackend(t, "exit")
+	_, err := b.Start(t.Context(), spec)
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 17 {
+		t.Fatalf("lost child exit status: %v", err)
+	}
+	if errors.Is(err, context.Canceled) {
+		t.Fatalf("spontaneous exit reported as caller cancellation: %v", err)
+	}
+}
+
+func TestConcurrentShutdown(t *testing.T) {
+	b, spec := helperBackend(t, "normal")
+	m, err := b.Start(t.Context(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill() })
+	results := make(chan error, 8)
+	for range 8 {
+		go func() { results <- m.Shutdown(t.Context()) }()
+	}
+	for range 8 {
+		if err := <-results; err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestShutdownTimeout(t *testing.T) {
+	b, spec := helperBackend(t, "ignore-shutdown")
+	b.ShutdownTimeout = shortTimeout
+	m, err := b.Start(t.Context(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill() })
+	if err := m.Shutdown(t.Context()); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("got %v", err)
+	}
+	select {
+	case <-m.Done():
+	default:
+		t.Fatal("Shutdown returned without completing teardown")
+	}
+}
+
+func TestDefaultStateIsEphemeral(t *testing.T) {
+	t.Chdir(t.TempDir())
+	b, spec := helperBackend(t, "normal")
+	spec.Dir = ""
+	m, err := b.Start(t.Context(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill() })
+	status, _ := m.(backend.StatusReporter).Status(t.Context())
+	state := filepath.Dir(status.Paths.ControlSocket)
+	if !strings.HasPrefix(filepath.Base(state), "virtle-state-") {
+		t.Fatalf("default state not ephemeral: %s", state)
+	}
+	if err := m.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(state); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ephemeral state remains: %v", err)
+	}
+}
+
+func TestSharesManifestLockWithQEMU(t *testing.T) {
+	b, spec := helperBackend(t, "normal")
+	state := filepath.Join(spec.Dir, ".virtle")
+	if err := os.Mkdir(state, 0700); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := os.OpenFile(filepath.Join(state, "virtle.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+	if m, err := b.Start(t.Context(), spec); err == nil {
+		_ = m.Kill()
+		t.Fatal("ignored manifest lock owned by another backend")
+	}
+}
+
+var _ io.Writer = (*eventWriter)(nil)

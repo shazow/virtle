@@ -50,6 +50,10 @@
         let
           pkgs = nixpkgs.legacyPackages.${system};
           guestKernelPackage = pkgs.linuxPackages.kernel;
+          firecrackerGuest = import ./docs/recipes/firecracker/guest.nix {
+            inherit pkgs;
+            virtle = self.packages.${system}.virtle;
+          };
           guestCompressedModules = pkgs.makeModulesClosure {
             kernel = guestKernelPackage.modules;
             firmware = guestKernelPackage;
@@ -142,6 +146,22 @@
                 touch $out
               ''
           );
+        }
+        // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
+          # Firecracker requires real KVM; no TCG fallback and no skip-success.
+          # SendCtrlAltDel (used to verify guest shutdown) is x86-only.
+          firecracker =
+            pkgs.runCommand "virtle-firecracker-e2e"
+              {
+                requiredSystemFeatures = [ "kvm" ];
+                nativeBuildInputs = [ pkgs.python3 ];
+              }
+              ''
+                test -r /dev/kvm && test -w /dev/kvm
+                python ${./docs/recipes/firecracker/check.py} \
+                  ${self.packages.${system}.virtle}/bin/virtle ${firecrackerGuest.manifest}
+                touch $out
+              '';
         }
       );
 

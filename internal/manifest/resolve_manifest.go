@@ -24,6 +24,15 @@ func (d Document) Manifest() (*Manifest, error) {
 }
 
 func (d Document) ManifestWithOptions(options ResolveOptions) (*Manifest, error) {
+	if d.Backend != "" && d.Backend != "qemu" && d.Backend != "firecracker" {
+		return nil, fmt.Errorf("manifest.backend must be qemu or firecracker, got %q", d.Backend)
+	}
+	if d.Backend == "firecracker" {
+		return d.firecrackerManifest()
+	}
+	if d.Firecracker != (FirecrackerInput{}) {
+		return nil, fmt.Errorf("manifest.firecracker requires backend = firecracker")
+	}
 	d = DocumentWithDefaults(d)
 	if d.Kernel.Path == "" {
 		return nil, fmt.Errorf("manifest.kernel.path is required")
@@ -33,6 +42,7 @@ func (d Document) ManifestWithOptions(options ResolveOptions) (*Manifest, error)
 	}
 	host := d.Host.withDefaults()
 	m := &Manifest{
+		Backend: "qemu",
 		Identity: Identity{
 			HostName: d.HostName,
 		},

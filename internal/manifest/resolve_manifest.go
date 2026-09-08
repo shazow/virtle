@@ -151,6 +151,10 @@ func (d Document) resolveQEMU(host HostInput, hotplugCount int) (QEMU, error) {
 	}
 	qmpSocket := d.QEMU.QMPSocket
 	guestAgentSocket := d.QEMU.GuestAgentSocket
+	vsockID := "vsock0"
+	if d.VSock.Enabled != nil && !*d.VSock.Enabled {
+		vsockID = ""
+	}
 	sshReadySocket := d.SSH.ReadySocket
 	noGraphic := graphics.IsZero()
 	cpus := resolveCPUCount(d.Machine.VCPU)
@@ -227,7 +231,7 @@ func (d Document) resolveQEMU(host HostInput, hotplugCount int) (QEMU, error) {
 			Mounts:   resolveQEMUMounts(d.Mounts, host, transport),
 			Network:  networks,
 			VSOCK: QEMUVSOCKDevice{
-				ID:        "vsock0",
+				ID:        vsockID,
 				Transport: transport,
 			},
 		},

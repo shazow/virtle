@@ -59,6 +59,24 @@ func TestResolveResumeState(t *testing.T) {
 	if state.Version != testStateVersion {
 		t.Fatalf("unexpected suspend state version: got %q want %q", state.Version, testStateVersion)
 	}
+
+	// Reuse the saved-state fixture to exercise a VM suspended without vsock.
+	cfg.QEMU.Devices.VSOCK.ID = ""
+	state.CID = 0
+	if err := WriteSuspendStateData(cfg, *state); err != nil {
+		t.Fatalf("write suspend state without vsock: %v", err)
+	}
+	for _, mode := range []ResumeMode{ResumeModeAuto, ResumeModeForce} {
+		t.Run(string(mode)+" without vsock", func(t *testing.T) {
+			resumed, err := ResolveResumeState(cfg, mode, testStateVersion)
+			if err != nil {
+				t.Fatalf("resolve resume state without vsock: %v", err)
+			}
+			if resumed == nil || resumed.CID != 0 || resumed.VMStatePath != vmStatePath {
+				t.Fatalf("unexpected resume state without vsock: %#v", resumed)
+			}
+		})
+	}
 }
 
 func TestResolveResumeStateRejectsVersionMismatch(t *testing.T) {

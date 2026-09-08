@@ -21,7 +21,7 @@ import (
 	"github.com/shazow/virtle/internal/executor"
 )
 
-func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started *runningLaunch, err error) {
+func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (result *runningLaunch, err error) {
 	if plan == nil {
 		return nil, &launch.StageError{Stage: "preflight", Err: errors.New("launch plan is required")}
 	}
@@ -50,6 +50,8 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 	processes := launch.NewProcessSet()
 	m.hotplugRuntime = hotplug.NewRuntime(processes)
 	var qmp qmpclient.Client
+	// Keep cleanup ownership independent of the nil result returned on error.
+	var started *runningLaunch
 	// writeBackOnExit is read by the control server's shutdown path once
 	// StartControl runs, while this goroutine still updates it after guest
 	// files are provisioned.

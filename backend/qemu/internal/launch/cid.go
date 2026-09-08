@@ -7,6 +7,10 @@ import (
 )
 
 func AcquireCID(manifest *manifest.Manifest, state *SuspendState, checker VSockCIDChecker) (int, error) {
+	// No host CID is needed without a QEMU vsock device, including on resume.
+	if manifest.QEMU.Devices.VSOCK.ID == "" {
+		return 0, nil
+	}
 	if state == nil {
 		return allocateCID(manifest, checker)
 	}

@@ -557,6 +557,13 @@
     "vsock": {
       "type": "object",
       "properties": {
+        "enabled": {
+          "type": [
+            "null",
+            "boolean"
+          ],
+          "description": "Attach the QEMU vsock device; defaults to true. Disable for guests that do not use host-guest vsock communication."
+        },
         "cid_range": {
           "type": "object",
           "properties": {

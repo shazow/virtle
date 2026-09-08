@@ -9,6 +9,17 @@ compact before/after examples.
 
 ## 2026-09-08
 
+- QEMU `virtle launch` drains accepted wait/kill/shutdown/suspend responses
+  before exiting, without waiting for unrelated control handlers.
+- `nix run path:.#benchmark-backends` compares both CLI backends using a shared
+  minimal kernel and BusyBox initramfs. Raw counterbalanced trials separate
+  readiness and teardown timings and are labeled directional. The reusable
+  `e2e-fast-fixture` and `checks.x86_64-linux.e2e-fast` verify both real KVM
+  backends without performance assertions or skip-success when KVM is absent.
+- QEMU manifests can set `vsock.enabled = false` for guests that do not need
+  host-guest vsock communication, avoiding the `/dev/vhost-vsock` dependency.
+  Disabled devices use CID 0 without host allocation, including on resume.
+  Existing manifests continue to attach the device by default.
 - `backend = "firecracker"` selects Firecracker through `manifest.Load` and the
   CLI. QEMU remains the default. Firecracker supports kernel boot with an optional
   initrd, raw disks, serial output, and status/wait/kill/shutdown RPCs, with private API

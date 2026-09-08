@@ -285,6 +285,7 @@ type SSHInput struct {
 }
 
 type VSockInput struct {
+	Enabled  *bool      `json:"enabled,omitempty" toml:"enabled" jsonschema:"Attach the QEMU vsock device; defaults to true. Disable for guests that do not use host-guest vsock communication."`
 	CIDRange RangeInput `json:"cid_range,omitempty" toml:"cid_range" jsonschema:"Inclusive range of vsock CIDs virtle may allocate at launch."`
 }
 

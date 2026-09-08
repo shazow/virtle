@@ -218,6 +218,9 @@ func mergeSSHInput(base SSHInput, override SSHInput) SSHInput {
 }
 
 func mergeVSockInput(base VSockInput, override VSockInput) VSockInput {
+	if override.Enabled != nil {
+		base.Enabled = override.Enabled
+	}
 	if override.CIDRange.Min != 0 {
 		base.CIDRange.Min = override.CIDRange.Min
 	}

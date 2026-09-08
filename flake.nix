@@ -35,15 +35,37 @@
 
           default = virtle;
         }
+        // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
+          e2e-fast-fixture = import ./tests/e2e/fixtures/fast { inherit pkgs; };
+          benchmark-backends = pkgs.writeShellApplication {
+            name = "virtle-benchmark-backends";
+            runtimeInputs = [ pkgs.python3 ];
+            text = ''
+              exec python ${./tests/e2e/run.py} \
+                --virtle ${self.packages.${system}.virtle}/bin/virtle \
+                --fixture ${self.packages.${system}.e2e-fast-fixture} "$@"
+            '';
+          };
+        }
       );
 
-      apps = forAllSystems (system: {
-        default = {
-          type = "app";
-          program = "${self.packages.${system}.virtle}/bin/virtle";
-          meta.description = "Run virtle";
-        };
-      });
+      apps = forAllSystems (
+        system:
+        {
+          default = {
+            type = "app";
+            program = "${self.packages.${system}.virtle}/bin/virtle";
+            meta.description = "Run virtle";
+          };
+        }
+        // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
+          benchmark-backends = {
+            type = "app";
+            program = "${self.packages.${system}.benchmark-backends}/bin/virtle-benchmark-backends";
+            meta.description = "Directional Firecracker vs QEMU/KVM comparison";
+          };
+        }
+      );
 
       checks = forAllSystems (
         system:
@@ -126,6 +148,15 @@
           };
         in
         {
+          e2e-runner =
+            pkgs.runCommand "virtle-e2e-runner-tests"
+              {
+                nativeBuildInputs = [ pkgs.python3 ];
+              }
+              ''
+                PYTHONDONTWRITEBYTECODE=1 python -m unittest discover -s ${./tests/e2e} -v
+                touch $out
+              '';
           # Runs the launch integration tests in a small VM where /bin/sh is
           # dash, covering the absolute guest shell path Virtle sends to QGA.
           integration = pkgs.vmTools.runInLinuxVM (
@@ -148,6 +179,21 @@
           );
         }
         // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
+          e2e-fast =
+            pkgs.runCommand "virtle-fast-e2e"
+              {
+                requiredSystemFeatures = [ "kvm" ];
+                nativeBuildInputs = [ pkgs.python3 ];
+              }
+              ''
+                output=$(mktemp -d)
+                python ${./tests/e2e/run.py} \
+                  --virtle ${self.packages.${system}.virtle}/bin/virtle \
+                  --fixture ${self.packages.${system}.e2e-fast-fixture} \
+                  --pairs 2 --warmup-pairs 0 \
+                  --output "$output/results"
+                touch $out
+              '';
           # Firecracker requires real KVM; no TCG fallback and no skip-success.
           # SendCtrlAltDel (used to verify guest shutdown) is x86-only.
           firecracker =

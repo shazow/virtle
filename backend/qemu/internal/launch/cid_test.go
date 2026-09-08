@@ -70,8 +70,42 @@ func TestAcquireCIDFailsWhenRangeIsExhausted(t *testing.T) {
 	}
 }
 
+func TestAcquireCIDWithoutVSock(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		state *SuspendState
+	}{
+		{name: "fresh"},
+		{name: "resume zero", state: &SuspendState{CID: 0}},
+		{name: "resume legacy allocation", state: &SuspendState{CID: 7}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := cidManifest(3, 5)
+			cfg.QEMU.Devices.VSOCK.ID = ""
+			for _, checkErr := range []error{nil, errors.New("host vsock unavailable")} {
+				calls := 0
+				cid, err := AcquireCID(cfg, tc.state, cidCheckerFunc(func(int) (bool, error) {
+					calls++
+					return false, checkErr // Every CID is occupied, or the host cannot check.
+				}))
+				if err != nil || cid != 0 {
+					t.Errorf("disabled vsock: CID=%d err=%v, want CID 0 without error", cid, err)
+				}
+				if calls != 0 {
+					t.Errorf("disabled vsock checked %d host CIDs", calls)
+				}
+			}
+		})
+	}
+}
+
 func cidManifest(start, end int) *manifest.Manifest {
-	return &manifest.Manifest{VSock: manifest.VSock{CIDRange: manifest.VSockCIDRange{Start: start, End: end}}}
+	return &manifest.Manifest{
+		VSock: manifest.VSock{CIDRange: manifest.VSockCIDRange{Start: start, End: end}},
+		QEMU: manifest.QEMU{Devices: manifest.QEMUDevices{
+			VSOCK: manifest.QEMUVSOCKDevice{ID: "vsock0"},
+		}},
+	}
 }
 
 type cidCheckerFunc func(int) (bool, error)

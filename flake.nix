@@ -191,7 +191,10 @@
               }
               ''
                 output=$(mktemp -d)
-                python ${./tests/e2e/run.py} \
+                # Bound the whole run: a VMM wedged under nested virtualization
+                # must fail the check with its log, not hold the CI job until
+                # its own timeout.
+                timeout --kill-after=30 600 python ${./tests/e2e/run.py} \
                   --virtle ${self.packages.${system}.virtle}/bin/virtle \
                   --fixture ${self.packages.${system}.e2e-fast-fixture} \
                   --pairs 2 --warmup-pairs 0 \
@@ -208,7 +211,7 @@
               }
               ''
                 test -r /dev/kvm && test -w /dev/kvm
-                python ${./docs/recipes/firecracker/check.py} \
+                timeout --kill-after=30 600 python ${./docs/recipes/firecracker/check.py} \
                   ${self.packages.${system}.virtle}/bin/virtle ${firecrackerGuest.manifest}
                 touch $out
               '';

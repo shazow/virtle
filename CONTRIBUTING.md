@@ -19,10 +19,15 @@ $ nix build .#virtle --no-link
 $ nix flake check
 ```
 
-`nix flake check` runs the `integration`-tagged tests inside a small VM. After
-changing `go.mod` or `go.sum`, run `scripts/update-release-nix` (with no
-argument it keeps the current version) to refresh the vendor hash in
-`release.nix`; otherwise the Nix job fails.
+`nix flake check` runs the `integration`-tagged tests inside a small VM. On
+x86_64 it also boots both backends on real KVM (`e2e-fast`, `e2e-api`, and
+`firecracker`);
+those checks need a builder that advertises the `kvm` system feature and
+exposes `/dev/kvm` in the sandbox, and they never pass by skipping. Build a
+single check with `nix build .#checks.x86_64-linux.<name>` when the host cannot
+run them all. After changing `go.mod` or `go.sum`, run
+`scripts/update-release-nix` (with no argument it keeps the current version) to
+refresh the vendor hash in `release.nix`; otherwise the Nix job fails.
 
 To cut a release, tag the tip of `main` `vX.Y.Z` and push the tag. The release
 workflow runs `scripts/update-release-nix X.Y.Z`, commits the `release.nix`

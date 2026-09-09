@@ -65,7 +65,7 @@ func TestManifestSchemaKeepsSemanticFeatures(t *testing.T) {
 		t.Fatalf("root required = %v, want %v", got, want)
 	}
 	kernel := schema.Properties["kernel"]
-	if got, want := kernel.Required, []string{"path", "initrd_path"}; !slices.Equal(got, want) {
+	if got, want := kernel.Required, []string{"path"}; !slices.Equal(got, want) {
 		t.Fatalf("kernel required = %v, want %v", got, want)
 	}
 	if kernel.Properties["path"].Default != nil {
@@ -102,11 +102,11 @@ func TestManifestSchemaValidatesDocuments(t *testing.T) {
 	}
 
 	for name, document := range map[string]string{
-		"missing required kernel":    `{}`,
-		"missing kernel initrd_path": `{"kernel": {"path": "/boot/vmlinuz"}}`,
-		"memory with wrong type":     `{"kernel": {"path": "/k", "initrd_path": "/i"}, "machine": {"memory": "lots"}}`,
-		"unknown property":           `{"kernel": {"path": "/k", "initrd_path": "/i"}, "kernell": {}}`,
-		"mount without type":         `{"kernel": {"path": "/k", "initrd_path": "/i"}, "mounts": [{"source": "/tmp/x.img"}]}`,
+		"missing required kernel": `{}`,
+		"missing kernel path":     `{"kernel": {"initrd_path": "/boot/initrd"}}`,
+		"memory with wrong type":  `{"kernel": {"path": "/k", "initrd_path": "/i"}, "machine": {"memory": "lots"}}`,
+		"unknown property":        `{"kernel": {"path": "/k", "initrd_path": "/i"}, "kernell": {}}`,
+		"mount without type":      `{"kernel": {"path": "/k", "initrd_path": "/i"}, "mounts": [{"source": "/tmp/x.img"}]}`,
 	} {
 		if err := resolved.Validate(decodeJSON(t, document)); err == nil {
 			t.Errorf("%s: expected schema validation to fail", name)
@@ -121,4 +121,38 @@ func decodeJSON(t *testing.T, raw string) any {
 		t.Fatalf("decode test document: %v", err)
 	}
 	return value
+}
+
+func TestManifestSchemaBackendBootRequirements(t *testing.T) {
+	schema, err := Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := schema.Resolve(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, document string
+		valid          bool
+	}{
+		{"firecracker kernel only", `{"backend":"firecracker","kernel":{"path":"vmlinux"}}`, true},
+		{"firecracker with initrd", `{"backend":"firecracker","kernel":{"path":"vmlinux","initrd_path":"initrd"}}`, true},
+		{"firecracker requires kernel path", `{"backend":"firecracker","kernel":{"initrd_path":"initrd"}}`, false},
+		{"firecracker requires kernel section", `{"backend":"firecracker"}`, false},
+		{"qemu with initrd", `{"backend":"qemu","kernel":{"path":"kernel","initrd_path":"initrd"}}`, true},
+		// Booting from a root disk needs no initrd on either backend; the
+		// resolver, not the schema, checks that such a boot names a root.
+		{"qemu kernel only", `{"backend":"qemu","kernel":{"path":"kernel"}}`, true},
+		{"default qemu with initrd", `{"kernel":{"path":"kernel","initrd_path":"initrd"}}`, true},
+		{"root disk", `{"kernel":{"path":"kernel"},"mounts":[{"type":"image","source":"root.img","target":"/"}]}`, true},
+		{"unknown backend", `{"backend":"typo","kernel":{"path":"kernel"}}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := resolved.Validate(decodeJSON(t, tc.document))
+			if (err == nil) != tc.valid {
+				t.Fatalf("valid = %v, want %v: %v", err == nil, tc.valid, err)
+			}
+		})
+	}
 }

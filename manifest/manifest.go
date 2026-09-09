@@ -4,9 +4,9 @@
 //
 // Manifest sections with no vm.Spec representation — host [run] helper
 // commands, [notifications] hooks, [ssh] settings — stay attached to the
-// returned backend, which starts the helpers and runs the hooks itself. The
-// interactive SSH session is driven by backend/qemu/session, as the virtle
-// CLI does.
+// returned backend, which rejects the ones it cannot honor at load time.
+// QEMU starts the helpers and runs the hooks itself; the interactive SSH
+// session is driven by the virtle CLI's foreground loop.
 package manifest
 
 import (
@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/shazow/virtle/backend"
+	"github.com/shazow/virtle/backend/firecracker"
 	"github.com/shazow/virtle/backend/qemu"
 	imanifest "github.com/shazow/virtle/internal/manifest"
 	"github.com/shazow/virtle/vm"
@@ -62,6 +63,9 @@ func LoadDocument(doc imanifest.Document) (*vm.Spec, backend.Backend, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	if doc.Backend == imanifest.BackendFirecracker {
+		return spec, firecracker.NewBackendFromDocument(doc, firecracker.Backend{}), nil
+	}
 	return spec, qemu.NewBackendFromDocument(doc, qemu.Backend{}), nil
 }
 
@@ -89,9 +93,11 @@ func specFromDocument(doc imanifest.Document) (*vm.Spec, error) {
 	}
 	for _, mount := range doc.Mounts.Image() {
 		spec.Disks = append(spec.Disks, vm.Disk{
-			Path:   mount.SourcePath,
-			Format: mount.Image.Format,
-			Size:   mount.Image.Size.Bytes(),
+			ReadOnly:  mount.ReadOnly,
+			Path:      mount.SourcePath,
+			Format:    mount.Image.Format,
+			Size:      mount.Image.Size.Bytes(),
+			GuestPath: mount.Target, // "/" names the root device
 		})
 	}
 	for _, network := range doc.Networks {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,11 +18,12 @@ import (
 	"github.com/shazow/virtle/backend/qemu/internal/qmpclient"
 	"github.com/shazow/virtle/backend/qemu/internal/qmpwire"
 	runtimepkg "github.com/shazow/virtle/backend/qemu/internal/runtime"
+	"github.com/shazow/virtle/internal/console"
 	controlpkg "github.com/shazow/virtle/internal/control"
 	"github.com/shazow/virtle/internal/executor"
 )
 
-func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started *runningLaunch, err error) {
+func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (result *runningLaunch, err error) {
 	if plan == nil {
 		return nil, &launch.StageError{Stage: "preflight", Err: errors.New("launch plan is required")}
 	}
@@ -50,12 +52,29 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 	processes := launch.NewProcessSet()
 	m.hotplugRuntime = hotplug.NewRuntime(processes)
 	var qmp qmpclient.Client
+	// Keep cleanup ownership independent of the nil result returned on error.
+	var started *runningLaunch
 	// writeBackOnExit is read by the control server's shutdown path once
 	// StartControl runs, while this goroutine still updates it after guest
 	// files are provisioned.
 	var writeBackOnExit atomic.Bool
 	socketCleanupReached := false
-	cleanupRuntime := func() error { return runtimeLock.Cleanup() }
+	var consoleHub *console.Hub
+	closeConsole := func() error {
+		if consoleHub == nil {
+			return nil
+		}
+		return consoleHub.Close()
+	}
+	cleanupRuntime := func() error {
+		err := runtimeLock.Cleanup()
+		if plan.Options.RemoveStateDir {
+			// The caller created this state directory for this launch alone;
+			// nothing else keeps sockets, locks, or saved state in it.
+			err = errors.Join(err, os.RemoveAll(plan.Manifest.ResolvedPersistenceStateDir()))
+		}
+		return errors.Join(err, closeConsole())
+	}
 	defer func() {
 		if err == nil {
 			return
@@ -86,7 +105,21 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 	if err != nil {
 		return nil, &launch.StageError{Stage: "preflight", Err: err}
 	}
-	qemuCmd, err := buildQEMUCommand(plan.Manifest, cid, plan.ResumeState != nil, m.consoleOutput)
+	// A print console rides QEMU's standard streams through a hub that
+	// prints it, retains it, and serves VM.Console sessions.
+	var hub *console.Hub
+	if serial := plan.Manifest.QEMU.Console; serial.Enabled() && !serial.Interactive() {
+		var logger *slog.Logger
+		if m.logger != nil {
+			logger = m.logger.With("host_name", plan.Manifest.Identity.HostName)
+		}
+		hub, err = console.New(m.consoleOutput, logger)
+		if err != nil {
+			return nil, &launch.StageError{Stage: "preflight", Err: err}
+		}
+		consoleHub = hub
+	}
+	qemuCmd, err := buildQEMUCommand(plan.Manifest, cid, plan.ResumeState != nil, m.consoleOutput, hub)
 	if err != nil {
 		return nil, &launch.StageError{Stage: "preflight", Err: err}
 	}
@@ -115,6 +148,9 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 	}
 	if qemu == nil {
 		return nil, launch.WrapStage("vm startup", errors.New("qemu process is required"))
+	}
+	if hub != nil {
+		hub.Started()
 	}
 	processes.SetQEMU(qemu)
 	qmp, err = m.waitForQMP(launchCtx, plan.Paths.QMPSocket, processes.Watchers())
@@ -177,7 +213,7 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 	}
 
 	suspendHandler := newLaunchSuspendHandler(m, plan.Paths.QMPSocket, qmp, plan.CID, plan.Notifier, writeBackOnExit.Load)
-	runtime := runtimepkg.New(runtimepkg.Config{
+	runtimeConfig := runtimepkg.Config{
 		Manifest:        plan.Manifest,
 		Paths:           plan.Paths,
 		CID:             plan.CID,
@@ -197,7 +233,14 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 		WriteBackTimeout: defaultWriteBackTimeout,
 		Logger:           m.logger,
 		SavedSuspendExit: launch.IsSavedSuspendExit,
-	})
+	}
+	if plan.Options.RemoveStateDir {
+		// Saved state would be removed with the ephemeral state directory, so
+		// the control socket refuses suspend requests outright; VM.Suspend
+		// reports the same through errors.ErrUnsupported.
+		runtimeConfig.SuspendRequests = nil
+	}
+	runtime := runtimepkg.New(runtimeConfig)
 	started = &runningLaunch{
 		runtime:        runtime,
 		plan:           plan,
@@ -206,6 +249,7 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (started
 		suspend:        suspend,
 		suspendHandler: suspendHandler,
 		processes:      processes,
+		console:        hub,
 	}
 	runtime.SetReady()
 	handlers := controlpkg.Handlers{Hotplug: m.hotplugFeature(runtime.QMP())}
@@ -290,21 +334,12 @@ func (m *manager) prepareRuntimeState(plan *launch.Plan) error {
 		if !volume.AutoCreate {
 			continue
 		}
-		info, err := os.Stat(volume.ImagePath)
-		if err == nil {
-			if info.IsDir() {
-				return fmt.Errorf("volume image %q is a directory", volume.ImagePath)
-			}
-			continue
-		}
-		if !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("stat volume image %q: %w", volume.ImagePath, err)
-		}
-		if m.logger != nil {
-			m.logger.Info("creating volume image", "path", volume.ImagePath, "size_mib", volume.Size, "fs_type", volume.FSType)
-		}
-		if err := launch.CreateVolumeImage(volume, plan.Manifest.QEMU.RunAsUser); err != nil {
+		created, err := launch.EnsureVolumeImage(volume, plan.Manifest.QEMU.RunAsUser)
+		if err != nil {
 			return err
+		}
+		if created && m.logger != nil {
+			m.logger.Info("created volume image", "path", volume.ImagePath, "size_mib", volume.Size, "fs_type", volume.FSType)
 		}
 	}
 	return nil

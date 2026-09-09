@@ -356,7 +356,7 @@ func TestServerRejectsOversizedRequest(t *testing.T) {
 	defer clientConn.Close()
 	handled := make(chan struct{})
 	go func() {
-		server.handleConn(serverConn)
+		server.handleConn(serverConn, nil)
 		close(handled)
 	}()
 
@@ -394,7 +394,7 @@ func TestServerTimesOutIncompleteRequest(t *testing.T) {
 	server.RequestReadTimeout = 20 * time.Millisecond
 	serverConn, clientConn := net.Pipe()
 	defer clientConn.Close()
-	go server.handleConn(serverConn)
+	go server.handleConn(serverConn, nil)
 
 	var response responseEnvelope
 	if err := json.NewDecoder(clientConn).Decode(&response); err != nil {

@@ -12,14 +12,15 @@ Background: Originally designed to be used with [`agentspace`](https://github.co
 
 ## How does it work?
 
-`virtle` reads a manifest, starts the required host processes, launches QEMU,
-waits for guest SSH readiness, attaches an active session with `--ssh`.
+`virtle` reads a manifest, starts the required host processes, and launches
+the VM backend (QEMU by default, or Firecracker). For QEMU guests it also
+waits for SSH readiness and attaches an active session with `--ssh`.
 
 It also handles teardown, QMP-based shutdown, disk-backed suspend/resume, runtime vsock CID allocation, QGA-based remote commands, and more.
 
 ### Features
 
-- Runs a QEMU microvm.
+- Runs QEMU or Firecracker microVMs through the same CLI and Go interfaces.
 - Allocates block overlay images.
 - Manages [`virtiofsd`](https://gitlab.com/virtio-fs/virtiofsd) daemons for virtiofs mounts.
 - Provisions SSH between host and guest.
@@ -30,6 +31,29 @@ It also handles teardown, QMP-based shutdown, disk-backed suspend/resume, runtim
 - Exposes a `virtle.sock` for RPC (also usable via `virtle rpc` sub-command).
 - (Experimental) Balloon memory: Auto-adjust memory available to the VM based on internal memory pressure metrics.
 - (Experimental) Hotplug: Attach/detach devices during runtime (requires full VM).
+
+### Backends
+
+QEMU is the default. Set `backend = "firecracker"` to launch a Firecracker
+microVM instead (Linux with KVM; direct kernel boot, raw disks, serial output,
+and the same lifecycle commands). Guest control, SSH, shares, networking,
+suspend, ballooning, and hotplug are QEMU-only today. See
+[docs/firecracker.md](docs/firecracker.md) and the
+[Firecracker recipe](docs/recipes/firecracker/README.md).
+
+```toml
+backend = "firecracker"
+
+[kernel]
+path = "vmlinux"
+serial = "print"
+
+[[mounts]]
+type = "image"
+source = "rootfs.ext4"
+target = "/"
+read_only = true
+```
 
 ## Usage
 
@@ -100,6 +124,10 @@ if err != nil {
 }
 err = g.Run(ctx, &vm.GuestCmd{Path: "make", Dir: "/workspace", Stdout: os.Stdout})
 ```
+
+`&firecracker.Backend{}` takes the same `vm.Spec` and returns the same
+`backend.Machine`; see [docs/firecracker.md](docs/firecracker.md) for what it
+supports.
 
 Optional functionality is discovered by type assertion, as in
 `database/sql/driver`:

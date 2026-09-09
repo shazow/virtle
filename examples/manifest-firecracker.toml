@@ -1,0 +1,22 @@
+# A Firecracker microVM: direct boot of an uncompressed kernel with a raw root
+# disk. Guest control, SSH, shares, and networking are QEMU-only for now; see
+# docs/firecracker.md for what the backend supports.
+backend = "firecracker"
+
+[machine]
+vcpu = 2
+memory = 512
+
+[kernel]
+path = "/tmp/vmlinux"
+# virtle adds console=ttyS0 (for serial = "print"), reboot=k panic=-1, and
+# root=/dev/vda ro for the image mounted at "/".
+params = ["pci=off"]
+serial = "print"
+
+# The image mounted at "/" is the root device on every backend.
+[[mounts]]
+type = "image"
+source = "/tmp/rootfs.ext4"
+target = "/"
+read_only = true

@@ -1,6 +1,34 @@
 {
   "type": "object",
   "properties": {
+    "backend": {
+      "type": "string",
+      "description": "Virtual machine backend: qemu (default) or firecracker.",
+      "default": "qemu",
+      "enum": [
+        "qemu",
+        "firecracker"
+      ]
+    },
+    "firecracker": {
+      "type": "object",
+      "properties": {
+        "binary": {
+          "type": "string",
+          "description": "Firecracker executable; default firecracker. No shell expansion."
+        },
+        "startup_timeout": {
+          "type": "string",
+          "description": "Maximum time for API startup and configuration; zero uses 10s."
+        },
+        "shutdown_timeout": {
+          "type": "string",
+          "description": "Maximum graceful shutdown time; zero uses 10s."
+        }
+      },
+      "description": "Firecracker executable and lifecycle timeouts.",
+      "additionalProperties": false
+    },
     "host_name": {
       "type": "string",
       "description": "Guest-visible VM name used for QEMU naming and derived runtime files.",
@@ -163,8 +191,7 @@
       },
       "description": "Guest kernel initrd and kernel command-line settings.",
       "required": [
-        "path",
-        "initrd_path"
+        "path"
       ],
       "additionalProperties": false
     },
@@ -289,6 +316,10 @@
               "source": {
                 "type": "string",
                 "description": "Host disk image path."
+              },
+              "target": {
+                "type": "string",
+                "description": "Guest mount point for a boot-time image; only / is supported. It makes this image the root device, and virtle passes root= for it to the kernel on every backend. Not supported on hotplugged images."
               },
               "read_only": {
                 "type": "boolean",
@@ -534,6 +565,13 @@
     "vsock": {
       "type": "object",
       "properties": {
+        "enabled": {
+          "type": [
+            "null",
+            "boolean"
+          ],
+          "description": "Attach the QEMU vsock device; defaults to true. Disable for guests that do not use host-guest vsock communication."
+        },
         "cid_range": {
           "type": "object",
           "properties": {
@@ -791,6 +829,10 @@
                   "source": {
                     "type": "string",
                     "description": "Host disk image path."
+                  },
+                  "target": {
+                    "type": "string",
+                    "description": "Guest mount point for a boot-time image; only / is supported. It makes this image the root device, and virtle passes root= for it to the kernel on every backend. Not supported on hotplugged images."
                   },
                   "read_only": {
                     "type": "boolean",

@@ -2,9 +2,11 @@ package qemu
 
 import (
 	"bytes"
+	"errors"
 	"log/slog"
 	"maps"
 	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -192,6 +194,41 @@ func TestSpecDocumentAcceleration(t *testing.T) {
 	}
 }
 
+// A Spec without Dir works in the process working directory, as for
+// exec.Cmd.Dir, while its runtime state goes to the directory Start
+// created for it alone.
+func TestResolveSpecWithoutDirUsesProcessWorkingDirectory(t *testing.T) {
+	t.Chdir(t.TempDir())
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := t.TempDir()
+	mf, err := (&Backend{}).resolveSpec(&vm.Spec{Kernel: vm.Kernel{Path: "vmlinuz", Initrd: "initrd.img"}}, state, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatalf("resolveSpec: %v", err)
+	}
+	if got := mf.Paths.WorkingDir; got != cwd {
+		t.Errorf("working dir = %q, want the process working directory %q", got, cwd)
+	}
+	if got := mf.ResolvedPersistenceStateDir(); got != state {
+		t.Errorf("state dir = %q, want %q", got, state)
+	}
+	if got := mf.ResolvedLockPath(); filepath.Dir(got) != state {
+		t.Errorf("lock path = %q, want it under the state directory %q", got, state)
+	}
+}
+
+// TestResumeRequiresDir: the matching Suspend rule lives in the VM runtime
+// (vmm.TestStartVMRefusesSuspendWithEphemeralState), where the control
+// socket's suspend request is refused as well.
+func TestResumeRequiresDir(t *testing.T) {
+	_, err := (&Backend{}).Resume(t.Context(), &vm.Spec{Kernel: vm.Kernel{Path: "vmlinuz", Initrd: "initrd.img"}})
+	if err == nil || !strings.Contains(err.Error(), "Dir") {
+		t.Errorf("Resume without Dir = %v, want an error naming vm.Spec.Dir", err)
+	}
+}
+
 func TestSpecDocumentRequiresKernel(t *testing.T) {
 	if _, err := specDocument(&vm.Spec{Dir: "/work"}, &Backend{}, nil); err == nil {
 		t.Fatal("expected error for missing kernel")
@@ -202,6 +239,18 @@ func TestSpecDocumentRejectsUnalignedMemory(t *testing.T) {
 	spec := &vm.Spec{Kernel: vm.Kernel{Path: "k", Initrd: "i"}, Memory: 100 * units.Kibibyte, Dir: "/work"}
 	if _, err := specDocument(spec, &Backend{}, nil); err == nil {
 		t.Fatal("expected error for non-MiB-aligned memory")
+	}
+}
+
+// TestSpecRejectsNonRootGuestPath: only "/" (the root device) has a meaning
+// without a guest agent, so any other mount point is refused rather than
+// silently ignored, as on Firecracker.
+func TestSpecRejectsNonRootGuestPath(t *testing.T) {
+	spec := testSpec()
+	spec.Disks = []vm.Disk{{Path: "data.img", GuestPath: "/data"}}
+	_, err := specDocument(spec, &Backend{}, nil)
+	if !errors.Is(err, errors.ErrUnsupported) || !strings.Contains(err.Error(), "GuestPath") {
+		t.Fatalf("GuestPath /data = %v, want ErrUnsupported naming vm.Disk.GuestPath", err)
 	}
 }
 
@@ -272,7 +321,7 @@ func TestSpecDocumentOverlaysBase(t *testing.T) {
 		Memory: 4096 * units.Mebibyte,
 		Kernel: vm.Kernel{Path: "vmlinuz", Initrd: "initrd.img"},
 		Shares: []vm.Share{{Tag: "src", HostPath: "/host/new", GuestPath: "/workspace", ReadOnly: true}},
-		Disks:  []vm.Disk{{Path: "new.qcow2", Format: "qcow2", Size: 256 * units.Mebibyte}},
+		Disks:  []vm.Disk{{Path: "new.qcow2", Format: "qcow2", Size: 256 * units.Mebibyte, ReadOnly: true}},
 		Ports:  []vm.Forward{{Proto: "udp", HostAddr: "127.0.0.1:8080", GuestAddr: "10.0.2.15:80"}},
 		Files:  []vm.File{{GuestPath: "/etc/new", Content: strings.NewReader("new content"), Mode: 0o640}},
 	}

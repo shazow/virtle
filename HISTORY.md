@@ -7,6 +7,86 @@ Keep entries terse. When a day includes both CLI and library changes, group
 them by type, CLI first. For compatibility-breaking usage migrations, include
 compact before/after examples.
 
+## 2026-09-09
+
+- `backend = "firecracker"` launches a Firecracker microVM instead of QEMU:
+  direct kernel boot, raw disks, serial output, and the usual `virtle launch`,
+  `status`, and `rpc` lifecycle. Linux with KVM only; guest control, SSH,
+  networking, shares, suspend, balloon, and hotplug stay QEMU-only and fail
+  validation. See [docs/firecracker.md](docs/firecracker.md).
+- `[[mounts]] type = "image"` gains `target = "/"`, naming the root device on
+  both backends: virtle passes `root=/dev/vdX` and `ro`/`rw` for it, and
+  `kernel.initrd_path` is optional when a boot names its root device (or
+  carries its own `root=`). Nothing is picked automatically on either
+  backend: a disk boot without an initrd must set `target = "/"` on its
+  root image or pass `root=`, and fails validation otherwise.
+- QEMU manifests can set `vsock.enabled = false` for guests that do not use
+  host-guest vsock, dropping the `/dev/vhost-vsock` requirement.
+- `virtle launch` lets `Machine.Shutdown` stop the guest gracefully on
+  SIGINT/SIGTERM before canceling the machine, and drains accepted
+  wait/kill/shutdown/suspend RPC responses before exiting. `^Z` (SIGTSTP) on
+  a backend that cannot suspend is ignored with a warning instead of shutting
+  the VM down.
+- `nix flake check` gains real-KVM end-to-end checks that boot both backends
+  on a shared tiny kernel, through the CLI and through the Go API (the
+  `backendtest` contract, root and scratch disks, the console); they need a
+  `kvm` builder (see CONTRIBUTING.md). `nix run .#benchmark-backends`
+  compares the backends.
+
+### Library changes
+
+- New `backend/firecracker` package: `&firecracker.Backend{}` implements
+  `backend.Backend`, and its machines implement `backend.StatusReporter` and
+  `backend.ConsoleProvider`, with the same `vm.Spec` and `backend.Machine`
+  as QEMU. Spec features it cannot honor fail `Start` with an error wrapping
+  `errors.ErrUnsupported`.
+- `vm.Disk{GuestPath: "/"}` names the root device on both backends (virtle
+  passes `root=` for it). Any other `GuestPath` needs a guest agent and now
+  fails `Start` with an error wrapping `errors.ErrUnsupported` on both
+  backends; QEMU used to ignore it silently.
+- `vm.Disk.Size` (manifest `image.create` + `image.size`) creates a missing
+  raw ext4 image on Firecracker too, with QEMU's 256 MiB minimum.
+- `backend.ConsoleProvider` is implemented by QEMU and Firecracker machines
+  whose console is `print`: `Machine.Console` returns a `vm.Term` over the
+  guest's serial port that replays recent output before live output, so
+  readiness detection and driving a console shell need only `bufio` and
+  `io`; without a print console it reports `errors.ErrUnsupported`. A
+  session whose reader falls 1 MiB behind is dropped with an error wrapping
+  `vm.ErrTermFellBehind` and a warning on the backend's `Logger`, so a
+  stalled consumer never stalls the guest.
+- `vm.Disk.ReadOnly` is honored by both backends and by QEMU hotplug.
+  **Breaking:** a `vm.Disk` that replaces a manifest disk must now set
+  `ReadOnly: true` itself to keep a read-only mount:
+  ```go
+  // Before: the manifest's read_only = true survived the overlay.
+  spec.Disks[0] = vm.Disk{Path: "rootfs.img"}
+  // After: the Spec entry is the whole truth.
+  spec.Disks[0] = vm.Disk{Path: "rootfs.img", ReadOnly: true}
+  ```
+- **Breaking:** an empty `vm.Spec.Dir` now means the process working
+  directory on both backends, as for `exec.Cmd.Dir`: relative kernel, disk,
+  and share paths resolve there, and runtime state goes to a private
+  temporary directory that is removed when the machine exits. QEMU used to
+  work in a never-removed temporary directory, so relative Spec paths did
+  not resolve against the caller's directory. `Suspend` and `Resume` need a
+  `Dir`, since saved state lives in its `.virtle`:
+  ```go
+  // Before: state landed in a temporary directory that outlived the machine.
+  m, err := b.Start(ctx, &vm.Spec{Kernel: vm.Kernel{Path: "vmlinuz"}})
+  // After: set Dir to keep state across runs (and to Suspend/Resume).
+  m, err := b.Start(ctx, &vm.Spec{Dir: dir, Kernel: vm.Kernel{Path: "vmlinuz"}})
+  ```
+- A zero `vm.Spec.CPUs` selects the host CPU count on Firecracker too
+  (within its limit of 32), matching QEMU. Small guests should set `CPUs`
+  and `Memory` explicitly, as the test fixtures do.
+- `qemu.Backend.DisableVSock` is the Go counterpart of `vsock.enabled = false`.
+- The deprecated `backend.Shutdown` helper is gone; call `Machine.Shutdown`.
+- **Breaking:** `backend/qemu/session` no longer exports `Run`, `Options`,
+  and `ExitCode`; the CLI foreground loop is backend-neutral and lives in
+  `internal/session`. Programs that embedded it should drive
+  `backend.Machine` directly (`Start`, `Wait`, `Shutdown`, `Console`) or run
+  the `virtle launch` command.
+
 ## 2026-09-03
 
 - `virtle launch --ssh` now exits 1, not 255, when the SSH client is killed by

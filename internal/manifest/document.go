@@ -18,7 +18,15 @@ const (
 	defaultNetworkMAC = "02:02:00:00:00:01"
 )
 
+// Backend names accepted by the manifest's top-level backend key.
+const (
+	BackendQEMU        = "qemu"
+	BackendFirecracker = "firecracker"
+)
+
 type Document struct {
+	Backend       string             `json:"backend,omitempty" toml:"backend" default:"qemu" jsonschema:"Virtual machine backend: qemu (default) or firecracker."`
+	Firecracker   FirecrackerInput   `json:"firecracker,omitempty" toml:"firecracker" jsonschema:"Firecracker executable and lifecycle timeouts."`
 	HostName      string             `json:"host_name,omitempty" toml:"host_name" default:"virtle" jsonschema:"Guest-visible VM name used for QEMU naming and derived runtime files."`
 	WorkingDir    string             `json:"working_dir,omitempty" toml:"working_dir" default:"." jsonschema:"Host working directory used to resolve relative paths in the manifest."`
 	StateDir      string             `json:"state_dir,omitempty" toml:"state_dir" default:".virtle" jsonschema:"Host directory used for runtime state such as locks sockets and generated files."`
@@ -205,6 +213,7 @@ type NinePInput struct {
 type ImageMountInput struct {
 	Type       string     `json:"type" toml:"type" jsonschema:"Mount kind; must be image for this entry."`
 	SourcePath string     `json:"source" toml:"source" jsonschema:"Host disk image path."`
+	Target     string     `json:"target,omitempty" toml:"target" jsonschema:"Guest mount point for a boot-time image; only / is supported. It makes this image the root device, and virtle passes root= for it to the kernel on every backend. Not supported on hotplugged images."`
 	ReadOnly   bool       `json:"read_only,omitempty" toml:"read_only" jsonschema:"Attach the image read-only."`
 	Image      ImageInput `json:"image,omitempty" toml:"image" jsonschema:"Disk image creation and format settings."`
 }
@@ -277,6 +286,7 @@ type SSHInput struct {
 }
 
 type VSockInput struct {
+	Enabled  *bool      `json:"enabled,omitempty" toml:"enabled" jsonschema:"Attach the QEMU vsock device; defaults to true. Disable for guests that do not use host-guest vsock communication."`
 	CIDRange RangeInput `json:"cid_range,omitempty" toml:"cid_range" jsonschema:"Inclusive range of vsock CIDs virtle may allocate at launch."`
 }
 

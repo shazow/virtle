@@ -1,0 +1,3 @@
+::sysinit:/bin/ready
+::ctrlaltdel:/bin/shutdown
+::askfirst:-/bin/sh

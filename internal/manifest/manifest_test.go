@@ -2487,6 +2487,13 @@ func TestDocumentTypedHotplugValidation(t *testing.T) {
 			},
 			want: "id is required",
 		},
+		{
+			name: "target on a hotplugged image",
+			mutate: func(document *Document) {
+				document.Hotplug = HotplugInput{Mounts: MountsInput{ImageMountInput{SourcePath: "data.raw", Target: "/data", Image: ImageInput{Serial: stringPtr("data")}}}}
+			},
+			want: `manifest.hotplug.mounts[0]: target "/data" is not supported for hotplugged images`,
+		},
 	}
 
 	for _, tt := range tests {

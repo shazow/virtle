@@ -25,9 +25,9 @@ import (
 	"os"
 
 	"github.com/shazow/virtle/backend"
-	"github.com/shazow/virtle/backend/qemu/internal/sessionbridge"
 	"github.com/shazow/virtle/backend/qemu/internal/vmm"
 	imanifest "github.com/shazow/virtle/internal/manifest"
+	"github.com/shazow/virtle/internal/sessionbridge"
 	"github.com/shazow/virtle/units"
 	"github.com/shazow/virtle/vm"
 )
@@ -73,6 +73,11 @@ type Backend struct {
 	// the PCI transport (as any hotplug configuration does).
 	HotplugPorts int
 
+	// DisableVSock omits the vhost-vsock device, so the host needs no
+	// /dev/vhost-vsock and no CID is allocated. Guests then have no vsock
+	// transport for SSH; guest-agent control over virtio-serial still works.
+	DisableVSock bool
+
 	// RemoteControl selects the guest-control transport wired into
 	// Machine.RemoteControl, declaring what the VM image runs. Nil
 	// declares an image with no control agent: guest-dependent features
@@ -90,8 +95,6 @@ type Backend struct {
 	ConsoleOutput io.Writer
 
 	doc *imanifest.Document // base document of a manifest.Load backend; nil when configured in Go
-
-	disableVSock bool // integration-only: nested CI guests have no vhost-vsock device
 }
 
 // RemoteControl is a guest-control transport for Backend.RemoteControl.
@@ -156,26 +159,49 @@ func (b *Backend) Start(ctx context.Context, spec *vm.Spec) (backend.Machine, er
 }
 
 // resolveSpec lowers the spec (plus any base document) through the manifest
-// resolution pipeline.
-func (b *Backend) resolveSpec(spec *vm.Spec, logger *slog.Logger) (*imanifest.Manifest, error) {
+// resolution pipeline. A non-empty stateDir replaces the document's state
+// directory.
+func (b *Backend) resolveSpec(spec *vm.Spec, stateDir string, logger *slog.Logger) (*imanifest.Manifest, error) {
 	doc, err := specDocument(spec, b, b.doc)
 	if err != nil {
 		return nil, err
 	}
+	if stateDir != "" {
+		doc.StateDir = stateDir
+	}
 	mf, err := doc.ManifestWithOptions(imanifest.ResolveOptions{Logger: logger.With("package", "manifest")})
 	if err != nil {
 		return nil, fmt.Errorf("resolve vm spec: %w", err)
-	}
-	if b.disableVSock {
-		mf.QEMU.Devices.VSOCK.ID = ""
 	}
 	return mf, nil
 }
 
 func (b *Backend) start(ctx context.Context, spec *vm.Spec, resume vmm.ResumeMode) (backend.Machine, error) {
 	logger := b.logger()
-	mf, err := b.resolveSpec(spec, logger)
+	// A Go-configured backend without a Spec.Dir works in the process working
+	// directory and keeps its runtime state in a private temporary directory
+	// that is removed when the machine exits, so nothing lands in the working
+	// directory (see vm.Spec.Dir). Saved suspend state would go with it, so
+	// resuming needs a Dir.
+	ephemeralState := ""
+	if b.doc == nil && (spec == nil || spec.Dir == "") {
+		if resume != vmm.ResumeModeNo {
+			return nil, fmt.Errorf("resume requires vm.Spec.Dir: saved state lives in its state directory")
+		}
+		dir, err := os.MkdirTemp("", "virtle-state-")
+		if err != nil {
+			return nil, fmt.Errorf("create state directory: %w", err)
+		}
+		ephemeralState = dir
+	}
+	removeEphemeralState := func() {
+		if ephemeralState != "" {
+			_ = os.RemoveAll(ephemeralState)
+		}
+	}
+	mf, err := b.resolveSpec(spec, ephemeralState, logger)
 	if err != nil {
+		removeEphemeralState()
 		return nil, err
 	}
 	bridge := sessionbridge.FromContext(ctx)
@@ -184,11 +210,15 @@ func (b *Backend) start(ctx context.Context, spec *vm.Spec, resume vmm.ResumeMod
 		HasRemoteControl:     b.hasRemoteControl(),
 		DeferResumeCommit:    bridge != nil,
 		DeferSuspendHandling: bridge != nil,
+		EphemeralState:       ephemeralState != "",
 	}, vmm.Config{
 		Logger:        logger,
 		ConsoleOutput: b.consoleOutput(),
 	})
 	if err != nil {
+		// A launch that failed before taking the runtime lock has not
+		// released the directory itself.
+		removeEphemeralState()
 		return nil, err
 	}
 	machine := &Machine{vm: handle, hasRemoteControl: b.hasRemoteControl()}
@@ -248,14 +278,28 @@ func (m *Machine) Status(ctx context.Context) (backend.Status, error) {
 	return m.vm.Status(ctx)
 }
 
+// Console implements backend.ConsoleProvider: a vm.Term over the guest's
+// serial port, available when Backend.Console is ConsolePrint. The session
+// replays the recent console output first, so one attached after boot still
+// sees what the guest printed; its Resize and Wait report
+// errors.ErrUnsupported. Closing it leaves the machine running.
+func (m *Machine) Console(ctx context.Context) (vm.Term, error) {
+	return m.vm.Console(ctx)
+}
+
 // Suspend implements backend.Suspender: it saves the running machine's state
-// via QMP migration to its state directory and stops the VM.
+// via QMP migration to its state directory and stops the VM. A machine
+// started without vm.Spec.Dir has no durable state directory, so Suspend
+// (and the control socket's suspend request) returns an error wrapping
+// errors.ErrUnsupported instead of saving state that would be removed with
+// it.
 func (m *Machine) Suspend(ctx context.Context) error {
 	return m.vm.Suspend(ctx)
 }
 
 // Resume implements backend.Resumer: it restores a previously suspended
-// machine. The spec must resolve to the state directory containing the save.
+// machine. The spec must resolve to the state directory containing the save,
+// so it needs the Dir the machine was suspended with.
 func (b *Backend) Resume(ctx context.Context, spec *vm.Spec) (backend.Machine, error) {
 	return b.start(ctx, spec, vmm.ResumeModeForce)
 }
@@ -289,11 +333,12 @@ func (m *Machine) Detach(ctx context.Context, dev vm.Device) error {
 }
 
 var (
-	_ backend.Backend        = (*Backend)(nil)
-	_ backend.Resumer        = (*Backend)(nil)
-	_ backend.Machine        = (*Machine)(nil)
-	_ backend.Suspender      = (*Machine)(nil)
-	_ backend.MemoryResizer  = (*Machine)(nil)
-	_ backend.DeviceAttacher = (*Machine)(nil)
-	_ backend.StatusReporter = (*Machine)(nil)
+	_ backend.Backend         = (*Backend)(nil)
+	_ backend.Resumer         = (*Backend)(nil)
+	_ backend.Machine         = (*Machine)(nil)
+	_ backend.Suspender       = (*Machine)(nil)
+	_ backend.MemoryResizer   = (*Machine)(nil)
+	_ backend.DeviceAttacher  = (*Machine)(nil)
+	_ backend.StatusReporter  = (*Machine)(nil)
+	_ backend.ConsoleProvider = (*Machine)(nil)
 )

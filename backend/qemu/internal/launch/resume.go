@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/shazow/virtle/internal/manifest"
+	imanifest "github.com/shazow/virtle/internal/manifest"
 )
 
 func NormalizeResumeMode(mode ResumeMode) (ResumeMode, error) {
@@ -21,7 +21,7 @@ func NormalizeResumeMode(mode ResumeMode) (ResumeMode, error) {
 
 // ResolveResumeState reads and validates saved suspend state. Only state
 // whose version token equals stateVersion is resumable.
-func ResolveResumeState(manifest *manifest.Manifest, mode ResumeMode, stateVersion string) (*SuspendState, error) {
+func ResolveResumeState(manifest *imanifest.Manifest, mode ResumeMode, stateVersion string) (*SuspendState, error) {
 	if mode == ResumeModeNo {
 		return nil, nil
 	}
@@ -54,7 +54,16 @@ func ResolveResumeState(manifest *manifest.Manifest, mode ResumeMode, stateVersi
 			"suspend state %q has %s; this virtle resumes %q — resume with the virtle that wrote it or discard the state",
 			SuspendStatePath(manifest), written, stateVersion)
 	}
-	if state.CID <= 0 {
+	// The vsock device is part of the saved machine: a CID records that it
+	// was attached, CID 0 that it was not. Resuming under a manifest that
+	// toggled vsock.enabled would hand QEMU a migration stream for a different
+	// device set, so, like a version mismatch, this errors even in auto mode.
+	if saved, wanted := state.CID != 0, manifest.QEMU.Devices.VSOCK.ID != ""; saved != wanted {
+		return nil, fmt.Errorf(
+			"suspend state %q was saved with the vsock device %s but the manifest now has it %s — resume with the original manifest or discard the state",
+			SuspendStatePath(manifest), imanifest.OnOff(saved), imanifest.OnOff(wanted))
+	}
+	if state.CID < 0 {
 		if mode == ResumeModeAuto {
 			return nil, nil
 		}

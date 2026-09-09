@@ -1,6 +1,7 @@
 package vmm
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -32,6 +33,7 @@ import (
 	"github.com/shazow/virtle/backend/qemu/internal/qga"
 	"github.com/shazow/virtle/backend/qemu/internal/qmpclient"
 	"github.com/shazow/virtle/backend/qemu/limits"
+	"github.com/shazow/virtle/internal/console"
 	control "github.com/shazow/virtle/internal/control"
 	"github.com/shazow/virtle/internal/executor"
 	"github.com/shazow/virtle/internal/executor/executortest"
@@ -543,6 +545,46 @@ func TestManagerLaunchRemovesCleanupPathAfterQMPStartupFailure(t *testing.T) {
 	}
 	if _, err := os.Stat(cleanupPath); !os.IsNotExist(err) {
 		t.Fatalf("expected cleanup file to be removed after qmp failure, stat err: %v", err)
+	}
+}
+
+// TestManagerLaunchRemovesEphemeralStateDir covers a Spec without Dir: the
+// state directory the backend created for this launch alone goes away with
+// the runtime lock, on the failure path here and on shutdown alike.
+func TestManagerLaunchRemovesEphemeralStateDir(t *testing.T) {
+	for _, remove := range []bool{true, false} {
+		t.Run(fmt.Sprintf("remove=%v", remove), func(t *testing.T) {
+			tmpDir := t.TempDir()
+			state := filepath.Join(tmpDir, "state")
+			cfg := validManifest(tmpDir)
+			cfg.Persistence.StateDir = state
+			cfg.Paths.LockPath = filepath.Join(state, "virtle.lock")
+			cfg.Paths.RuntimeDir = manifest.RuntimeDir{Mode: manifest.RuntimeDirPath, Path: state}
+			cfg.Volumes[0].AutoCreate = false
+			cfg.QEMU.Devices.VirtioFS = nil
+			cfg.Run = []manifest.Run{{Exec: []string{"/bin/proxy"}}}
+
+			runner := &launchRunner{startErrors: map[string]error{"proxy": errors.New("proxy start failed")}}
+			var logOutput bytes.Buffer
+			manager := &manager{
+				locker:        &fileLocker{},
+				runner:        runner,
+				socketWaiter:  &fakeSocketWaiter{},
+				logger:        debugTestLogger(&logOutput),
+				shutdownDelay: 10 * time.Millisecond,
+			}
+			err := manager.launchWithOptions(context.Background(), cfg, launch.Options{Resume: ResumeModeNo, RemoveStateDir: remove})
+			if err == nil || !strings.Contains(err.Error(), "proxy start failed") {
+				t.Fatalf("expected run start error, got %v", err)
+			}
+			_, statErr := os.Stat(state)
+			if remove && !os.IsNotExist(statErr) {
+				t.Fatalf("ephemeral state directory survived the launch: %v", statErr)
+			}
+			if !remove && statErr != nil {
+				t.Fatalf("durable state directory was removed: %v", statErr)
+			}
+		})
 	}
 }
 
@@ -1879,7 +1921,10 @@ func TestStartVMServicesControlSuspendAfterStart(t *testing.T) {
 	if err := remote.(backend.Suspender).Suspend(rpcCtx); err != nil {
 		t.Fatalf("control suspend: %v", err)
 	}
-	if err := remote.Wait(rpcCtx); err != nil {
+	// The suspend response is delivered before the runtime tears down, so a
+	// wait dialed right after it either reaches the server and is answered
+	// once the machine stopped, or finds the listener already gone.
+	if err := remote.Wait(rpcCtx); err != nil && !controlSocketGone(err) {
 		t.Fatalf("wait for remote machine: %v", err)
 	}
 	if err := v.Wait(rpcCtx); err != nil {
@@ -1888,6 +1933,149 @@ func TestStartVMServicesControlSuspendAfterStart(t *testing.T) {
 	if qmpClient.migrateCalls != 1 {
 		t.Fatalf("migration calls = %d, want 1", qmpClient.migrateCalls)
 	}
+}
+
+// controlSocketGone reports a control RPC that met a listener closing under
+// it: refused, reset while queued, or already removed.
+func controlSocketGone(err error) bool {
+	return errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, os.ErrNotExist)
+}
+
+// TestStartVMRefusesSuspendWithEphemeralState covers a Spec without Dir: the
+// saved state would vanish with the state directory, so neither VM.Suspend
+// nor a suspend request over the control socket may save and stop.
+func TestStartVMRefusesSuspendWithEphemeralState(t *testing.T) {
+	tmpDir := t.TempDir()
+	state := filepath.Join(tmpDir, "state")
+	cfg := validManifest(tmpDir)
+	cfg.Persistence.StateDir = state
+	cfg.Paths.LockPath = filepath.Join(state, "virtle.lock")
+	cfg.Paths.RuntimeDir = manifest.RuntimeDir{Mode: manifest.RuntimeDirPath, Path: state}
+	cfg.QEMU.Devices.VirtioFS = nil
+	cfg.QEMU.Devices.Block = nil
+	cfg.QEMU.SSHReady.SocketPath = ""
+	cfg.Volumes = nil
+	cfg.Run = nil
+
+	runner := &launchRunner{}
+	qmpClient := &fakeQMPClient{status: "running", onQuit: func() { runner.exitQEMU(nil) }}
+	v, err := StartVM(context.Background(), cfg, StartOptions{EphemeralState: true}, Config{
+		Locker:              &fileLocker{},
+		Runner:              runner,
+		SocketWaiter:        &fakeSocketWaiter{callback: func([]string) error { return nil }},
+		QMPDialer:           &fakeQMPDialer{client: qmpClient},
+		Logger:              slog.New(slog.DiscardHandler),
+		ShutdownDelay:       10 * time.Millisecond,
+		QMPConnectTimeout:   time.Second,
+		QMPQuitTimeout:      time.Second,
+		QMPMigrationTimeout: time.Second,
+	})
+	if err != nil {
+		t.Fatalf("start VM: %v", err)
+	}
+	defer v.Kill()
+
+	if err := v.Suspend(context.Background()); !errors.Is(err, errors.ErrUnsupported) {
+		t.Fatalf("Suspend = %v, want ErrUnsupported", err)
+	}
+	controlPath, err := cfg.ResolvedControlSocketPath()
+	if err != nil {
+		t.Fatalf("resolve control socket: %v", err)
+	}
+	rpcCtx, cancelRPC := context.WithTimeout(context.Background(), time.Second)
+	defer cancelRPC()
+	remote, err := control.Dial(rpcCtx, controlPath)
+	if err != nil {
+		t.Fatalf("dial control socket: %v", err)
+	}
+	if err := remote.(backend.Suspender).Suspend(rpcCtx); err == nil {
+		t.Fatal("control suspend succeeded on a machine whose state directory is removed on exit")
+	}
+	if qmpClient.migrateCalls != 0 || qmpClient.quitCalls != 0 {
+		t.Fatalf("refused suspend touched the VM: migrate=%d quit=%d", qmpClient.migrateCalls, qmpClient.quitCalls)
+	}
+}
+
+// TestStartVMServesPrintConsole covers the console hub: a print console rides
+// QEMU's stdio through it, VM.Console serves it as a Term that ends with EOF
+// when the machine exits, and without a print console there is no Term.
+func TestStartVMServesPrintConsole(t *testing.T) {
+	start := func(t *testing.T, mode manifest.QEMUConsole) (*VM, *exec.Cmd) {
+		t.Helper()
+		tmpDir := t.TempDir()
+		cfg := validManifest(tmpDir)
+		cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
+		cfg.QEMU.Devices.VirtioFS = nil
+		cfg.QEMU.Devices.Block = nil
+		cfg.QEMU.SSHReady.SocketPath = ""
+		cfg.Volumes = nil
+		cfg.Run = nil
+		cfg.QEMU.Console = mode
+
+		var qemuCmd *exec.Cmd
+		runner := &launchRunner{onStart: func(name string, cmd *exec.Cmd) {
+			if strings.HasPrefix(name, "qemu-system") {
+				qemuCmd = cmd
+			}
+		}}
+		qmpClient := &fakeQMPClient{status: "running", onQuit: func() { runner.exitQEMU(nil) }}
+		v, err := StartVM(context.Background(), cfg, StartOptions{}, Config{
+			Locker:              &fileLocker{},
+			Runner:              runner,
+			SocketWaiter:        &fakeSocketWaiter{callback: func([]string) error { return nil }},
+			QMPDialer:           &fakeQMPDialer{client: qmpClient},
+			Logger:              slog.New(slog.DiscardHandler),
+			ShutdownDelay:       10 * time.Millisecond,
+			QMPConnectTimeout:   time.Second,
+			QMPQuitTimeout:      time.Second,
+			QMPMigrationTimeout: time.Second,
+		})
+		if err != nil {
+			t.Fatalf("start VM: %v", err)
+		}
+		t.Cleanup(func() { _ = v.Kill() })
+		return v, qemuCmd
+	}
+
+	t.Run("print", func(t *testing.T) {
+		v, cmd := start(t, manifest.QEMUConsolePrint)
+		hub := v.running.console
+		if hub == nil || cmd.Stdin != hub.Stdin() || cmd.Stdout != io.Writer(hub) || cmd.Stderr != io.Writer(hub) {
+			t.Fatalf("qemu stdio is not on the console hub: stdin=%v stdout=%T stderr=%T", cmd.Stdin, cmd.Stdout, cmd.Stderr)
+		}
+		term, err := v.Console(context.Background())
+		if err != nil {
+			t.Fatalf("Console: %v", err)
+		}
+		defer term.Close()
+		if _, err := io.WriteString(hub, "guest says hi\n"); err != nil {
+			t.Fatal(err)
+		}
+		reader := bufio.NewReader(term)
+		if line, err := reader.ReadString('\n'); err != nil || line != "guest says hi\n" {
+			t.Fatalf("console read %q, %v", line, err)
+		}
+		if err := v.Kill(); err != nil {
+			t.Fatalf("kill: %v", err)
+		}
+		waitCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := v.Wait(waitCtx); err != nil {
+			t.Fatalf("wait: %v", err)
+		}
+		if rest, err := io.ReadAll(reader); err != nil {
+			t.Fatalf("console after exit = %q, %v; want EOF", rest, err)
+		}
+	})
+	t.Run("off", func(t *testing.T) {
+		v, _ := start(t, manifest.QEMUConsoleOff)
+		if v.running.console != nil {
+			t.Fatal("a console hub was created without a print console")
+		}
+		if _, err := v.Console(context.Background()); !errors.Is(err, errors.ErrUnsupported) {
+			t.Fatalf("Console without a print console = %v, want ErrUnsupported", err)
+		}
+	})
 }
 
 func TestStartVMSkipsVirtioFSReadinessWithoutVirtioFS(t *testing.T) {
@@ -2015,7 +2203,7 @@ func TestBuildQEMUCommandOnlyConnectsRequestedConsole(t *testing.T) {
 	cfg := validManifest("/tmp/work")
 	cfg.QEMU.Console = manifest.QEMUConsoleOff
 
-	cmd, err := buildQEMUCommand(cfg, 42, false, &console)
+	cmd, err := buildQEMUCommand(cfg, 42, false, &console, nil)
 	if err != nil {
 		t.Fatalf("build headless qemu command: %v", err)
 	}
@@ -2024,12 +2212,41 @@ func TestBuildQEMUCommandOnlyConnectsRequestedConsole(t *testing.T) {
 	}
 
 	cfg.QEMU.Console = manifest.QEMUConsolePrint
-	cmd, err = buildQEMUCommand(cfg, 42, false, &console)
+	cmd, err = buildQEMUCommand(cfg, 42, false, &console, nil)
 	if err != nil {
 		t.Fatalf("build console qemu command: %v", err)
 	}
 	if cmd.Stdout != &console || cmd.Stderr != &console {
 		t.Fatal("expected requested qemu console output on configured foreground writer")
+	}
+}
+
+// TestBuildQEMUCommandRidesTheConsoleHub: with a hub, a print console puts
+// all three of QEMU's standard streams on it, so one pipe carries the serial
+// output and QEMU's own messages in order and the hub sees one writer.
+func TestBuildQEMUCommandRidesTheConsoleHub(t *testing.T) {
+	var output bytes.Buffer
+	hub, err := console.New(&output, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hub.Close()
+	cfg := validManifest("/tmp/work")
+	cfg.QEMU.Console = manifest.QEMUConsolePrint
+	cmd, err := buildQEMUCommand(cfg, 42, false, &output, hub)
+	if err != nil {
+		t.Fatalf("build console qemu command: %v", err)
+	}
+	if cmd.Stdin != hub.Stdin() || cmd.Stdout != io.Writer(hub) || cmd.Stderr != io.Writer(hub) {
+		t.Fatalf("print console not on the hub: stdin=%v stdout=%T stderr=%T", cmd.Stdin, cmd.Stdout, cmd.Stderr)
+	}
+	cfg.QEMU.Console = manifest.QEMUConsoleOff
+	cmd, err = buildQEMUCommand(cfg, 42, false, &output, hub)
+	if err != nil {
+		t.Fatalf("build headless qemu command: %v", err)
+	}
+	if cmd.Stdin != nil || cmd.Stdout != nil || cmd.Stderr != nil {
+		t.Fatal("a headless qemu must not touch the console hub")
 	}
 }
 
@@ -2641,7 +2858,7 @@ func debugTestLogger(w io.Writer) *slog.Logger {
 }
 
 func buildTestQEMUCommand(manifest *manifest.Manifest, cid int, incoming bool) (*exec.Cmd, error) {
-	return buildQEMUCommand(manifest, cid, incoming, io.Discard)
+	return buildQEMUCommand(manifest, cid, incoming, io.Discard, nil)
 }
 
 func validManifest(workingDir string) *manifest.Manifest {

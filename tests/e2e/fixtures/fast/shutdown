@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+echo VIRTLE_SHUTDOWN:done
+# Firecracker exits on an i8042 reset; poweroff alone leaves it running.
+reboot -f

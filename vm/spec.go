@@ -15,14 +15,23 @@ import (
 // no live resources and is reusable across Start and Resume calls, with
 // one caveat: Files content readers are consumed by Start (see File).
 type Spec struct {
-	CPUs   int         // default: runtime.NumCPU
-	Memory units.Bytes // default: 2048 * units.Mebibyte
+	CPUs   int         // zero selects the host CPU count (within the backend's limit)
+	Memory units.Bytes // zero selects the backend's default (e.g. qemu.DefaultMemory)
 	Kernel Kernel      // direct kernel boot (microVM style); zero value: none
 	Shares []Share     // host dirs shared into the guest (virtio-fs or similar)
 	Disks  []Disk      // block devices / volume images
 	Ports  []Forward   // host<->guest port forwards
 	Files  []File      // small files placed in the guest before workload start
-	Dir    string      // host working/state directory; default: derived tmp
+
+	// Dir is the host working directory: relative Kernel, Disk, and Share
+	// paths resolve against it (a disk image created from Disk.Size is
+	// written at its Path), and the machine's runtime state (lock, sockets,
+	// suspend state) lives in its .virtle subdirectory, as for a manifest's
+	// working_dir. Empty means the process
+	// working directory, as for exec.Cmd.Dir, with runtime state in a private
+	// temporary directory that is removed when the machine exits; set Dir to
+	// keep state across runs, which Suspend and Resume require.
+	Dir string
 }
 
 // Kernel configures direct kernel boot (microVM style).
@@ -42,8 +51,9 @@ type Share struct {
 
 // Disk is a block device or volume image attached to the guest.
 type Disk struct {
+	ReadOnly  bool        // attach without allowing guest writes
 	Path      string      // host image path
-	GuestPath string      // guest mount point; optional
+	GuestPath string      // guest mount point; "/" makes this the root device (virtle passes root=); other paths need a guest agent and fail Start with errors.ErrUnsupported until one exists
 	Format    string      // image format (e.g. "qcow2", "raw"); backend default when empty
 	Size      units.Bytes // created at this size if the image is absent
 }

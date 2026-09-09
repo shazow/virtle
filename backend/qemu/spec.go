@@ -1,14 +1,13 @@
 package qemu
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"maps"
-	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
-	"strings"
 
 	imanifest "github.com/shazow/virtle/internal/manifest"
 	"github.com/shazow/virtle/units"
@@ -38,16 +37,13 @@ func specDocument(spec *vm.Spec, cfg *Backend, base *imanifest.Document) (imanif
 		doc.HostName = cfg.HostName
 	}
 
-	// Spec.Dir wins; a Go-configured backend without one gets a fresh
-	// temporary directory, a manifest.Load backend keeps the manifest's.
+	// Spec.Dir wins; without one a Go-configured backend works in the process
+	// working directory (relative paths resolve there, as for exec.Cmd.Dir)
+	// and a manifest.Load backend keeps the manifest's.
 	dir := spec.Dir
 	if dir == "" {
 		if base == nil {
-			tmp, err := os.MkdirTemp("", "virtle-")
-			if err != nil {
-				return imanifest.Document{}, fmt.Errorf("create working directory: %w", err)
-			}
-			dir = tmp
+			dir = "."
 		} else {
 			dir = doc.WorkingDir
 		}
@@ -80,7 +76,12 @@ func specDocument(spec *vm.Spec, cfg *Backend, base *imanifest.Document) (imanif
 	if spec.Kernel != (vm.Kernel{}) {
 		doc.Kernel.Path = spec.Kernel.Path
 		doc.Kernel.InitrdPath = spec.Kernel.Initrd
-		doc.Kernel.Params = strings.Fields(spec.Kernel.Cmdline)
+		// The command line is passed through verbatim as one parameter, the
+		// same way every backend treats vm.Kernel.Cmdline.
+		doc.Kernel.Params = nil
+		if spec.Kernel.Cmdline != "" {
+			doc.Kernel.Params = []string{spec.Kernel.Cmdline}
+		}
 	}
 	if doc.Kernel.Path == "" {
 		return imanifest.Document{}, fmt.Errorf("the qemu backend requires a direct kernel boot source (vm.Spec.Kernel)")
@@ -143,6 +144,10 @@ func specDocument(spec *vm.Spec, cfg *Backend, base *imanifest.Document) (imanif
 	}
 	if cfg.HotplugPorts > doc.QEMU.HotplugPorts {
 		doc.QEMU.HotplugPorts = cfg.HotplugPorts
+	}
+	if cfg.DisableVSock {
+		enabled := false
+		doc.VSock.Enabled = &enabled
 	}
 
 	if err := applySpecDevices(&doc, spec); err != nil {
@@ -238,8 +243,16 @@ func overlayDisk(input imanifest.ImageMountInput, disk vm.Disk) (imanifest.Image
 	if disk.Size != 0 && disk.Size%units.Mebibyte != 0 {
 		return imanifest.ImageMountInput{}, fmt.Errorf("disk %q: size %s is not MiB-aligned", disk.Path, disk.Size)
 	}
+	// "/" names the root device, which the kernel mounts itself; any other
+	// mount point needs an agent in the guest, which no backend has yet, so
+	// it is refused rather than silently ignored.
+	if disk.GuestPath != "" && disk.GuestPath != "/" {
+		return imanifest.ImageMountInput{}, fmt.Errorf("disk %q: guest mounting at %q (vm.Disk.GuestPath) needs a guest control transport: %w", disk.Path, disk.GuestPath, errors.ErrUnsupported)
+	}
 	input.Type = imanifest.MountTypeImage
+	input.ReadOnly = disk.ReadOnly
 	input.SourcePath = disk.Path
+	input.Target = disk.GuestPath
 	input.Image.Size = disk.Size.Mebibytes()
 	input.Image.Format = disk.Format
 	input.Image.AutoCreate = disk.Size != 0

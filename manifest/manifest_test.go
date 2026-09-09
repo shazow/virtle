@@ -90,6 +90,19 @@ func TestLoad(t *testing.T) {
 	}
 }
 
+// TestLoadNamesTheRootDisk guards the Spec lowering of target = "/": the
+// backends trust the Spec alone at Start (it overlays the document's
+// mounts), so a root device dropped here would be lost on every launch.
+func TestLoadNamesTheRootDisk(t *testing.T) {
+	spec, _, err := Load(strings.NewReader("[kernel]\npath = \"vmlinuz\"\n[[mounts]]\ntype = \"image\"\nsource = \"root.img\"\ntarget = \"/\"\nread_only = true\n"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(spec.Disks) != 1 || spec.Disks[0].GuestPath != "/" || !spec.Disks[0].ReadOnly {
+		t.Fatalf("Disks = %+v, want the root image with GuestPath \"/\"", spec.Disks)
+	}
+}
+
 func TestLoadRejectsInvalidManifest(t *testing.T) {
 	// A boot from disks without an initrd needs a root device.
 	if _, _, err := Load(strings.NewReader("[kernel]\npath = \"vmlinuz\"\n[[mounts]]\ntype = \"image\"\nsource = \"data.img\"\n")); err == nil {

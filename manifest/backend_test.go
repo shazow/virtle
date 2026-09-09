@@ -13,9 +13,9 @@ func TestLoadBackend(t *testing.T) {
 	for _, name := range []string{"qemu", "firecracker"} {
 		for _, format := range []string{"toml", "json"} {
 			t.Run(name+"/"+format, func(t *testing.T) {
-				input := fmt.Sprintf("backend = %q\n[kernel]\npath = 'kernel'\ninitrd_path = 'initrd'\n[[mounts]]\ntype = 'image'\nsource = 'disk'\nread_only = true\n", name)
+				input := fmt.Sprintf("backend = %q\n[kernel]\npath = 'kernel'\n[[mounts]]\ntype = 'image'\nsource = 'disk'\ntarget = '/'\nread_only = true\n", name)
 				if format == "json" {
-					input = fmt.Sprintf(`{"backend":%q,"kernel":{"path":"kernel","initrd_path":"initrd"},"mounts":[{"type":"image","source":"disk","read_only":true}]}`, name)
+					input = fmt.Sprintf(`{"backend":%q,"kernel":{"path":"kernel"},"mounts":[{"type":"image","source":"disk","target":"/","read_only":true}]}`, name)
 				}
 				spec, b, err := Load(strings.NewReader(input))
 				if err != nil {
@@ -31,7 +31,9 @@ func TestLoadBackend(t *testing.T) {
 						t.Fatalf("backend %T", b)
 					}
 				}
-				if len(spec.Disks) != 1 || !spec.Disks[0].ReadOnly {
+				// The root device named by target = "/" must survive the
+				// lowering: Start trusts the Spec alone.
+				if len(spec.Disks) != 1 || !spec.Disks[0].ReadOnly || spec.Disks[0].GuestPath != "/" {
 					t.Fatalf("disks %+v", spec.Disks)
 				}
 			})

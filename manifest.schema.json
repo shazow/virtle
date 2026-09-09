@@ -319,7 +319,7 @@
               },
               "target": {
                 "type": "string",
-                "description": "Guest mount point. Only / is supported at boot: it makes this image the root device, and virtle passes root= for it to the kernel on every backend."
+                "description": "Guest mount point for a boot-time image; only / is supported. It makes this image the root device, and virtle passes root= for it to the kernel on every backend. Not supported on hotplugged images."
               },
               "read_only": {
                 "type": "boolean",
@@ -832,7 +832,7 @@
                   },
                   "target": {
                     "type": "string",
-                    "description": "Guest mount point. Only / is supported at boot: it makes this image the root device, and virtle passes root= for it to the kernel on every backend."
+                    "description": "Guest mount point for a boot-time image; only / is supported. It makes this image the root device, and virtle passes root= for it to the kernel on every backend. Not supported on hotplugged images."
                   },
                   "read_only": {
                     "type": "boolean",

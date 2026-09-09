@@ -423,6 +423,43 @@ func TestCreatesMissingDiskImages(t *testing.T) {
 	}
 }
 
+// TestConsoleFollowsTheMachine covers backend.ConsoleProvider on the fake
+// VMM: a print console can be attached and ends when the machine exits; no
+// console means errors.ErrUnsupported.
+func TestConsoleFollowsTheMachine(t *testing.T) {
+	b, spec := helperBackend(t, "normal")
+	b.Console, b.ConsoleOutput = ConsolePrint, io.Discard
+	m, err := b.Start(t.Context(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill() })
+	term, err := m.(backend.ConsoleProvider).Console(t.Context())
+	if err != nil {
+		t.Fatalf("Console: %v", err)
+	}
+	defer term.Close()
+	if err := term.Resize(80, 24); !errors.Is(err, errors.ErrUnsupported) {
+		t.Fatalf("Resize = %v, want ErrUnsupported", err)
+	}
+	if err := m.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.ReadAll(term); err != nil {
+		t.Fatalf("console did not end with EOF after exit: %v", err)
+	}
+
+	b, spec = helperBackend(t, "normal")
+	m, err = b.Start(t.Context(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill() })
+	if _, err := m.(backend.ConsoleProvider).Console(t.Context()); !errors.Is(err, errors.ErrUnsupported) {
+		t.Fatalf("Console without a serial console = %v, want ErrUnsupported", err)
+	}
+}
+
 // TestShutdownWithoutCtrlAltDel covers hosts where Firecracker has no guest
 // shutdown request: Shutdown still stops the VMM but names the missing
 // capability.

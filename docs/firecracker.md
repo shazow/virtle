@@ -20,8 +20,12 @@ must match the host architecture: an ELF `vmlinux` on x86_64, an uncompressed
   `vm.Disk.GuestPath: "/"`) is the root device: virtle passes `root=/dev/vdX`
   and `ro` or `rw` for it, on QEMU alike, so a kernel boots from it without
   an initrd.
-- Serial console output on the host (`kernel.serial = "print"` /
-  `firecracker.Backend{Console: firecracker.ConsolePrint}`).
+- The serial console (`kernel.serial = "print"` /
+  `firecracker.Backend{Console: firecracker.ConsolePrint}`): printed to the
+  host, and available as a `vm.Term` through `backend.ConsoleProvider`
+  (`Machine.Console`) that replays what the guest printed before the attach,
+  so readiness is a `bufio.Scanner` away and a BusyBox shell on ttyS0 can
+  be driven from Go. QEMU offers the same.
 - Lifecycle and status: `Start`, `Wait`, `Kill`, `Shutdown`, and
   `backend.StatusReporter`; over the control socket, `virtle status` and
   `virtle rpc status|wait|kill|shutdown`.
@@ -35,9 +39,10 @@ Firecracker's limit of 32), and an omitted memory size means 1024 MiB
 matching `Backend` fields) tune the VMM.
 
 `Start` returns once Firecracker has accepted `InstanceStart`; it does not
-mean the guest workload is ready. Observe readiness inside the guest (for
-example, a marker line on the serial console), as the
-[Firecracker recipe](recipes/firecracker/README.md) does.
+mean the guest workload is ready. Observe readiness inside the guest: attach
+`Machine.Console` and scan for a marker line, as `tests/e2e` does, or watch
+`ConsoleOutput` as the [Firecracker recipe](recipes/firecracker/README.md)
+does from the CLI.
 
 ## Kernel command line
 

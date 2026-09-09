@@ -28,8 +28,10 @@ compact before/after examples.
   a backend that cannot suspend is ignored with a warning instead of shutting
   the VM down.
 - `nix flake check` gains real-KVM end-to-end checks that boot both backends
-  through the CLI on a shared tiny kernel (they need a `kvm` builder; see
-  CONTRIBUTING.md); `nix run .#benchmark-backends` compares them.
+  on a shared tiny kernel, through the CLI and through the Go API (the
+  `backendtest` contract, root and scratch disks, the console); they need a
+  `kvm` builder (see CONTRIBUTING.md). `nix run .#benchmark-backends`
+  compares the backends.
 
 ### Library changes
 
@@ -41,6 +43,11 @@ compact before/after examples.
   passes `root=` for it); other guest paths still need a guest agent.
 - `vm.Disk.Size` (manifest `image.create` + `image.size`) creates a missing
   raw ext4 image on Firecracker too, with QEMU's 256 MiB minimum.
+- `backend.ConsoleProvider` is implemented by QEMU and Firecracker machines
+  whose console is `print`: `Machine.Console` returns a `vm.Term` over the
+  guest's serial port that replays recent output before live output, so
+  readiness detection and driving a console shell need only `bufio` and
+  `io`; without a print console it reports `errors.ErrUnsupported`.
 - `vm.Disk.ReadOnly` is honored by both backends and by QEMU hotplug.
   **Breaking:** a `vm.Disk` that replaces a manifest disk must now set
   `ReadOnly: true` itself to keep a read-only mount:

@@ -17,6 +17,7 @@ import (
 	"github.com/shazow/virtle/backend/qemu/internal/qmpclient"
 	"github.com/shazow/virtle/backend/qemu/internal/qmpwire"
 	runtimepkg "github.com/shazow/virtle/backend/qemu/internal/runtime"
+	"github.com/shazow/virtle/internal/console"
 	controlpkg "github.com/shazow/virtle/internal/control"
 	"github.com/shazow/virtle/internal/executor"
 )
@@ -57,6 +58,13 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (result 
 	// files are provisioned.
 	var writeBackOnExit atomic.Bool
 	socketCleanupReached := false
+	var consoleHub *console.Hub
+	closeConsole := func() error {
+		if consoleHub == nil {
+			return nil
+		}
+		return consoleHub.Close()
+	}
 	cleanupRuntime := func() error {
 		err := runtimeLock.Cleanup()
 		if plan.Options.RemoveStateDir {
@@ -64,7 +72,7 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (result 
 			// nothing else keeps sockets, locks, or saved state in it.
 			err = errors.Join(err, os.RemoveAll(plan.Manifest.ResolvedPersistenceStateDir()))
 		}
-		return err
+		return errors.Join(err, closeConsole())
 	}
 	defer func() {
 		if err == nil {
@@ -96,7 +104,17 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (result 
 	if err != nil {
 		return nil, &launch.StageError{Stage: "preflight", Err: err}
 	}
-	qemuCmd, err := buildQEMUCommand(plan.Manifest, cid, plan.ResumeState != nil, m.consoleOutput)
+	// A print console rides QEMU's standard streams through a hub that
+	// prints it, retains it, and serves VM.Console sessions.
+	var hub *console.Hub
+	if serial := plan.Manifest.QEMU.Console; serial.Enabled() && !serial.Interactive() {
+		hub, err = console.New(m.consoleOutput)
+		if err != nil {
+			return nil, &launch.StageError{Stage: "preflight", Err: err}
+		}
+		consoleHub = hub
+	}
+	qemuCmd, err := buildQEMUCommand(plan.Manifest, cid, plan.ResumeState != nil, m.consoleOutput, hub)
 	if err != nil {
 		return nil, &launch.StageError{Stage: "preflight", Err: err}
 	}
@@ -125,6 +143,9 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (result 
 	}
 	if qemu == nil {
 		return nil, launch.WrapStage("vm startup", errors.New("qemu process is required"))
+	}
+	if hub != nil {
+		hub.Started()
 	}
 	processes.SetQEMU(qemu)
 	qmp, err = m.waitForQMP(launchCtx, plan.Paths.QMPSocket, processes.Watchers())
@@ -216,6 +237,7 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (result 
 		suspend:        suspend,
 		suspendHandler: suspendHandler,
 		processes:      processes,
+		console:        hub,
 	}
 	runtime.SetReady()
 	handlers := controlpkg.Handlers{Hotplug: m.hotplugFeature(runtime.QMP())}

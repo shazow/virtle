@@ -213,7 +213,7 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (result 
 	}
 
 	suspendHandler := newLaunchSuspendHandler(m, plan.Paths.QMPSocket, qmp, plan.CID, plan.Notifier, writeBackOnExit.Load)
-	runtime := runtimepkg.New(runtimepkg.Config{
+	runtimeConfig := runtimepkg.Config{
 		Manifest:        plan.Manifest,
 		Paths:           plan.Paths,
 		CID:             plan.CID,
@@ -233,7 +233,14 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (result 
 		WriteBackTimeout: defaultWriteBackTimeout,
 		Logger:           m.logger,
 		SavedSuspendExit: launch.IsSavedSuspendExit,
-	})
+	}
+	if plan.Options.RemoveStateDir {
+		// Saved state would be removed with the ephemeral state directory, so
+		// the control socket refuses suspend requests outright; VM.Suspend
+		// reports the same through errors.ErrUnsupported.
+		runtimeConfig.SuspendRequests = nil
+	}
+	runtime := runtimepkg.New(runtimeConfig)
 	started = &runningLaunch{
 		runtime:        runtime,
 		plan:           plan,
@@ -327,21 +334,12 @@ func (m *manager) prepareRuntimeState(plan *launch.Plan) error {
 		if !volume.AutoCreate {
 			continue
 		}
-		info, err := os.Stat(volume.ImagePath)
-		if err == nil {
-			if info.IsDir() {
-				return fmt.Errorf("volume image %q is a directory", volume.ImagePath)
-			}
-			continue
-		}
-		if !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("stat volume image %q: %w", volume.ImagePath, err)
-		}
-		if m.logger != nil {
-			m.logger.Info("creating volume image", "path", volume.ImagePath, "size_mib", volume.Size, "fs_type", volume.FSType)
-		}
-		if err := launch.CreateVolumeImage(volume, plan.Manifest.QEMU.RunAsUser); err != nil {
+		created, err := launch.EnsureVolumeImage(volume, plan.Manifest.QEMU.RunAsUser)
+		if err != nil {
 			return err
+		}
+		if created && m.logger != nil {
+			m.logger.Info("created volume image", "path", volume.ImagePath, "size_mib", volume.Size, "fs_type", volume.FSType)
 		}
 	}
 	return nil

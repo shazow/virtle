@@ -267,12 +267,25 @@ func (v *VM) ShutdownGuest(ctx context.Context) error {
 // the VM down without guest file write-back. The VM is not usable
 // afterwards; resume with StartVM and ResumeModeForce.
 func (v *VM) Suspend(ctx context.Context) error {
+	if err := v.suspendSupported(); err != nil {
+		return err
+	}
 	plan := v.running.plan
 	if err := v.m.saveSuspendStateConnected(ctx, plan.Paths.QMPSocket, v.running.qmp, plan.CID, plan.Notifier); err != nil {
 		return err
 	}
 	v.running.runtime.MarkSavedSuspend()
 	return v.close()
+}
+
+// suspendSupported rejects suspending a machine whose state directory is
+// removed on exit (a vm.Spec without Dir): the saved state would go with it.
+// The control server of such a machine has no suspend entry point either.
+func (v *VM) suspendSupported() error {
+	if v.running.plan.Options.RemoveStateDir {
+		return fmt.Errorf("suspend requires vm.Spec.Dir: saved state would be removed with the temporary state directory: %w", errors.ErrUnsupported)
+	}
+	return nil
 }
 
 // SuspendRequests reports suspend work queued by the control server.
@@ -293,6 +306,9 @@ func (v *VM) HandleSuspendRequest(ctx context.Context) error {
 
 // SuspendSession queues and services a foreground job-control suspend.
 func (v *VM) SuspendSession(ctx context.Context) error {
+	if err := v.suspendSupported(); err != nil {
+		return err
+	}
 	v.running.suspend.Request()
 	return v.HandleSuspendRequest(ctx)
 }

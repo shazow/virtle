@@ -221,7 +221,7 @@ func (b *Backend) start(ctx context.Context, spec *vm.Spec, resume vmm.ResumeMod
 		removeEphemeralState()
 		return nil, err
 	}
-	machine := &Machine{vm: handle, hasRemoteControl: b.hasRemoteControl(), ephemeralState: ephemeralState != ""}
+	machine := &Machine{vm: handle, hasRemoteControl: b.hasRemoteControl()}
 	if bridge != nil {
 		bridge.Bind(sessionbridge.Hooks{
 			SuspendRequests:      handle.SuspendRequests,
@@ -237,7 +237,6 @@ func (b *Backend) start(ctx context.Context, spec *vm.Spec, resume vmm.ResumeMod
 type Machine struct {
 	vm               *vmm.VM
 	hasRemoteControl bool
-	ephemeralState   bool // the state directory is removed on exit (Spec without Dir)
 }
 
 // Wait blocks until the machine exits or ctx ends and returns the exit result.
@@ -291,12 +290,10 @@ func (m *Machine) Console(ctx context.Context) (vm.Term, error) {
 // Suspend implements backend.Suspender: it saves the running machine's state
 // via QMP migration to its state directory and stops the VM. A machine
 // started without vm.Spec.Dir has no durable state directory, so Suspend
-// returns an error wrapping errors.ErrUnsupported instead of saving state
-// that would be removed with it.
+// (and the control socket's suspend request) returns an error wrapping
+// errors.ErrUnsupported instead of saving state that would be removed with
+// it.
 func (m *Machine) Suspend(ctx context.Context) error {
-	if m.ephemeralState {
-		return fmt.Errorf("suspend requires vm.Spec.Dir: saved state would be removed with the temporary state directory: %w", errors.ErrUnsupported)
-	}
 	return m.vm.Suspend(ctx)
 }
 

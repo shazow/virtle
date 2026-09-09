@@ -44,7 +44,11 @@ func buildQEMUCommand(mf *manifest.Manifest, cid int, incoming bool, consoleOutp
 		cmd.Stderr = consoleOutput
 	}
 	if hub != nil && qemu.Console.Enabled() && !qemu.Console.Interactive() {
-		cmd.Stdin, cmd.Stdout = hub.Stdin(), hub
+		// One writer for both streams: os/exec then shares a single pipe, so
+		// the hub (and the ConsoleOutput behind it) is written from one
+		// goroutine and QEMU's own messages stay in order with the guest's
+		// serial output, as they did before the hub existed.
+		cmd.Stdin, cmd.Stdout, cmd.Stderr = hub.Stdin(), hub, hub
 	}
 	return cmd, nil
 }

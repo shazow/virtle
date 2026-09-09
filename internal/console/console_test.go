@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -116,6 +117,36 @@ func TestCloseEndsTermsWithEOFAfterPendingOutput(t *testing.T) {
 	late, err := io.ReadAll(hub.Attach())
 	if err != nil || string(late) != "last words\n" {
 		t.Fatalf("late attach = %q, %v", late, err)
+	}
+}
+
+func TestClosedTermStopsReadingAndWriting(t *testing.T) {
+	hub := newTestHub(t, nil)
+	term := hub.Attach()
+	if _, err := io.WriteString(hub, "unread\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := term.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := term.Read(make([]byte, 16)); n != 0 || err != io.EOF {
+		t.Fatalf("Read after Close = %d, %v; want 0, io.EOF", n, err)
+	}
+	if _, err := io.WriteString(term, "rm -rf /\n"); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("Write after Close = %v, want an error wrapping os.ErrClosed", err)
+	}
+	// Nothing reached the guest's input.
+	if err := hub.Stdin().SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := hub.Stdin().Read(make([]byte, 16)); n != 0 || !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("guest stdin got %d bytes, %v after the session closed", n, err)
+	}
+	// The console keeps serving other sessions.
+	other := hub.Attach()
+	defer other.Close()
+	if got := readLine(t, bufio.NewScanner(other)); got != "unread" {
+		t.Fatalf("other session read %q", got)
 	}
 }
 

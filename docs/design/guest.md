@@ -1,50 +1,54 @@
 # Design: the virtle guest daemon
 
 Status: proposal, sibling to [roadmap.md](roadmap.md) (remaining-work item
-2); refs [#66](https://github.com/shazow/virtle/issues/66),
-[#67](https://github.com/shazow/virtle/pull/67).
+1); refs [#66](https://github.com/shazow/virtle/issues/66),
+[#67](https://github.com/shazow/virtle/pull/67). Revised for two backends
+after [#94](https://github.com/shazow/virtle/pull/94) added Firecracker.
 
 `virtle guest` is a daemon that runs inside the VM and gives the virtle
 host typed, streaming remote control plus a real SSH endpoint — replacing
-QGA and the QGA-era session scaffolding. The requirements were settled in
-#67 review; this document designs the thing itself. The primary prior art
-is **Tailscale SSH** (`tailscale/tailscale`, `ssh/tailssh`): an
-app-embedded, pure-Go, identity-authenticated sshd for a constrained
-network — the same shape as ours with vsock in place of the tailnet.
+QGA on QEMU and providing the first guest transport of any kind on
+Firecracker. The requirements were settled in #67 review; this document
+designs the thing itself. The primary prior art is **Tailscale SSH**
+(`tailscale/tailscale`, `ssh/tailssh`): an app-embedded, pure-Go,
+identity-authenticated sshd for a constrained network — the same shape as
+ours with vsock in place of the tailnet.
 
 ## Package layout and budget
 
 ```
-guest/                 Serve (in-guest), Dial + Client (host side)
+guest/                 Server (in-guest), Dialer + Client (host side)
 guest/internal/sshd/   the embedded SSH server: channels, session spawning, sftp
 guest/internal/wire/   the virtle subsystem protocol: hello, frames, streams
-main.go                `virtle guest [--listen vsock://:PORT|unix://PATH]`
+main.go                `virtle guest [--listen vsock:PORT|unix:PATH] [init]`
 ```
 
-- `guest.Serve(ctx, l net.Listener, cfg Config) error` — transport
-  injected, so tests drive it over `net.Pipe`; vsock/unix listeners are
-  the CLI's job.
-- `guest.Dial(ctx, addr) (*Client, error)` — `Client` implements
-  `vm.Guest` and `vm.GuestWithCopy` (its first implementation), and grows
-  `vm.GuestWithX` extensions later.
+- `guest.Server` — the `http.Server` / `tsnet.Server` shape: an exported
+  struct (`HostKey`, `AuthorizedKeys`, `Logger`), zero value usable with a
+  lazily generated host key, `Serve(l net.Listener)` and `Shutdown(ctx)`.
+  Listeners are the caller's job; tests drive it over `net.Pipe`.
+- `guest.Dialer{DialContext func(ctx) (net.Conn, error)}` — the host side
+  injects the transport, so `guest` knows nothing about vsock, Unix
+  sockets, or either VMM. `Dialer.Dial(ctx) (*Client, error)`; `Client`
+  implements `vm.Guest` and `vm.GuestWithCopy`, and grows `vm.GuestWithX`
+  extensions later.
 - Dependency budget: stdlib + `golang.org/x/sys` (vsock, termios ioctls,
   landlock) + `golang.org/x/crypto/ssh`, plus `gliderlabs/ssh` and
   `pkg/sftp` per D-g2/D-g3. All pure Go; static builds already
   CI-enforced. The daemon ships inside the regular `virtle` binary; a
   minimal `cmd/virtle-guest` main stays available later without build
-  tags.
+  tags. One binary per guest architecture: Firecracker requires guest arch
+  = host arch, so the host's own `virtle` build is always the right one.
 
 ## Architecture: one listener, one mux — SSH is the transport
 
 Everything the daemon serves rides one SSH server on one vsock port,
-using SSH's channel multiplexing as *the* mux (the "one mux instead of
-two" resolution from #67's transport thread; precedent: sftp and NETCONF
+using SSH's channel multiplexing as *the* mux (precedent: sftp and NETCONF
 (RFC 6242) are both RPC protocols carried as SSH subsystems):
 
 - **Session channels** (`pty-req`, `shell`, `exec`, `window-change`,
   `env`, `exit-status`/`exit-signal`) serve humans and their tooling —
-  the user's ssh client, VS Code Remote-SSH, `virtle launch --ssh` (which
-  keeps today's UX: exec the user's ssh, ProxyCommand'd to the port).
+  the user's ssh client, VS Code Remote-SSH, `virtle launch --ssh`.
 - **The `virtle` subsystem** carries the typed RPC for programs
   (`vm.Guest` semantics). Debuggable from a terminal via
   `ssh -s virtle <vm>`.
@@ -54,13 +58,11 @@ two" resolution from #67's transport thread; precedent: sftp and NETCONF
   (`direct-tcpip` can be added later for `ssh -L` into guest services),
   session recording.
 
-Concurrency and streaming fall out of the channel model; the remaining
-protocol work is framing inside the subsystem: newline-delimited JSON
-control frames, with each bulk transfer opening a dedicated stream
-channel keyed by request id. `x/crypto/ssh` channel flow-control windows
-need deliberate sizing or bulk copies throttle (the classic sftp-vs-http
-gap) — treat window tuning as part of the copy implementation, with a
-throughput test.
+Framing inside the subsystem: newline-delimited JSON control frames, with
+each bulk transfer opening a dedicated stream channel keyed by request
+id. `x/crypto/ssh` channel flow-control windows need deliberate sizing or
+bulk copies throttle — treat window tuning as part of the copy
+implementation, with a throughput test.
 
 **Version handshake, first.** The subsystem's opening exchange is a hello
 (`{"virtle-proto": 1, "version": "v0.x.y"}` both ways) before any
@@ -69,32 +71,89 @@ against the host virtle, so mismatch must fail or degrade explicitly.
 Session channels (plain SSH) work regardless of proto version — the debug
 path never depends on the handshake.
 
+**The hello is readiness.** Today QEMU gates the session on an `SSH-READY`
+token the image writes to a readiness socket, and Firecracker guests are
+observed by scanning the console for a marker line. For daemon guests both
+collapse into one backend-neutral rule: the machine is ready when the
+daemon's hello succeeds. `internal/session`'s `Ready` hook gets that as
+its default for any machine whose `RemoteControl` is the daemon, and the
+per-backend readiness hooks go (roadmap item 5).
+
+## Transport: vsock on both VMMs, dialed differently
+
+The guest side is the same everywhere: the daemon listens on
+`AF_VSOCK` at a fixed port and needs `CONFIG_VIRTIO_VSOCKETS=y` (which
+pulls `CONFIG_NET` and `CONFIG_VSOCKETS`) and `/dev/vsock`. The host side
+differs per VMM, which is exactly why `guest.Dialer` takes a dial
+function rather than an address string:
+
+| VMM | Host-side mechanism | Dial function |
+|---|---|---|
+| QEMU (`vhost-vsock`) | The host kernel speaks `AF_VSOCK`: connect to `(guest CID, port)`. | `x/sys/unix` vsock socket; lives in `backend/qemu` |
+| Firecracker | No host `AF_VSOCK`. The device is configured through the API (`PUT /vsock` with `guest_cid` and `uds_path`); a host process connects to the Unix socket at `uds_path`, writes `CONNECT <port>\n`, and reads `OK <assigned_port>\n` before the byte stream begins. Guest-initiated connections land on `<uds_path>_<port>`. | Unix dial plus the two-line handshake; lives in `backend/firecracker` |
+
+Each backend contributes its dial function when it wires
+`Machine.RemoteControl`; `guest` never learns which VMM it is talking to,
+and tests use `net.Pipe`.
+
+### Kernel requirements for minimal guests
+
+The tinyconfig kernel in `tests/e2e/fixtures/fast` has serial, virtio
+MMIO/block/console, and ext4 — and *no networking at all* (`CONFIG_NET`
+off), so it cannot host the daemon as-is. The "userspace" fixture profile
+adds `NET` and `UNIX`. The daemon needs, on top of that,
+`CONFIG_VSOCKETS` and `CONFIG_VIRTIO_VSOCKETS`; the fixture's
+`kernel.nix` should grow a `guest` profile carrying them so the daemon is
+exercised by the same e2e checks. Distribution kernels (Alpine, NixOS,
+Ubuntu) already have all of it.
+
+A serial or virtio-serial transport was considered for kernels without
+`NET` and rejected as the primary path: Firecracker exposes a single
+serial port already used for the console, and QEMU's virtio-serial
+channel would make the daemon QEMU-shaped again. vsock is the one
+transport both VMMs share; the kernel cost is small.
+
+### SSH clients need a ProxyCommand on Firecracker
+
+`ssh user@vsock/<cid>` works on QEMU hosts only because a host-side
+`AF_VSOCK` exists (via systemd's ssh proxy or equivalent). On Firecracker
+nothing on the host speaks vsock, so the CLI provides the bridge itself:
+`virtle launch --ssh` runs the user's ssh client with `ProxyCommand=virtle
+guest proxy --machine <state dir>`, a hidden subcommand that dials the
+daemon's sshd through the machine's backend-specific dial function and
+pipes stdio. The same ProxyCommand works on QEMU, which removes the
+`vsock/<cid>` destination syntax and the `sshtools.VSockDestination`
+special case from the CLI, and gives every other SSH-speaking tool (scp,
+rsync, VS Code) one configuration line per machine.
+
 ## Identity and keys
 
 Two independent gates, both cheap:
 
-1. **vsock peer CID.** The daemon checks the connection's peer CID
-   (`getsockopt` on the vsock): the host is `VMADDR_CID_HOST` (2); a
-   guest-local loopback connection arrives with the guest's own CID.
-   Non-host CIDs are rejected before SSH auth begins. This is the virtle
-   analog of Tailscale authenticating by tailnet identity (`WhoIs` on the
-   connection) instead of passwords.
+1. **vsock peer CID.** The daemon checks the connection's peer CID: the
+   host is `VMADDR_CID_HOST` (2) under both VMMs (Firecracker's device
+   presents host connections with CID 2 as well); a guest-local loopback
+   connection arrives with the guest's own CID. Non-host CIDs are rejected
+   before SSH auth begins. This is the virtle analog of Tailscale
+   authenticating by tailnet identity (`WhoIs` on the connection) instead
+   of passwords.
 2. **Publickey auth with a host-provisioned key** as defense-in-depth
    (the daemon runs as root; CID checks alone shouldn't be load-bearing).
 
 Key bootstrap (D-g1): the host generates the client keypair (today's
 `sshtools.KeyStore` ed25519 machinery) and delivers the *public* half to
-the guest at boot — recommended via **kernel cmdline**
-(`virtle.guest.authorized_key=<base64>`, ~100 bytes; virtle controls
-direct-kernel boot, and cmdline is readable in-guest which is fine for a
-public key), with a file-in-share fallback for non-direct-kernel boots.
-No `authorized_keys` writes over a bootstrap protocol, no TOFU.
+the guest at boot via the **kernel command line**
+(`virtle.guest.authorized_key=<base64>`, ~100 bytes; virtle already
+assembles the command line for both VMMs and it is readable in-guest,
+which is fine for a public key), with a file-in-share fallback on QEMU
+for images that boot through their own bootloader. No `authorized_keys`
+writes over a bootstrap protocol, no TOFU.
 
 The daemon's **host key** is generated (ed25519) at first boot and
-persisted in the guest; the virtle host pins it on first connection in
-its state dir, known_hosts-style. On vsock the hypervisor mediates the
-path so MITM isn't in the threat model — pinning is belt-and-suspenders
-and makes `ssh` clients quiet.
+persisted in the guest where the image allows; on an immutable or
+initramfs root it is regenerated per boot and the host does not pin it
+(the hypervisor mediates the path, so MITM is not in the threat model;
+pinning is belt-and-suspenders that only a persistent guest can offer).
 
 ## The sshd
 
@@ -130,7 +189,8 @@ them; see D-g5 for the path back.)
 - **Environment**: `HOME`/`SHELL`/`USER` resolved via pure-Go `os/user`
   (static builds read `/etc/passwd` directly), `PATH` from a sane
   baseline — the lesson already paid for in v0.3.x, where internal guest
-  commands inherited QGA's restricted `PATH`.
+  commands inherited QGA's restricted `PATH`. BusyBox-only guests have no
+  `/etc/passwd`: fall back to root with `HOME=/` and `SHELL=/bin/sh`.
 
 ### Landlock, and what it does not replace
 
@@ -163,77 +223,166 @@ without an sftp subsystem, plain `scp` fails unless the user passes `-O`,
 and `-O` runs an `scp` binary guest-side (an image requirement). `rsync`
 always requires rsync in the guest; nothing server-side fixes that.
 
-So the earlier "no sftp initially" scoping note inverts: to make `scp`
-(and general file UX) actually work against bare images, **serve an sftp
-subsystem**, via the pure-Go `github.com/pkg/sftp` server (the standard
-implementation; Tailscale's sshd likewise serves sftp as a subsystem).
-One pure-Go dependency added to the budget; sftp sessions run inside the
-same credentialed spawn path as exec sessions. Recommended in; the
-fallback position is documenting `scp -O`'s guest-binary requirement.
+So to make `scp` (and general file UX) actually work against bare images,
+**serve an sftp subsystem**, via the pure-Go `github.com/pkg/sftp` server
+(the standard implementation; Tailscale's sshd likewise serves sftp as a
+subsystem). One pure-Go dependency added to the budget; sftp sessions run
+through the same credentialed spawn path as exec sessions. Recommended in;
+the fallback position is documenting `scp -O`'s guest-binary requirement.
 
 ## The virtle subsystem: implementing `vm.Guest`
 
 | Operation | Mechanism |
 |---|---|
-| `Run` | credentialed exec (SysProcAttr), buffered output + exit status in the response frame |
+| `Run` | credentialed exec (`SysProcAttr`); stdout/stderr streamed to the caller's writers as they arrive, exit status in the closing frame (`*vm.ExitError` on the host) |
 | `Open` / `Create` | stream channel per file, plain bytes |
-| `CopyToGuest` / `CopyFromGuest` | stream channel carrying tar; extraction enforces the zip-slip guard as an invariant (daemon extracts as root) and applies `CopyOptions` overwrite/ownership semantics |
-| `Shutdown` | clean daemon stop + system shutdown |
+| `CopyToGuest` / `CopyFromGuest` | stream channel carrying tar; extraction under `os.Root` (Go 1.24+, with `Chown`/`Symlink`/`MkdirAll` on 1.25), which makes the zip-slip guard traversal-safe by construction, and applies `CopyOptions` overwrite/ownership semantics |
+| `Shutdown` | clean daemon stop, then the guest reboots or powers off as the VMM needs — `reboot` on Firecracker (with `reboot=k` the reset exits the VMM; no i8042, no `SendCtrlAltDel`, and it works on aarch64), `poweroff` on QEMU |
 | Ping/readiness | the hello itself |
 
 Every operation runs with an explicit uid/gid (from the request, default
-root), through the same spawn path — the RPC gets no ambient
-authority the SSH sessions don't.
+root), through the same spawn path — the RPC gets no ambient authority
+the SSH sessions don't.
 
 ## Host-side wiring
 
-- `qemu.Guest{Port}` joins the sealed `RemoteControl` union;
-  `vmm.Config.GuestAgentDialer` takes the daemon dialer and
-  `vmm.Config.GuestReadiness` becomes "Dial + hello succeeded" (replacing
-  the ssh-ready socket gate).
-- `backend/qemu/session`'s autoprovision path collapses: the key travels
-  in the boot cmdline, so there is nothing to install over QGA — the
-  first piece of the session-layer demolition (roadmap item 4).
+- `backend/qemu`: `qemu.Guest{Port}` joins the sealed `RemoteControl`
+  union; its dial function opens `AF_VSOCK` to the machine's CID through
+  the existing `vmm.Config.GuestAgentDialer`-style seam (retargeted from
+  QGA to the daemon client). `DisableVSock` and `qemu.Guest{}` are
+  mutually exclusive, validated at `Start`.
+- `backend/firecracker`: `Backend.Guest *Guest` (or a `Guest{Port}` field
+  in the same sealed-union style once Firecracker has two transports)
+  configures the vsock device through the API before `InstanceStart`,
+  keeps `uds_path` in the private `virtle-fc-*` directory, and wires the
+  `CONNECT` handshake into the dial function. `RemoteControl` stops
+  returning `ErrUnsupported`, and `Spec.Files` works on Firecracker.
+- Both: the daemon hello becomes the neutral `Ready` default in
+  `internal/session`; `Shutdown` asks the daemon first and falls back to
+  the VMM mechanism when there is no daemon. `virtle guest proxy` is the
+  ProxyCommand described above.
+- `backend/backendtest`: the conformance suite gains `RemoteControl`
+  sub-tests that run wherever a daemon is configured — against the
+  in-memory backend with a `vmtest.Guest`, and under the integration tag
+  against both VMMs once the e2e fixture carries the daemon (below).
+
+## Getting the daemon into minimal guests
+
+Everything above assumes `virtle guest` is running in the guest. The
+guests we boot are mostly *not* distributions: `tests/e2e/fixtures/fast`
+is a static BusyBox tree packed as an initramfs and as a 16 MiB ext4 root
+disk; the Firecracker recipe is a BusyBox initrd plus a raw data disk; the
+Alpine, tiny-NixOS, and Docker-image recipes replace the image's init
+with a BusyBox inittab. None runs a package manager at boot, most have no
+network, some have a read-only root. The strategies, cheapest first,
+with the layered recommendation at the end:
+
+**S1 — Build-time fusion (Nix and image recipes).** The fixture and recipes
+already assemble the guest tree in a derivation; adding `bin/virtle` (the
+static host build) and one inittab line (`::respawn:/bin/virtle guest`)
+is a few lines, and a `virtle.lib.guestTree` helper in the flake can do it
+for any recipe. Cost: initrd size (+~9 MiB for the full binary, +~3 MiB
+with `cmd/virtle-guest`) and its decompression at boot, measurable on
+the 128 MiB fixture and worth benchmarking. This is the right answer for
+images we build ourselves, and the fixture should take it first so the
+daemon is exercised by the e2e checks.
+
+**S2 — Launch-time initramfs overlay (no image rebuild).** The Linux
+kernel unpacks concatenated cpio archives in order, so virtle can append
+a tiny archive containing `/virtle` and a hook to the user's initrd at
+`Start` — a temporary file both VMMs accept as the initrd path, generated
+per boot (or cached per virtle version + initrd hash). The image builder
+does nothing. The hook is the question: the daemon has to be *started* by
+something, which leads to S3.
+
+**S3 — `virtle guest init`: an early-userspace shim.** For guests virtle
+boots directly (kernel + initrd or kernel + root disk, which is both of
+our VMMs' primary mode), virtle supplies the earliest userspace itself:
+the overlay from S2 carries `/init` → `virtle guest init`, which mounts
+`devtmpfs`/`proc`/`sysfs`, starts the daemon, and then execs the image's
+own init (the initramfs's original `/init`, or `switch_root` onto the
+`root=` device and `/sbin/init`). Kata Containers' `kata-agent` and
+Bottlerocket run their agents exactly this way — as the first process of
+a purpose-built guest. This inverts the earlier stance that the daemon
+should never be PID 1: as a *shim that hands off*, being first is the
+feature, and it needs only what `/init` scripts already need (a kernel
+with initramfs support, no shell). The daemon itself keeps running as a
+child of the real init, which reaps it; only the shim is PID 1, briefly.
+Images with their own bootloader (the Ubuntu cloud image path in
+`docs/recipes`) are outside this mechanism and fall back to S1 or S4.
+
+**S4 — Disk injection plus console bootstrap (no image cooperation at
+all).** Attach a small read-only raw image carrying `virtle` as an extra
+`vm.Disk` (built once per virtle version, cached), then drive the guest's
+BusyBox shell on the serial console — which the e2e check already does on
+both backends through `Machine.Console` — to `mount /dev/vdb /mnt &&
+/mnt/virtle guest &`. Works on both VMMs with nothing in the image beyond
+a shell on ttyS0 and `virtio_blk` + `ext4` (both in the tinyconfig
+kernel). Fragile by nature (prompt detection, root shell required); it is
+the fallback for foreign images, not a path we design around.
+
+Rejected: shipping the daemon over the serial console (115200 baud makes
+a 3 MiB transfer take minutes), and baking it into the kernel's built-in
+initramfs (`CONFIG_INITRAMFS_SOURCE`, which couples every kernel build to
+a virtle version); a QEMU-only share is not portable to Firecracker.
+
+**Recommendation (D-g6).** Layer them: S1 for the fixture and recipes now,
+so the daemon lands with tests; S2+S3 as the general mechanism, since it
+makes any directly-booted kernel+initrd or kernel+rootfs guest a daemon
+guest with zero image changes, on both VMMs, and it is also where the
+kernel-command-line key delivery naturally lives; S4 documented as the
+escape hatch. An `Options`-level switch (`Guest: guest.Inject`) on both
+backends selects S2+S3; images that already carry the daemon (S1) set
+`Guest: guest.Provided`.
 
 ## In-guest lifecycle
 
-The daemon is init-agnostic: images run `virtle guest` from whatever init
-they have (a systemd unit and a busybox-init example ship in
-getting-started docs). It does not supervise other processes and does not
-want to be PID 1; if an image runs it as PID 1 anyway it sets itself as
-subreaper and reaps, but that's tolerance, not a feature.
+Init-agnostic by design: the daemon runs from whatever init the image has
+(a systemd unit, a BusyBox inittab line, or the S3 shim's exec chain), does
+not supervise other processes, and does not want to be a long-lived PID 1.
+If an image runs it as PID 1 anyway it sets itself as subreaper and reaps,
+but that is tolerance, not a feature; S3's shim is the designed way to be
+first.
 
 ## Testing
 
-Per AGENTS.md: `Serve` over injected listeners (`net.Pipe`) with
+Per AGENTS.md: `Server.Serve` over injected listeners (`net.Pipe`) with
 `x/crypto/ssh` as the in-process client; the wire protocol tested without
-sockets; privilege/spawn operations behind a small interface with a
-fake for unit tests, plus root-only integration coverage in the existing
-`nix flake check` integration suite; copy semantics against
-`fstest.MapFS` archives.
+sockets; spawn/privilege operations behind a small interface with a fake
+for unit tests, plus root-only integration coverage in the existing
+`integration`-tagged checks; copy semantics against `fstest.MapFS`
+archives extracted under `os.Root`; `testing/synctest` for handshake and
+timeout behavior. End to end: the e2e fixture's `guest` kernel profile
+plus S1 packing boots the daemon on both VMMs under KVM, and the
+`backendtest` `RemoteControl` sub-tests run against it.
 
 ## Decision points
 
-- **D-g1 — key bootstrap**: (a) *recommended:* kernel cmdline param, file
-  fallback; (b) file-in-share only; (c) peer-CID-only, no key (rejected:
-  daemon runs as root, CID checks shouldn't be load-bearing alone).
-- **D-g2 — server layer**: (a) *recommended:* `gliderlabs/ssh` (small,
-  pure Go, proven in Gitea/soft-serve; provides session/pty/subsystem
-  plumbing); (b) hand-rolled on `x/crypto/ssh` (tightest dependency
-  budget, most code to own); (c) `charmbracelet/wish` (rejected: an SSH
-  *app* framework with the Charm ecosystem attached — aimed at a
-  different problem).
-- **D-g3 — sftp subsystem**: (a) *recommended:* include (pkg/sftp;
-  makes default `scp` work against bare images); (b) defer and document
+- **D-g1 — key bootstrap**: (a) *recommended:* kernel command line, file
+  fallback; (b) file-in-share only (QEMU-only); (c) peer-CID-only, no key
+  (rejected: daemon runs as root, CID checks shouldn't be load-bearing
+  alone).
+- **D-g2 — server layer**: (a) *recommended:* `gliderlabs/ssh`; (b)
+  hand-rolled on `x/crypto/ssh` (tightest dependency budget, most code to
+  own); (c) `charmbracelet/wish` (rejected: an SSH *app* framework aimed
+  at a different problem).
+- **D-g3 — sftp subsystem**: (a) *recommended:* include (pkg/sftp; makes
+  default `scp` work against bare images); (b) defer and document
   `scp -O`.
 - **D-g4 — bulk-stream framing**: (a) *recommended:* one SSH channel per
-  operation; (b) interleaved frames inside the subsystem channel (fewer
-  channels, hand-rolled flow control — rejected as re-implementing what
-  SSH gives us).
+  operation; (b) interleaved frames inside the subsystem channel
+  (rejected as re-implementing what SSH gives us).
 - **D-g5 — login semantics**: (a) *recommended:* direct exec with
-  `SysProcAttr` credentials only — no `login(1)`/`su` ladder, no PAM,
-  no utmp; the semantics minimal sandbox images don't have anyway.
-  (b) add a probe-`login`/`su` ladder for full multi-user images — the
-  point at which a `--be-child` re-exec becomes worthwhile, since PAM-era
-  setup needs a program in the child, not a syscall menu. Deferred until
-  an image actually needs it.
+  `SysProcAttr` credentials only; (b) a probe-`login`/`su` ladder for full
+  multi-user images — the point at which a `--be-child` re-exec becomes
+  worthwhile. Deferred until an image needs it.
+- **D-g6 — daemon injection**: (a) *recommended:* S1 for owned images,
+  S2+S3 (initramfs overlay + `virtle guest init` shim) as the general
+  mechanism, S4 as the escape hatch; (b) S1 only, documenting that every
+  image must carry the daemon (simplest, pushes the work onto every image
+  builder, and leaves foreign images without guest control).
+- **D-g7 — transport on `NET`-less kernels**: (a) *recommended:* require
+  vsock (`NET` + `VSOCKETS` + `VIRTIO_VSOCKETS`) and add it to the
+  fixture's kernel profile; (b) a serial transport for the smallest
+  kernels (rejected as primary: single serial port on Firecracker, and it
+  would re-couple the daemon to QEMU's virtio-serial).

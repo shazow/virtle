@@ -5,12 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
+	"runtime"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -22,65 +21,90 @@ import (
 	"github.com/shazow/virtle/vm"
 )
 
-const socketRetryInterval = 10 * time.Millisecond
-const killWaitTimeout = 2 * time.Second
+const (
+	socketRetryInterval = 10 * time.Millisecond
+	killWaitTimeout     = 2 * time.Second
+	// unixPathMax is sizeof(sun_path) on Linux; longer socket paths cannot bind.
+	unixPathMax = 108
+)
 
-// Machine owns one child process and its private runtime directory.
+// ctrlAltDelSupported reports whether Firecracker's SendCtrlAltDel action,
+// its only guest shutdown request, exists on this host; it emulates an i8042
+// controller on x86 alone. Tests running a fake VMM override it.
+var ctrlAltDelSupported = runtime.GOARCH == "amd64"
+
+// Machine is a Firecracker microVM started by Backend: one VMM process, the
+// private directory holding its API socket, the control socket, and the
+// VM-name lock shared with QEMU.
 type Machine struct {
 	process         *executor.Process
 	api             *apiClient
-	done            chan struct{}
-	stopped         chan struct{}
-	runtimeDir      string
-	lock            *os.File
-	shutdownTimeout time.Duration
-	mu              sync.Mutex
-	status          backend.Status
-	err             error
-	cleanupErr      error
-	shutdownOnce    sync.Once
-	shutdownDone    chan struct{}
-	shutdownErr     error
 	control         *control.Server
+	lock            io.Closer
+	runtimeDir      string // private directory holding the API socket
+	ephemeralState  string // temporary state directory removed on exit, or ""
+	shutdownTimeout time.Duration
 	diagnostics     *diagnosticWriter
-	ephemeralState  string
+
+	// stopped closes once the VMM has exited and its runtime files are
+	// released; done closes after the control server has also delivered the
+	// responses of lifecycle RPCs that observed the exit.
+	stopped chan struct{}
+	done    chan struct{}
+
+	mu         sync.Mutex
+	status     backend.Status
+	err        error // exit result, valid after stopped closes
+	cleanupErr error
+
+	shutdownOnce sync.Once
+	shutdownDone chan struct{}
+	shutdownErr  error
 }
 
-func (b *Backend) start(ctx context.Context, mf *imanifest.Manifest, ephemeral bool) (backend.Machine, error) {
-	var ephemeralState string
-	if ephemeral {
-		var err error
-		ephemeralState, err = os.MkdirTemp("", "virtle-state-")
-		if err != nil {
-			return nil, err
-		}
-		mf.Persistence.StateDir = ephemeralState
+// newMachine wires a started VMM process to its runtime resources. The
+// caller starts the control server and the reaper.
+func newMachine(process *executor.Process, api *apiClient, lock io.Closer, runtimeDir string, shutdownTimeout time.Duration) *Machine {
+	return &Machine{
+		process:         process,
+		api:             api,
+		lock:            lock,
+		runtimeDir:      runtimeDir,
+		shutdownTimeout: shutdownTimeout,
+		diagnostics:     &diagnosticWriter{},
+		stopped:         make(chan struct{}),
+		done:            make(chan struct{}),
+		shutdownDone:    make(chan struct{}),
 	}
+}
+
+func (b *Backend) start(ctx context.Context, mf *imanifest.Manifest, ephemeralState string) (backend.Machine, error) {
 	started := false
 	defer func() {
 		if !started && ephemeralState != "" {
 			_ = os.RemoveAll(ephemeralState)
 		}
 	}()
-	stateDir := mf.ResolvedPersistenceStateDir()
-	lock, err := lockState(stateDir, mf.Identity.HostName)
+	lock, err := lockState(mf)
 	if err != nil {
 		return nil, err
 	}
-	controlPath := filepath.Join(stateDir, "virtle.sock")
-	// Binding never removes an existing socket, regular file, or symlink.
-	listener, err := net.Listen("unix", controlPath)
+	controlPath, err := mf.ResolvedControlSocketPath()
 	if err != nil {
-		_ = lock.Close()
-		return nil, fmt.Errorf("listen firecracker control socket: %w", err)
-	}
-	if err := os.Chmod(controlPath, 0600); err != nil {
-		_ = listener.Close()
 		_ = lock.Close()
 		return nil, err
 	}
-	// Short, unique names avoid Unix path length limits and never reuse or
-	// unlink a caller-supplied API socket. MkdirTemp creates mode 0700.
+	// The lock held above proves no live virtle runs this VM name in this
+	// state directory, so, as in the QEMU backend, whatever control.Listen
+	// replaces is taken to be a leftover of a crashed launch.
+	listener, err := control.Listen(controlPath)
+	if err != nil {
+		_ = lock.Close()
+		return nil, fmt.Errorf("listen on control socket: %w", err)
+	}
+	// The API socket gets a short, unique, private (0700) directory of its own:
+	// state directories can sit deeper than a Unix socket path allows, and
+	// nothing pre-existing is ever reused or unlinked.
 	dir, err := os.MkdirTemp("", "virtle-fc-")
 	if err != nil {
 		_ = listener.Close()
@@ -89,55 +113,59 @@ func (b *Backend) start(ctx context.Context, mf *imanifest.Manifest, ephemeral b
 	}
 	rollback := func() { _ = listener.Close(); _ = os.RemoveAll(dir); _ = lock.Close() }
 	socket := filepath.Join(dir, "api.sock")
-	if len(socket) >= 108 {
+	if len(socket) >= unixPathMax {
 		rollback()
-		return nil, fmt.Errorf("firecracker API socket path too long; use a shorter TMPDIR")
+		return nil, fmt.Errorf("firecracker API socket path %q is too long; set a shorter TMPDIR", socket)
 	}
 	cfg := mf.Firecracker
 	cmd := exec.Command(cfg.Binary, "--api-sock", socket)
 	cmd.Dir = mf.Paths.WorkingDir
 	cmd.WaitDelay = time.Second // inherited output descriptors cannot hold teardown open
+	// Firecracker leads its own process group, so teardown signals reach
+	// anything it spawned, and the host's Ctrl-C does not reach it directly.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	m := newMachine(nil, newAPIClient(socket), lock, dir, cfg.ShutdownTimeout)
+	m.ephemeralState = ephemeralState
 	cmd.Stdout = io.Discard
-	diagnostics := &diagnosticWriter{}
-	cmd.Stderr = diagnostics
-	if cfg.Kernel.Serial == imanifest.KernelSerialPrint {
-		output := b.ConsoleOutput
-		if output == nil {
-			output = os.Stderr
-		}
-		serialized := &lockedWriter{writer: output}
-		cmd.Stdout, cmd.Stderr = serialized, io.MultiWriter(diagnostics, serialized)
+	cmd.Stderr = m.diagnostics
+	if cfg.Console == imanifest.KernelSerialPrint {
+		serialized := &lockedWriter{writer: b.consoleOutput()}
+		cmd.Stdout, cmd.Stderr = serialized, io.MultiWriter(m.diagnostics, serialized)
 	}
-	logger := b.Logger
-	if logger == nil {
-		logger = slog.New(slog.DiscardHandler)
-	}
+	logger := b.logger()
 	logger.Info("starting firecracker", "binary", cfg.Binary, "api_socket", socket)
-	process, err := startProcess(cmd)
+	m.process, err = (&executor.Runner{Logger: logger}).Start(cmd)
 	if err != nil {
 		rollback()
 		return nil, err
 	}
-	m := &Machine{process: process, api: newAPIClient(socket), done: make(chan struct{}), stopped: make(chan struct{}), runtimeDir: dir, lock: lock, shutdownTimeout: cfg.ShutdownTimeout, shutdownDone: make(chan struct{}), status: backend.Status{State: backend.StateStarting, PID: process.PID(), Paths: backend.StatusPaths{MonitorSocket: socket}, Stats: backend.RuntimeStats{StartedAt: time.Now()}}}
-	m.diagnostics = diagnostics
-	m.ephemeralState = ephemeralState
-	m.status.Paths.ControlSocket = controlPath
+	// Firecracker's graceful path is its API, never SIGTERM: Stop only ever
+	// hard-kills here, and the grace period bounds its wait for the reaper.
+	m.process.SetGracePeriod(killWaitTimeout)
+	m.status = backend.Status{
+		State: backend.StateStarting,
+		PID:   m.process.PID(),
+		Paths: backend.StatusPaths{ControlSocket: controlPath, MonitorSocket: socket},
+		Stats: backend.RuntimeStats{StartedAt: time.Now()},
+	}
 	router, err := control.NewMachineRouter(controlMachine{m})
 	if err != nil {
-		_ = process.KillAndWait()
+		_ = m.process.KillAndWait()
 		rollback()
 		return nil, err
 	}
 	m.control, err = control.NewServer(router)
 	if err != nil {
-		_ = process.KillAndWait()
+		_ = m.process.KillAndWait()
 		rollback()
 		return nil, err
 	}
 	go func() {
 		if err := m.control.Serve(listener); err != nil {
-			logger.Warn("firecracker control server stopped", "err", err)
-			_ = m.Kill()
+			// The control socket is a peripheral: losing it leaves the machine
+			// running for the caller that holds it.
+			logger.Warn("control server stopped", "err", err)
+			_ = m.control.Close()
 		}
 	}()
 	<-m.control.Started()
@@ -175,48 +203,53 @@ func (b *Backend) start(ctx context.Context, mf *imanifest.Manifest, ephemeral b
 	return m, nil
 }
 
-func lockState(dir, name string) (*os.File, error) {
-	if name == "" || name == "." || name == ".." || filepath.Base(name) != name {
-		return nil, fmt.Errorf("firecracker host_name must be a file name")
+// lockState creates the state directory privately when it is missing (an
+// existing directory is used as it is, as the QEMU backend does), then takes
+// the exclusive VM-name lock both backends share, so two launches of one
+// manifest exclude each other whichever backend they use.
+func lockState(mf *imanifest.Manifest) (*os.File, error) {
+	path := mf.ResolvedLockPath()
+	if err := ensurePrivateDirectory(filepath.Dir(path)); err != nil {
+		return nil, fmt.Errorf("create state directory: %w", err)
 	}
-	// Lstat follows a final symlink when a slash follows it. Strip only
-	// trailing separators: preserve root and symlink/.. resolution semantics.
-	if strings.HasSuffix(dir, "/") {
-		dir = strings.TrimRight(dir, "/")
-		if dir == "" {
-			dir = "/"
-		}
-	}
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return nil, fmt.Errorf("create firecracker state directory: %w", err)
-	}
-	info, err := os.Lstat(dir)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
-		return nil, err
-	}
-	if !info.IsDir() || info.Mode().Perm()&0077 != 0 {
-		return nil, fmt.Errorf("firecracker state directory must be a private directory (0700): %q", dir)
-	}
-	// OpenRoot confines lock lookup even if another process renames the dir.
-	root, err := os.OpenRoot(dir)
-	if err != nil {
-		return nil, err
-	}
-	defer root.Close()
-	f, err := root.OpenFile(name+".lock", os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0600)
-	if err != nil {
-		return nil, fmt.Errorf("open firecracker lock: %w", err)
-	}
-	info, err = f.Stat()
-	if err != nil || !info.Mode().IsRegular() {
-		_ = f.Close()
-		return nil, fmt.Errorf("firecracker lock must be a regular file")
+		return nil, fmt.Errorf("acquire lock %q: %w", path, err)
 	}
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		_ = f.Close()
-		return nil, fmt.Errorf("firecracker state directory is in use: %w", err)
+		return nil, fmt.Errorf("acquire lock %q: another virtle owns this state directory: %w", path, err)
+	}
+	// Record the owner, as the QEMU backend does.
+	if err := f.Truncate(0); err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("write lock %q: %w", path, err)
+	}
+	if _, err := f.WriteString(strconv.Itoa(os.Getpid()) + "\n"); err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("write lock %q: %w", path, err)
 	}
 	return f, nil
+}
+
+// ensurePrivateDirectory creates path (and missing parents) with mode 0700.
+// An existing directory is left unchanged, so state directories created by
+// older virtle versions or by hand keep working.
+func ensurePrivateDirectory(path string) error {
+	if info, err := os.Stat(path); err == nil {
+		if !info.IsDir() {
+			return fmt.Errorf("%q is not a directory", path)
+		}
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		return err
+	}
+	// MkdirAll is filtered through the umask; make the directory this call
+	// created private regardless.
+	return os.Chmod(path, 0o700)
 }
 
 func (m *Machine) waitAPI(ctx context.Context, socket string) error {
@@ -225,13 +258,13 @@ func (m *Machine) waitAPI(ctx context.Context, socket string) error {
 	timer := time.NewTicker(socketRetryInterval)
 	defer timer.Stop()
 	for {
-		conn, err := (&net.Dialer{}).DialContext(ctx, "unix", socket)
+		conn, err := m.api.dial(ctx)
 		if err == nil {
 			return conn.Close()
 		}
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("wait for firecracker API: %w", ctx.Err())
+			return fmt.Errorf("wait for firecracker API at %q: %w", socket, ctx.Err())
 		case <-timer.C:
 		}
 	}
@@ -275,8 +308,13 @@ func (m *Machine) reap() {
 	close(m.done)
 }
 
+// Done closes after the machine exits and its runtime state is released.
 func (m *Machine) Done() <-chan struct{} { return m.done }
-func (m *Machine) Err() error            { m.mu.Lock(); defer m.mu.Unlock(); return m.err }
+
+// Err reports the exit result after Done closes.
+func (m *Machine) Err() error { m.mu.Lock(); defer m.mu.Unlock(); return m.err }
+
+// Wait blocks until the machine exits or ctx ends and returns the exit result.
 func (m *Machine) Wait(ctx context.Context) error {
 	select {
 	case <-m.done:
@@ -290,9 +328,13 @@ func (m *Machine) Wait(ctx context.Context) error {
 		return ctx.Err()
 	}
 }
+
+// Kill hard-stops Firecracker and releases runtime state.
 func (m *Machine) Kill() error { return m.finish(m.kill()) }
 
 func (m *Machine) kill() error {
+	// Stop with an expired context skips the graceful rungs: it SIGKILLs the
+	// process group and bounds its own wait for the reaper.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	err := m.process.Stop(ctx)
@@ -308,9 +350,14 @@ func (m *Machine) kill() error {
 	}
 }
 
-// Shutdown asks the x86 guest's init to handle Ctrl-Alt-Del and waits for exit.
-// The configured timeout and ctx both bound the wait; expiration kills the
-// process group. Guests must provide a Ctrl-Alt-Del handler for clean shutdown.
+// Shutdown asks the guest to power off and waits for the VMM to exit,
+// killing it when Backend.ShutdownTimeout or ctx expires. Firecracker's only
+// guest shutdown request is the i8042 Ctrl-Alt-Del, which exists on amd64
+// alone: the guest needs the i8042 driver and an init that handles
+// Ctrl-Alt-Del with a reboot (virtle's reboot=k turns that into a VMM exit).
+// On other architectures Shutdown kills the VMM and returns an error
+// wrapping errors.ErrUnsupported. Repeated and concurrent calls share one
+// attempt.
 func (m *Machine) Shutdown(ctx context.Context) error { return m.finish(m.shutdown(ctx)) }
 
 func (m *Machine) shutdown(ctx context.Context) error {
@@ -325,21 +372,7 @@ func (m *Machine) shutdown(ctx context.Context) error {
 	m.shutdownOnce.Do(func() {
 		go func() {
 			defer close(m.shutdownDone)
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), m.shutdownTimeout)
-			defer cancel()
-			m.mu.Lock()
-			if m.status.State != backend.StateStopped {
-				m.status.State = backend.StateStopping
-			}
-			m.mu.Unlock()
-			err := m.api.put(shutdownCtx, "/actions", action{Type: "SendCtrlAltDel"})
-			if err == nil {
-				err = m.waitStopped(shutdownCtx)
-			}
-			if err != nil {
-				err = errors.Join(err, m.kill())
-			}
-			m.shutdownErr = err
+			m.shutdownErr = m.gracefulShutdown()
 		}()
 	})
 	select {
@@ -350,8 +383,33 @@ func (m *Machine) shutdown(ctx context.Context) error {
 	}
 }
 
-// RPC handlers wait for process cleanup, but cannot wait for their own response
-// delivery. Public completion waits for both cleanup and control-server drain.
+func (m *Machine) gracefulShutdown() error {
+	if !ctrlAltDelSupported {
+		return errors.Join(fmt.Errorf("firecracker graceful shutdown on %s: %w", runtime.GOARCH, errors.ErrUnsupported), m.kill())
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), m.shutdownTimeout)
+	defer cancel()
+	m.mu.Lock()
+	if m.status.State != backend.StateStopped {
+		m.status.State = backend.StateStopping
+	}
+	m.mu.Unlock()
+	if err := m.api.put(ctx, "/actions", action{Type: "SendCtrlAltDel"}); err != nil {
+		// A guest that powered off on its own while the request was in
+		// flight reached the state shutdown wanted; only a live VMM is killed.
+		if exited, _ := m.process.PollExit(); !exited {
+			return errors.Join(err, m.kill())
+		}
+	}
+	if err := m.waitStopped(ctx); err != nil {
+		return errors.Join(err, m.kill())
+	}
+	return nil
+}
+
+// controlMachine serves the control socket. Its lifecycle handlers wait for
+// process cleanup but must not wait for their own response to be delivered;
+// the public Machine methods wait for both.
 type controlMachine struct{ *Machine }
 
 func (m controlMachine) Wait(ctx context.Context) error     { return m.waitStopped(ctx) }
@@ -367,19 +425,26 @@ func (m *Machine) waitStopped(ctx context.Context) error {
 	}
 }
 
+// finish returns err after the control server has drained, once the VMM is
+// known to have stopped; a process wedged during kill keeps the caller bounded
+// by kill's own timeout instead.
 func (m *Machine) finish(err error) error {
 	select {
 	case <-m.stopped:
 		<-m.done
 	default:
-		// A process wedged during kill must still respect the teardown bound.
 	}
 	return err
 }
 
+// RemoteControl reports errors.ErrUnsupported: Firecracker machines have no
+// guest control transport yet.
 func (m *Machine) RemoteControl() (vm.Guest, error) {
 	return nil, fmt.Errorf("firecracker has no guest control transport: %w", errors.ErrUnsupported)
 }
+
+// Status reports the machine's lifecycle state, PID, and socket paths. The
+// API socket is reported as the monitor socket.
 func (m *Machine) Status(ctx context.Context) (backend.Status, error) {
 	if err := ctx.Err(); err != nil {
 		return backend.Status{}, err
@@ -389,5 +454,7 @@ func (m *Machine) Status(ctx context.Context) (backend.Status, error) {
 	return m.status, nil
 }
 
-var _ backend.Machine = (*Machine)(nil)
-var _ backend.StatusReporter = (*Machine)(nil)
+var (
+	_ backend.Machine        = (*Machine)(nil)
+	_ backend.StatusReporter = (*Machine)(nil)
+)

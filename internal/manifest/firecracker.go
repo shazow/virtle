@@ -1,6 +1,7 @@
 package manifest
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"reflect"
@@ -10,6 +11,24 @@ import (
 	"github.com/shazow/virtle/units"
 )
 
+// Firecracker defaults applied when the manifest leaves a value unset, and
+// the VMM's own limits.
+const (
+	defaultFirecrackerBinary  = "firecracker"
+	defaultFirecrackerCPUs    = 1
+	defaultFirecrackerTimeout = 10 * time.Second
+	// MaxFirecrackerCPUs is the largest vCPU count Firecracker accepts.
+	MaxFirecrackerCPUs      = 32
+	maxFirecrackerMemoryMiB = units.MiB(1 << 20)
+)
+
+// unsupported reports a manifest setting that configures something the
+// Firecracker backend cannot honor, wrapping errors.ErrUnsupported so callers
+// can tell a missing capability from an invalid manifest.
+func unsupported(format string, args ...any) error {
+	return fmt.Errorf("firecracker: "+format+": %w", append(args, errors.ErrUnsupported)...)
+}
+
 // FirecrackerInput contains only VMM-specific options. Resources and boot
 // devices use the same machine, kernel and mounts sections as QEMU.
 type FirecrackerInput struct {
@@ -18,132 +37,191 @@ type FirecrackerInput struct {
 	ShutdownTimeout units.Duration `json:"shutdown_timeout,omitempty" toml:"shutdown_timeout" jsonschema:"Maximum graceful shutdown time; zero uses 10s."`
 }
 
+// Firecracker is the resolved Firecracker launch configuration: what the
+// backend puts on the Firecracker API, with paths already resolved against
+// the working directory.
 type Firecracker struct {
 	Binary          string            `json:"binary"`
 	StartupTimeout  time.Duration     `json:"startupTimeout"`
 	ShutdownTimeout time.Duration     `json:"shutdownTimeout"`
 	CPUs            int               `json:"cpus"`
 	MemoryMiB       units.MiB         `json:"memoryMiB"`
-	Kernel          KernelInput       `json:"kernel"`
-	Disks           []ImageMountInput `json:"disks,omitempty"`
+	Kernel          FirecrackerKernel `json:"kernel"`
+	Disks           []FirecrackerDisk `json:"disks,omitempty"`
+	// Console is KernelSerialOff or KernelSerialPrint.
+	Console string `json:"console"`
 }
 
+// FirecrackerKernel is the resolved boot source.
+type FirecrackerKernel struct {
+	Path       string `json:"path"`
+	InitrdPath string `json:"initrdPath,omitempty"`
+	// Cmdline is the complete guest command line virtle passes to the API:
+	// console parameters, virtle's reboot/panic policy, then the manifest's
+	// kernel.params. Firecracker appends root=/dev/vda and ro or rw for the
+	// first disk itself.
+	Cmdline string `json:"cmdline"`
+}
+
+// FirecrackerDisk is a resolved raw block device; the first one is the root
+// device.
+type FirecrackerDisk struct {
+	Path     string `json:"path"`
+	ReadOnly bool   `json:"readOnly,omitempty"`
+}
+
+// seededDocument is the document DecodeDocumentBytes decodes into: every
+// scalar default tag applied and nothing else set. A section equal to its
+// seeded (or zero) value was not configured by the manifest author.
+func seededDocument() Document {
+	var doc Document
+	applyDefaultTags(&doc)
+	return doc
+}
+
+// unconfigured reports whether section is the zero value or one of the
+// baselines virtle produces itself (the decoder's seeded defaults, the
+// DocumentWithDefaults output), i.e. the manifest author did not configure it.
+func unconfigured[T any](section T, baselines ...T) bool {
+	var zero T
+	if reflect.DeepEqual(section, zero) {
+		return true
+	}
+	for _, baseline := range baselines {
+		if reflect.DeepEqual(section, baseline) {
+			return true
+		}
+	}
+	return false
+}
+
+// firecrackerManifest resolves a backend = "firecracker" document. Sections
+// that configure QEMU devices, host helpers, or guest-agent features are
+// rejected rather than silently dropped, so a QEMU manifest switched to
+// Firecracker fails loudly instead of losing behavior. Values equal to what
+// virtle itself defaults QEMU-only sections to (the user network, the ssh
+// command) never count as configuration, so a document that already went
+// through DocumentWithDefaults resolves like the raw one.
 func (d Document) firecrackerManifest() (*Manifest, error) {
-	ssh := d.SSH
-	if d.decoded {
-		defaults := DefaultDocument().SSH
-		if ssh.User == defaults.User {
-			ssh.User = ""
-		}
-		if ssh.RetryDelay == defaults.RetryDelay {
-			ssh.RetryDelay = 0
-		}
+	seeded, defaults := seededDocument(), DefaultDocument()
+	switch {
+	case !unconfigured(d.SSH, seeded.SSH, defaults.SSH):
+		return nil, unsupported("manifest.ssh needs a guest control transport, which firecracker does not have yet")
+	case !unconfigured(d.VSock.CIDRange, defaults.VSock.CIDRange) || (d.VSock.Enabled != nil && *d.VSock.Enabled):
+		return nil, unsupported("manifest.vsock: firecracker guests have no vsock device")
+	case !unconfigured(d.QEMU, seeded.QEMU, defaults.QEMU):
+		return nil, unsupported("manifest.qemu configures QEMU; remove it or set backend = %q", BackendQEMU)
+	case len(d.Networks) != 0 && !reflect.DeepEqual(d.Networks, defaults.Networks):
+		return nil, unsupported("manifest.networks: firecracker guests have no network device yet")
+	case len(d.WriteFiles) != 0 || d.Workspace != (WorkspaceInput{}):
+		return nil, unsupported("manifest.write_files and manifest.workspace need a guest control transport, which firecracker does not have yet")
+	case len(d.Run) != 0 || len(d.Notifications.Exec) != 0 || len(d.Notifications.States) != 0:
+		return nil, unsupported("manifest.run and manifest.notifications")
+	case d.Balloon != nil || d.Hotplug.Len() != 0:
+		return nil, unsupported("manifest.balloon and manifest.hotplug")
+	case d.Graphics != nil && d.Graphics.Backend != "" && d.Graphics.Backend != defaultGraphicsBackend:
+		return nil, unsupported("manifest.graphics")
+	case d.Machine.CPU != "" || d.Machine.ID != "" || (d.Machine.Type != "" && d.Machine.Type != seeded.Machine.Type):
+		return nil, unsupported("manifest.machine.type, cpu and id configure QEMU")
+	case d.Machine.KVM != nil && !*d.Machine.KVM:
+		return nil, unsupported("firecracker requires KVM; manifest.machine.kvm cannot be false")
+	case len(d.Mounts) != len(d.Mounts.Image()):
+		return nil, unsupported("only image mounts are supported")
 	}
-	if d.explicitSSH || !reflect.DeepEqual(ssh, SSHInput{}) {
-		return nil, fmt.Errorf("firecracker: manifest.ssh settings require an unsupported guest control transport")
-	}
-	if d.explicitVSock || d.VSock != (VSockInput{}) {
-		return nil, fmt.Errorf("firecracker: manifest.vsock settings are unsupported")
-	}
-	// These fields configure QEMU devices or process policy and must never
-	// be silently accepted by another backend. Duration defaults are seeded
-	// by decoding; allow the same defaults for documents constructed in Go.
-	qemu := d.QEMU
-	qemu.GuestDefaultTimeout, qemu.ShutdownTimeout = 0, 0
-	defaults := DefaultDocument().QEMU
-	defaults.GuestDefaultTimeout, defaults.ShutdownTimeout = 0, 0
-	if !reflect.DeepEqual(mergeQEMUInput(defaults, qemu), defaults) ||
-		(d.QEMU.GuestDefaultTimeout != 0 && d.QEMU.GuestDefaultTimeout != DefaultDocument().QEMU.GuestDefaultTimeout) ||
-		(d.QEMU.ShutdownTimeout != 0 && d.QEMU.ShutdownTimeout != DefaultDocument().QEMU.ShutdownTimeout) {
-		return nil, fmt.Errorf("firecracker does not support manifest.qemu settings")
-	}
+
 	d = DocumentWithDefaults(d)
-	if d.Machine.Type != "microvm" || d.Machine.CPU != "" || d.Machine.ID != "" {
-		return nil, fmt.Errorf("firecracker does not support QEMU machine type, cpu or id settings")
-	}
-	if d.Graphics != nil && d.Graphics.Backend != "headless" {
-		return nil, fmt.Errorf("firecracker does not support graphics")
+	if err := validateHostName(d.HostName); err != nil {
+		return nil, err
 	}
 	if d.Kernel.Path == "" {
 		return nil, fmt.Errorf("manifest.kernel.path is required")
 	}
-	if d.Machine.VCPU < 0 || d.Machine.VCPU > 32 {
-		return nil, fmt.Errorf("manifest.machine.vcpu must be between 1 and 32 (zero selects 1)")
+	serialMode, err := kernelSerialMode(d.Kernel)
+	if err != nil {
+		return nil, err
 	}
-	if d.Machine.Memory <= 0 || d.Machine.Memory > 1048576 {
-		return nil, fmt.Errorf("manifest.machine.memory must be between 1 and 1048576 MiB")
+	if serialMode == KernelSerialConsole {
+		return nil, unsupported("manifest.kernel.serial = %q; use %q or %q", KernelSerialConsole, KernelSerialOff, KernelSerialPrint)
 	}
-	if d.Machine.KVM != nil && !*d.Machine.KVM {
-		return nil, fmt.Errorf("firecracker requires KVM")
+	if d.Machine.VCPU < 0 || d.Machine.VCPU > MaxFirecrackerCPUs {
+		return nil, fmt.Errorf("manifest.machine.vcpu must be between 1 and %d for firecracker, got %d", MaxFirecrackerCPUs, d.Machine.VCPU)
 	}
-	if len(d.Networks) != 0 {
-		return nil, fmt.Errorf("firecracker: manifest.networks is unsupported")
-	}
-	if len(d.Mounts) != len(d.Mounts.Image()) {
-		return nil, fmt.Errorf("firecracker supports only image mounts")
-	}
-	if len(d.WriteFiles) != 0 || d.Workspace != (WorkspaceInput{}) {
-		return nil, fmt.Errorf("firecracker: guest file, workspace and SSH configuration requires an unsupported guest control transport")
-	}
-	if len(d.Run) != 0 || len(d.Notifications.Exec) != 0 || d.Balloon != nil || len(d.Hotplug.Mounts) != 0 || len(d.Hotplug.Networks) != 0 {
-		return nil, fmt.Errorf("firecracker: run, notifications, balloon and hotplug configuration is unsupported")
-	}
-	if d.Kernel.Serial != KernelSerialOff && d.Kernel.Serial != KernelSerialPrint {
-		return nil, fmt.Errorf("firecracker kernel.serial must be off or print")
-	}
-	fc := &Firecracker{Binary: d.Firecracker.Binary, CPUs: d.Machine.VCPU, MemoryMiB: d.Machine.Memory, Kernel: d.Kernel, Disks: d.Mounts.Image(), StartupTimeout: d.Firecracker.StartupTimeout.Duration(), ShutdownTimeout: d.Firecracker.ShutdownTimeout.Duration()}
-	if fc.Binary == "" {
-		fc.Binary = "firecracker"
-	}
-	if fc.CPUs == 0 {
-		fc.CPUs = 1
-	}
-	if fc.StartupTimeout < 0 || fc.ShutdownTimeout < 0 {
-		return nil, fmt.Errorf("firecracker timeouts must not be negative")
-	}
-	if fc.StartupTimeout == 0 {
-		fc.StartupTimeout = 10 * time.Second
-	}
-	if fc.ShutdownTimeout == 0 {
-		fc.ShutdownTimeout = 10 * time.Second
+	if d.Machine.Memory <= 0 || d.Machine.Memory > maxFirecrackerMemoryMiB {
+		return nil, fmt.Errorf("manifest.machine.memory must be between 1 and %d MiB for firecracker, got %d", maxFirecrackerMemoryMiB, d.Machine.Memory)
 	}
 	if err := d.ResolveWorkingDir(); err != nil {
 		return nil, err
 	}
-	resolve := func(path string) string {
-		if path == "" || filepath.IsAbs(path) {
-			return path
-		}
-		return filepath.Join(d.WorkingDir, path)
+	m := &Manifest{
+		Backend:     BackendFirecracker,
+		Identity:    Identity{HostName: d.HostName},
+		Paths:       Paths{WorkingDir: d.WorkingDir},
+		Persistence: Persistence{BaseDir: d.StateDir, StateDir: d.StateDir},
 	}
-	fc.Kernel.Path, fc.Kernel.InitrdPath = resolve(fc.Kernel.Path), resolve(fc.Kernel.InitrdPath)
-	for _, path := range []string{fc.Binary, fc.Kernel.Path, fc.Kernel.InitrdPath, d.WorkingDir, d.StateDir} {
-		if strings.ContainsRune(path, '\x00') {
-			return nil, fmt.Errorf("firecracker path contains NUL")
-		}
+	m.Paths.LockPath = filepath.Join(m.Persistence.StateDir, m.Identity.HostName+".lock")
+	m.Paths.RuntimeDir = RuntimeDir{Mode: RuntimeDirPath, Path: m.Persistence.StateDir}
+
+	fc := &Firecracker{
+		Binary:          d.Firecracker.Binary,
+		StartupTimeout:  d.Firecracker.StartupTimeout.Duration(),
+		ShutdownTimeout: d.Firecracker.ShutdownTimeout.Duration(),
+		CPUs:            d.Machine.VCPU,
+		MemoryMiB:       d.Machine.Memory,
+		Kernel: FirecrackerKernel{
+			Path:       m.resolvePath(d.Kernel.Path),
+			InitrdPath: m.resolvePath(d.Kernel.InitrdPath),
+			Cmdline:    firecrackerKernelParams(serialMode, d.Kernel.Params),
+		},
+		Console: serialMode,
 	}
-	if strings.ContainsRune(strings.Join(fc.Kernel.Params, " "), '\x00') {
-		return nil, fmt.Errorf("firecracker kernel.params contains NUL")
+	switch {
+	case fc.Binary == "":
+		fc.Binary = defaultFirecrackerBinary
+	case strings.ContainsRune(fc.Binary, '/'):
+		// A bare name is looked up on PATH; a path resolves like image paths.
+		fc.Binary = m.resolvePath(fc.Binary)
 	}
-	for i := range fc.Disks {
-		disk := &fc.Disks[i]
-		if disk.SourcePath == "" {
-			return nil, fmt.Errorf("firecracker mounts[%d].source is required", i)
-		}
-		if disk.Image.Format != "" && disk.Image.Format != "raw" {
-			return nil, fmt.Errorf("firecracker mounts[%d] requires raw disk format", i)
-		}
-		if disk.Image.AutoCreate {
-			return nil, fmt.Errorf("firecracker mounts[%d]: image.create is unsupported; provide an existing raw disk", i)
-		}
-		if disk.Image.Size != 0 || disk.Image.FSType != "" || disk.Image.Label != nil || disk.Image.Serial != nil || disk.Image.Direct {
-			return nil, fmt.Errorf("firecracker mounts[%d]: QEMU image creation, cache and serial settings are unsupported", i)
-		}
-		if strings.ContainsRune(disk.SourcePath, '\x00') {
-			return nil, fmt.Errorf("firecracker disk path contains NUL")
-		}
-		disk.SourcePath = resolve(disk.SourcePath)
-		disk.Image.Format = "raw"
+	if fc.CPUs == 0 {
+		fc.CPUs = defaultFirecrackerCPUs
 	}
-	return &Manifest{Backend: "firecracker", Firecracker: fc, Identity: Identity{HostName: d.HostName}, Paths: Paths{WorkingDir: d.WorkingDir, RuntimeDir: RuntimeDir{Mode: RuntimeDirPath, Path: d.StateDir}}, Persistence: Persistence{StateDir: d.StateDir, BaseDir: d.StateDir}}, nil
+	if fc.StartupTimeout < 0 || fc.ShutdownTimeout < 0 {
+		return nil, fmt.Errorf("manifest.firecracker timeouts must not be negative")
+	}
+	if fc.StartupTimeout == 0 {
+		fc.StartupTimeout = defaultFirecrackerTimeout
+	}
+	if fc.ShutdownTimeout == 0 {
+		fc.ShutdownTimeout = defaultFirecrackerTimeout
+	}
+	for i, mount := range d.Mounts.Image() {
+		switch {
+		case mount.SourcePath == "":
+			return nil, fmt.Errorf("manifest.mounts[%d].source is required", i)
+		case mount.Image.Format != "" && mount.Image.Format != "raw":
+			return nil, unsupported("manifest.mounts[%d].image.format %q; only raw images are supported", i, mount.Image.Format)
+		case mount.Image.AutoCreate || mount.Image.Size != 0 || mount.Image.FSType != "" || mount.Image.Label != nil:
+			return nil, unsupported("manifest.mounts[%d] image creation; provide an existing raw image", i)
+		case mount.Image.Serial != nil || mount.Image.Direct:
+			return nil, unsupported("manifest.mounts[%d] image.serial and image.direct", i)
+		}
+		fc.Disks = append(fc.Disks, FirecrackerDisk{Path: m.resolvePath(mount.SourcePath), ReadOnly: mount.ReadOnly})
+	}
+	m.Firecracker = fc
+	return m, nil
+}
+
+// firecrackerKernelParams assembles the guest command line the same way
+// kernelParams does for QEMU: console parameters for the serial mode, then
+// virtle's fixed reboot/panic policy, then the manifest's own parameters.
+// Firecracker exits on the i8042 reset that reboot=k requests, which is also
+// how Shutdown's Ctrl-Alt-Del completes; panic=-1 turns a guest panic into
+// that reset. Both VMMs expose the serial console as ttyS0.
+func firecrackerKernelParams(serialMode string, extra []string) string {
+	params := make([]string, 0, len(extra)+3)
+	if serialMode != KernelSerialOff {
+		params = append(params, "console=ttyS0")
+	}
+	params = append(params, "reboot=k", "panic=-1")
+	params = append(params, extra...)
+	return strings.Join(params, " ")
 }

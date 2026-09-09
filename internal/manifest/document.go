@@ -18,13 +18,13 @@ const (
 	defaultNetworkMAC = "02:02:00:00:00:01"
 )
 
-type Document struct {
-	// Preserve input presence so backend validation can distinguish explicit
-	// unsupported settings (even zero/default values) from decoder defaults.
-	decoded       bool
-	explicitSSH   bool
-	explicitVSock bool
+// Backend names accepted by the manifest's top-level backend key.
+const (
+	BackendQEMU        = "qemu"
+	BackendFirecracker = "firecracker"
+)
 
+type Document struct {
 	Backend       string             `json:"backend,omitempty" toml:"backend" default:"qemu" jsonschema:"Virtual machine backend: qemu (default) or firecracker."`
 	Firecracker   FirecrackerInput   `json:"firecracker,omitempty" toml:"firecracker" jsonschema:"Firecracker executable and lifecycle timeouts."`
 	HostName      string             `json:"host_name,omitempty" toml:"host_name" default:"virtle" jsonschema:"Guest-visible VM name used for QEMU naming and derived runtime files."`

@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -21,6 +22,7 @@ import (
 	"time"
 
 	"github.com/shazow/virtle/backend"
+	"github.com/shazow/virtle/backend/backendtest"
 	"github.com/shazow/virtle/internal/control"
 	"github.com/shazow/virtle/vm"
 )
@@ -32,10 +34,6 @@ const shortTimeout = 100 * time.Millisecond
 // protocol. Filesystem use here exercises the actual socket/process boundary.
 func TestMain(m *testing.M) {
 	if mode := os.Getenv("VIRTLE_TEST_FIRECRACKER"); mode != "" {
-		if mode == "wrapper" || mode == "descendant" {
-			runWrapperHelper(mode)
-			os.Exit(17)
-		}
 		if mode == "diagnostic" {
 			fmt.Fprintln(os.Stderr, "KVM unavailable test")
 			os.Exit(1)
@@ -80,7 +78,23 @@ func TestMain(m *testing.M) {
 		<-stopped
 		os.Exit(0)
 	}
+	// Under -race every helper child would otherwise pause a second at exit
+	// to flush race reports; the children are fakes with nothing to report.
+	if os.Getenv("GORACE") == "" {
+		os.Setenv("GORACE", "atexit_sleep_ms=0")
+	}
+	// The fake VMM honors SendCtrlAltDel on every architecture.
+	ctrlAltDelSupported = true
 	os.Exit(m.Run())
+}
+
+// TestBackendContract runs the shared backend conformance suite against the
+// fake VMM.
+func TestBackendContract(t *testing.T) {
+	backendtest.TestBackend(t, func(t *testing.T) (backend.Backend, *vm.Spec) {
+		b, spec := helperBackend(t, "normal")
+		return b, spec
+	})
 }
 
 func helperBackend(t *testing.T, mode string) (*Backend, *vm.Spec) {
@@ -231,18 +245,38 @@ func TestStartupCancellation(t *testing.T) {
 	}
 }
 
-func TestPrivateStateDirectory(t *testing.T) {
+func TestStateDirectory(t *testing.T) {
 	b, spec := helperBackend(t, "normal")
-	target := t.TempDir()
-	if err := os.Symlink(target, filepath.Join(spec.Dir, ".virtle")); err != nil {
+	state := filepath.Join(spec.Dir, ".virtle")
+
+	// A missing state directory is created privately and holds the lock.
+	m, err := b.Start(t.Context(), spec)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := b.Start(t.Context(), spec); err == nil || !strings.Contains(err.Error(), "directory") {
-		t.Fatalf("got %v", err)
+	if info, err := os.Stat(state); err != nil || info.Mode().Perm() != 0o700 {
+		t.Fatalf("state directory: %v %v", info, err)
 	}
-	entries, err := os.ReadDir(target)
-	if err != nil || len(entries) != 0 {
-		t.Fatalf("symlink target changed: %v %v", entries, err)
+	if pid, err := os.ReadFile(filepath.Join(state, "virtle.lock")); err != nil || strings.TrimSpace(string(pid)) != strconv.Itoa(os.Getpid()) {
+		t.Fatalf("lock file: %q %v", pid, err)
+	}
+	if err := m.Kill(); err != nil {
+		t.Fatal(err)
+	}
+
+	// An existing directory is used as it is, whatever its mode.
+	if err := os.Chmod(state, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m, err = b.Start(t.Context(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(state); err != nil || info.Mode().Perm() != 0o755 {
+		t.Fatalf("existing state directory changed: %v %v", info, err)
 	}
 }
 
@@ -280,23 +314,31 @@ func TestControlSocket(t *testing.T) {
 	}
 }
 
-func TestControlPathPreserved(t *testing.T) {
+// TestStaleControlSocketReplaced covers restarting after a crash: the lock
+// proves nobody owns the state directory, so a leftover socket path is
+// replaced rather than reported as a conflict.
+func TestStaleControlSocketReplaced(t *testing.T) {
 	b, spec := helperBackend(t, "normal")
 	state := filepath.Join(spec.Dir, ".virtle")
 	if err := os.Mkdir(state, 0700); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(state, "virtle.sock")
-	if err := os.WriteFile(path, []byte("keep"), 0600); err != nil {
+	stale, err := net.Listen("unix", filepath.Join(state, "virtle.sock"))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if m, err := b.Start(t.Context(), spec); err == nil {
-		_ = m.Kill()
-		t.Fatal("occupied control path accepted")
+	stale.(*net.UnixListener).SetUnlinkOnClose(false)
+	if err := stale.Close(); err != nil {
+		t.Fatal(err)
 	}
-	data, err := os.ReadFile(path)
-	if err != nil || string(data) != "keep" {
-		t.Fatalf("existing path changed: %q %v", data, err)
+	m, err := b.Start(t.Context(), spec)
+	if err != nil {
+		t.Fatalf("stale control socket blocked start: %v", err)
+	}
+	t.Cleanup(func() { _ = m.Kill() })
+	status, _ := m.(backend.StatusReporter).Status(t.Context())
+	if _, err := control.Dial(t.Context(), status.Paths.ControlSocket); err != nil {
+		t.Fatalf("control socket not serving after replacing stale path: %v", err)
 	}
 }
 
@@ -353,6 +395,28 @@ func TestShutdownTimeout(t *testing.T) {
 	case <-m.Done():
 	default:
 		t.Fatal("Shutdown returned without completing teardown")
+	}
+}
+
+// TestShutdownWithoutCtrlAltDel covers hosts where Firecracker has no guest
+// shutdown request: Shutdown still stops the VMM but names the missing
+// capability.
+func TestShutdownWithoutCtrlAltDel(t *testing.T) {
+	ctrlAltDelSupported = false
+	t.Cleanup(func() { ctrlAltDelSupported = true })
+	b, spec := helperBackend(t, "normal")
+	m, err := b.Start(t.Context(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill() })
+	if err := m.Shutdown(t.Context()); !errors.Is(err, errors.ErrUnsupported) {
+		t.Fatalf("Shutdown error = %v, want ErrUnsupported", err)
+	}
+	select {
+	case <-m.Done():
+	default:
+		t.Fatal("Shutdown returned without stopping the VMM")
 	}
 }
 

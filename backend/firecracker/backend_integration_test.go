@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shazow/virtle/backend"
+	"github.com/shazow/virtle/backend/backendtest"
 	"github.com/shazow/virtle/backend/firecracker"
 	"github.com/shazow/virtle/units"
 	"github.com/shazow/virtle/vm"
@@ -35,16 +37,32 @@ func (w *guestOutput) Write(p []byte) (int, error) {
 }
 func (w *guestOutput) String() string { w.mu.Lock(); defer w.mu.Unlock(); return w.data.String() }
 
-func TestIntegrationFirecracker(t *testing.T) {
+// recipeGuest returns a backend and spec for the Firecracker recipe guest
+// (docs/recipes/firecracker), or skips when its artifacts are not provided.
+func recipeGuest(t *testing.T, output *guestOutput) (*firecracker.Backend, *vm.Spec) {
+	t.Helper()
 	kernel, initrd, rootfs := os.Getenv("VIRTLE_FIRECRACKER_KERNEL"), os.Getenv("VIRTLE_FIRECRACKER_INITRD"), os.Getenv("VIRTLE_FIRECRACKER_ROOTFS")
 	if kernel == "" || initrd == "" || rootfs == "" {
 		t.Skip("requires the recipe's VIRTLE_FIRECRACKER_KERNEL, VIRTLE_FIRECRACKER_INITRD and VIRTLE_FIRECRACKER_ROOTFS; Linux x86_64 with KVM")
 	}
+	b := &firecracker.Backend{Binary: os.Getenv("VIRTLE_FIRECRACKER_BINARY"), Console: firecracker.ConsolePrint, ConsoleOutput: output}
+	spec := &vm.Spec{
+		Dir:    t.TempDir(),
+		CPUs:   1,
+		Memory: 256 * units.Mebibyte,
+		// virtle supplies console=ttyS0 (for ConsolePrint) and reboot=k panic=-1.
+		Kernel: vm.Kernel{Path: kernel, Initrd: initrd, Cmdline: "pci=off rdinit=/init i8042.noaux i8042.nomux i8042.dumbkbd"},
+		Disks:  []vm.Disk{{Path: rootfs, Format: "raw", ReadOnly: true}},
+	}
+	return b, spec
+}
+
+func TestIntegrationFirecracker(t *testing.T) {
+	output := &guestOutput{ready: make(chan struct{})}
+	b, spec := recipeGuest(t, output)
 	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 	defer cancel()
-	output := &guestOutput{ready: make(chan struct{})}
-	b := &firecracker.Backend{Binary: os.Getenv("VIRTLE_FIRECRACKER_BINARY"), Console: "print", ConsoleOutput: output}
-	m, err := b.Start(ctx, &vm.Spec{Dir: t.TempDir(), CPUs: 1, Memory: 256 * units.Mebibyte, Kernel: vm.Kernel{Path: kernel, Initrd: initrd, Cmdline: "console=ttyS0 reboot=k panic=-1 pci=off rdinit=/init i8042.noaux i8042.nomux i8042.dumbkbd"}, Disks: []vm.Disk{{Path: rootfs, Format: "raw", ReadOnly: true}}})
+	m, err := b.Start(ctx, spec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,4 +83,11 @@ func TestIntegrationFirecracker(t *testing.T) {
 	if !bytes.Contains([]byte(output.String()), []byte("VIRTLE_SHUTDOWN:unmounted")) {
 		t.Fatalf("no clean guest shutdown:\n%s", output.String())
 	}
+}
+
+func TestIntegrationBackendContract(t *testing.T) {
+	backendtest.TestBackend(t, func(t *testing.T) (backend.Backend, *vm.Spec) {
+		b, spec := recipeGuest(t, &guestOutput{ready: make(chan struct{})})
+		return b, spec
+	})
 }

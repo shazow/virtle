@@ -4,10 +4,9 @@
 //
 // Manifest sections with no vm.Spec representation — host [run] helper
 // commands, [notifications] hooks, [ssh] settings — stay attached to the
-// returned backend, which validates support for those features. QEMU starts
-// the helpers and runs the hooks itself. The
-// interactive SSH session is driven by backend/qemu/session, as the virtle
-// CLI does.
+// returned backend, which rejects the ones it cannot honor at load time.
+// QEMU starts the helpers and runs the hooks itself; the interactive SSH
+// session is driven by the virtle CLI's foreground loop.
 package manifest
 
 import (
@@ -64,8 +63,8 @@ func LoadDocument(doc imanifest.Document) (*vm.Spec, backend.Backend, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	if doc.Backend == "firecracker" {
-		return spec, firecracker.NewBackendFromDocument(doc), nil
+	if doc.Backend == imanifest.BackendFirecracker {
+		return spec, firecracker.NewBackendFromDocument(doc, firecracker.Backend{}), nil
 	}
 	return spec, qemu.NewBackendFromDocument(doc, qemu.Backend{}), nil
 }

@@ -24,7 +24,6 @@ func DecodeDocumentBytes(data []byte, name string) (Document, error) {
 	if err != nil {
 		return Document{}, err
 	}
-	doc.decoded = true
 	return doc, nil
 }
 
@@ -36,14 +35,6 @@ func decodeJSON(data []byte, doc *Document) error {
 	}
 	if err := decoder.Decode(&struct{}{}); err != nil {
 		if errors.Is(err, io.EOF) {
-			var fields map[string]json.RawMessage
-			if err := json.Unmarshal(data, &fields); err != nil {
-				return fmt.Errorf("decode manifest: %w", err)
-			}
-			for key := range fields {
-				doc.explicitSSH = doc.explicitSSH || strings.EqualFold(key, "ssh")
-				doc.explicitVSock = doc.explicitVSock || strings.EqualFold(key, "vsock")
-			}
 			return nil
 		}
 		return fmt.Errorf("decode manifest: %w", err)
@@ -56,8 +47,6 @@ func decodeTOML(data []byte, doc *Document) error {
 	if err != nil {
 		return fmt.Errorf("decode manifest: %w", err)
 	}
-	doc.explicitSSH = metadata.IsDefined("ssh")
-	doc.explicitVSock = metadata.IsDefined("vsock")
 	if undecoded := metadata.Undecoded(); len(undecoded) > 0 {
 		for _, key := range undecoded {
 			if taggedTOMLKey(key) {

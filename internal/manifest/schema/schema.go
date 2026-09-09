@@ -35,11 +35,12 @@ func Generate() (*jsonschema.Schema, error) {
 	schema.Description = "JSON Schema for the virtle manifest input format emitted by virtle."
 	// A missing backend selects QEMU. Only explicit Firecracker selection
 	// permits boot without an initrd; both backends require kernel.path.
+	schema.Properties["backend"].Enum = []any{manifest.BackendQEMU, manifest.BackendFirecracker}
 	schema.Properties["kernel"].Required = []string{"path"}
 	schema.If = &jsonschema.Schema{
 		Required: []string{"backend"},
 		Properties: map[string]*jsonschema.Schema{
-			"backend": {Enum: []any{"firecracker"}},
+			"backend": {Enum: []any{manifest.BackendFirecracker}},
 		},
 	}
 	schema.Else = &jsonschema.Schema{

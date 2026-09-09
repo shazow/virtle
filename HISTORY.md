@@ -40,6 +40,16 @@ compact before/after examples.
   // After: the Spec entry is the whole truth.
   spec.Disks[0] = vm.Disk{Path: "rootfs.img", ReadOnly: true}
   ```
+- **Breaking:** an empty `vm.Spec.Dir` now means the process working
+  directory on both backends, as for `exec.Cmd.Dir`: relative kernel, disk,
+  and share paths resolve there, and runtime state goes to a private
+  temporary directory that is removed when the machine exits. QEMU used to
+  work in a never-removed temporary directory, so relative Spec paths did
+  not resolve against the caller's directory. `Suspend` and `Resume` need a
+  `Dir`, since saved state lives in its `.virtle`.
+- A zero `vm.Spec.CPUs` selects the host CPU count on Firecracker too
+  (within its limit of 32), matching QEMU. Small guests should set `CPUs`
+  and `Memory` explicitly, as the test fixtures do.
 - `qemu.Backend.DisableVSock` is the Go counterpart of `vsock.enabled = false`.
 - The deprecated `backend.Shutdown` helper is gone; call `Machine.Shutdown`.
 

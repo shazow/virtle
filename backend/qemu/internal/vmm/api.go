@@ -30,6 +30,10 @@ type StartOptions struct {
 	// DeferSuspendHandling leaves control-socket suspend requests for a
 	// foreground session to coordinate with its active process.
 	DeferSuspendHandling bool
+
+	// EphemeralState removes the manifest's state directory once runtime
+	// state is released; the caller created it for this launch alone.
+	EphemeralState bool
 }
 
 // StartVM starts a VM from a resolved manifest and returns a handle without
@@ -48,6 +52,7 @@ func StartVM(ctx context.Context, mf *manifest.Manifest, options StartOptions, c
 	v, err := m.startVM(ctx, launch.Spec{Manifest: mf, Options: launch.Options{
 		Resume:           options.Resume,
 		HasRemoteControl: options.HasRemoteControl,
+		RemoveStateDir:   options.EphemeralState,
 	}})
 	if err != nil {
 		return nil, err

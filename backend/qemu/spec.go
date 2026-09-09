@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"maps"
-	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -37,16 +36,13 @@ func specDocument(spec *vm.Spec, cfg *Backend, base *imanifest.Document) (imanif
 		doc.HostName = cfg.HostName
 	}
 
-	// Spec.Dir wins; a Go-configured backend without one gets a fresh
-	// temporary directory, a manifest.Load backend keeps the manifest's.
+	// Spec.Dir wins; without one a Go-configured backend works in the process
+	// working directory (relative paths resolve there, as for exec.Cmd.Dir)
+	// and a manifest.Load backend keeps the manifest's.
 	dir := spec.Dir
 	if dir == "" {
 		if base == nil {
-			tmp, err := os.MkdirTemp("", "virtle-")
-			if err != nil {
-				return imanifest.Document{}, fmt.Errorf("create working directory: %w", err)
-			}
-			dir = tmp
+			dir = "."
 		} else {
 			dir = doc.WorkingDir
 		}

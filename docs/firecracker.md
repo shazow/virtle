@@ -25,9 +25,11 @@ must match the host architecture: an ELF `vmlinux` on x86_64, an uncompressed
 - The same state directory and VM-name lock as QEMU, so a QEMU and a
   Firecracker launch of one manifest exclude each other.
 
-Defaults are one vCPU and 1024 MiB (`firecracker.DefaultCPUs`,
-`firecracker.DefaultMemory`); `[firecracker] binary`, `startup_timeout`, and
-`shutdown_timeout` (or the matching `Backend` fields) tune the VMM.
+Defaults follow QEMU's: an omitted vCPU count means every host CPU (within
+Firecracker's limit of 32), and an omitted memory size means 1024 MiB
+(`firecracker.DefaultMemory`). Small guests should set both explicitly.
+`[firecracker] binary`, `startup_timeout`, and `shutdown_timeout` (or the
+matching `Backend` fields) tune the VMM.
 
 `Start` returns once Firecracker has accepted `InstanceStart`; it does not
 mean the guest workload is ready. Observe readiness inside the guest (for
@@ -79,5 +81,6 @@ The control socket lives at `<state_dir>/virtle.sock`, next to the
 `<host_name>.lock` shared with QEMU; a socket left behind by a crashed launch
 is replaced once the lock proves nothing else owns the state directory. The
 Firecracker API socket lives in a private `virtle-fc-*` directory under
-`TMPDIR` that is removed on exit. A Go backend started without `vm.Spec.Dir`
-uses a temporary state directory that is removed when the machine exits.
+`TMPDIR` that is removed on exit. As with QEMU, a Go backend started without
+`vm.Spec.Dir` works in the process working directory and keeps its state in a
+private temporary directory that is removed when the machine exits.

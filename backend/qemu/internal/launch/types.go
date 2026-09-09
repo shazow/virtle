@@ -26,6 +26,11 @@ type Options struct {
 	// explicitly: the CLI always expects an agent, backend constructors
 	// declare it per guest-control implementation.
 	HasRemoteControl bool
+
+	// RemoveStateDir removes the manifest's state directory once runtime
+	// state is released. Callers set it for a state directory they created
+	// for this launch alone (a Spec without Dir).
+	RemoveStateDir bool
 }
 
 type Spec struct {

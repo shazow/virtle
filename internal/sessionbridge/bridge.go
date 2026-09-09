@@ -1,6 +1,8 @@
-// Package sessionbridge carries CLI-only lifecycle hooks between the public
-// QEMU backend and its foreground session package without adding them to the
-// supported backend API.
+// Package sessionbridge carries CLI-only lifecycle hooks between a backend
+// and the foreground session loop (internal/session) without adding them to
+// the supported backend API. A backend that supports foreground suspend binds
+// them from Start or Resume when FromContext(ctx) is non-nil; other backends
+// never see the bridge.
 package sessionbridge
 
 import (
@@ -11,7 +13,7 @@ import (
 
 type contextKey struct{}
 
-// Hooks are installed by the QEMU backend after a machine has started.
+// Hooks are installed by a backend after a machine has started.
 type Hooks struct {
 	SuspendRequests      func() <-chan struct{}
 	HandleSuspendRequest func(context.Context) error
@@ -23,6 +25,14 @@ type Hooks struct {
 type Bridge struct {
 	mu    sync.RWMutex
 	hooks Hooks
+}
+
+// CanSuspend reports whether a backend has bound a suspend hook, so the
+// session can tell a suspendable machine from one that only ignores ^Z.
+func (b *Bridge) CanSuspend() bool {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.hooks.Suspend != nil
 }
 
 // Suspend handles a local foreground suspend signal.

@@ -1,5 +1,6 @@
-// Package session adapts QEMU suspend persistence and SSH provisioning to
-// the shared CLI session lifecycle. It is internal to the virtle module.
+// Package session adapts QEMU suspend persistence, SSH readiness, and SSH
+// provisioning to the shared CLI session loop in internal/session. It is
+// internal to the virtle module.
 package session
 
 import (
@@ -7,7 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
+	"net"
 	"os"
 	"time"
 
@@ -16,8 +17,8 @@ import (
 	"github.com/shazow/virtle/backend/qemu/internal/qga"
 	"github.com/shazow/virtle/internal/executor"
 	"github.com/shazow/virtle/internal/manifest"
+	"github.com/shazow/virtle/internal/readiness"
 	shared "github.com/shazow/virtle/internal/session"
-	"github.com/shazow/virtle/internal/sessionbridge"
 	"github.com/shazow/virtle/internal/sshtools"
 	"github.com/shazow/virtle/vm"
 )
@@ -25,24 +26,25 @@ import (
 const (
 	guestShellPath      = "/bin/sh"
 	sshRetryOutputDelay = 250 * time.Millisecond
+
+	// The guest's SSH readiness token, written to the readiness socket by
+	// the virtle guest setup once sshd accepts connections.
+	sshReadyToken          = "SSH-READY"
+	sshReadyTimeoutEnv     = "VIRTLE_SSH_READY_TIMEOUT"
+	defaultSSHReadyTimeout = 2 * time.Minute
 )
 
-type Options = shared.Options
-
-func ExitCode(err error) int { return shared.ExitCode(err) }
-
+// Hooks returns the QEMU adapters for the shared CLI session loop: saved
+// suspend state selects resume, the guest's SSH-READY token gates the
+// foreground session, and --ssh attaches over vsock with optional key
+// autoprovisioning through the guest agent.
 func Hooks() shared.Hooks {
-	return shared.Hooks{Start: start, RunSSH: runSSH, SSHCommandHint: launch.BuildSSHCommandHint}
+	return shared.Hooks{Start: start, Ready: ready, RunSSH: runSSH, SSHCommandHint: launch.BuildSSHCommandHint}
 }
-func Run(ctx context.Context, b backend.Backend, spec *vm.Spec, mf *manifest.Manifest, opts Options) error {
-	return shared.RunWithHooks(ctx, b, spec, mf, opts, Hooks())
-}
-func start(ctx context.Context, b backend.Backend, spec *vm.Spec, mf *manifest.Manifest, mode string) (backend.Machine, bool, error) {
-	if mode == "" {
-		mode = "auto"
-	}
-	resume := mode == "force"
-	if mode == "auto" {
+
+func start(ctx context.Context, b backend.Backend, spec *vm.Spec, mf *manifest.Manifest, mode shared.ResumeMode) (backend.Machine, bool, error) {
+	resume := mode == shared.ResumeForce
+	if mode == shared.ResumeAuto {
 		saved, err := launch.HasSavedSuspendState(mf)
 		if err != nil {
 			return nil, false, err
@@ -61,10 +63,43 @@ func start(ctx context.Context, b backend.Backend, spec *vm.Spec, mf *manifest.M
 	return m, true, err
 }
 
-// shutdownAfter tears m down after err, uncancelably, and reports both.
-
-func runSSH(ctx context.Context, m backend.Machine, bridge *sessionbridge.Bridge, mf *manifest.Manifest, opts Options, signals <-chan os.Signal, logger *slog.Logger, sshLogger *slog.Logger) error {
+// ready waits for the guest to write the SSH-READY token on the machine's
+// readiness socket, when it reports one. VIRTLE_SSH_READY_TIMEOUT overrides
+// the two-minute bound.
+func ready(ctx context.Context, m backend.Machine) error {
 	reporter, ok := m.(backend.StatusReporter)
+	if !ok {
+		return nil
+	}
+	status, err := reporter.Status(ctx)
+	if err != nil {
+		return err
+	}
+	if status.Paths.ReadySocket == "" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, readiness.TimeoutFromEnv(sshReadyTimeoutEnv, defaultSSHReadyTimeout))
+	defer cancel()
+	var d net.Dialer
+	conn, err := d.DialContext(ctx, "unix", status.Paths.ReadySocket)
+	if err != nil {
+		return fmt.Errorf("connect readiness socket: %w", err)
+	}
+	defer conn.Close()
+	// ReadToken has no context of its own; closing the connection ends it.
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
+	if err := readiness.ReadToken(conn, sshReadyToken); err != nil {
+		if cause := context.Cause(ctx); cause != nil {
+			return fmt.Errorf("wait for SSH readiness: %w", cause)
+		}
+		return err
+	}
+	return nil
+}
+
+func runSSH(ctx context.Context, s *shared.Session) error {
+	reporter, ok := s.Machine.(backend.StatusReporter)
 	if !ok {
 		return fmt.Errorf("machine cannot report its SSH destination: %w", errors.ErrUnsupported)
 	}
@@ -72,29 +107,30 @@ func runSSH(ctx context.Context, m backend.Machine, bridge *sessionbridge.Bridge
 	if err != nil {
 		return err
 	}
-	runner := &executor.Runner{Logger: logger}
-	plan := &launch.Plan{Manifest: mf, CID: status.CID, RemoteCommand: append([]string(nil), opts.RemoteCommand...)}
+	logger := s.Logger.With("package", "ssh")
+	opts := s.Options
+	plan := &launch.Plan{Manifest: s.Manifest, CID: status.CID, RemoteCommand: append([]string(nil), opts.RemoteCommand...)}
 	return launch.RunSSHSession(ctx, launch.SSHSession{
 		Plan:                   plan,
-		Runner:                 runner,
-		Logger:                 sshLogger,
+		Runner:                 &executor.Runner{Logger: logger},
+		Logger:                 logger,
 		Stdin:                  optionReader(opts.Stdin, os.Stdin),
 		Stdout:                 optionWriter(opts.Stdout, os.Stdout),
 		Stderr:                 optionWriter(opts.Stderr, os.Stderr),
 		RetryOutputRevealDelay: sshRetryOutputDelay,
 		Wait: func(ctx context.Context, process *executor.Process, _ executor.Group) error {
-			return shared.WaitForSSHProcess(ctx, m, bridge, process, signals, logger)
+			return s.WaitProcess(ctx, process)
 		},
 		WaitForRetry: func(ctx context.Context, _ executor.Group) error {
-			return shared.WaitForSSHRetry(ctx, m, bridge, mf.SSH.RetryDelay, signals, logger)
+			return s.WaitRetry(ctx, s.Manifest.SSH.RetryDelay)
 		},
 		EnsureKey: func() (launch.SSHAutoprovisionKey, error) {
-			return ensureSSHKey(mf)
+			return ensureSSHKey(s.Manifest)
 		},
 		InstallKey: func(ctx context.Context, key launch.SSHAutoprovisionKey, _ executor.Group) error {
-			return installSSHKey(ctx, m, mf, key)
+			return installSSHKey(ctx, s.Machine, s.Manifest, key)
 		},
-		Established: bridge.Commit,
+		Established: s.Established,
 	})
 }
 

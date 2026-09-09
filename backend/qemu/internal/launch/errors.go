@@ -102,5 +102,3 @@ func firstUnexpectedExit(stage string, watchers executor.Group) error {
 	}
 	return wrapCommandError(stage, process.Name(), err)
 }
-
-func (e *CommandError) SessionExitCode() int { return e.ExitCode }

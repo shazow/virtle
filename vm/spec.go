@@ -24,9 +24,10 @@ type Spec struct {
 	Files  []File      // small files placed in the guest before workload start
 
 	// Dir is the host working directory: relative Kernel, Disk, and Share
-	// paths resolve against it, and the machine's runtime state (lock,
-	// sockets, suspend state, created volume images) lives in its .virtle
-	// subdirectory, as for a manifest's working_dir. Empty means the process
+	// paths resolve against it (a disk image created from Disk.Size is
+	// written at its Path), and the machine's runtime state (lock, sockets,
+	// suspend state) lives in its .virtle subdirectory, as for a manifest's
+	// working_dir. Empty means the process
 	// working directory, as for exec.Cmd.Dir, with runtime state in a private
 	// temporary directory that is removed when the machine exits; set Dir to
 	// keep state across runs, which Suspend and Resume require.
@@ -52,7 +53,7 @@ type Share struct {
 type Disk struct {
 	ReadOnly  bool        // attach without allowing guest writes
 	Path      string      // host image path
-	GuestPath string      // guest mount point; "/" makes this the root device (virtle passes root=), other paths need a guest agent
+	GuestPath string      // guest mount point; "/" makes this the root device (virtle passes root=); other paths need a guest agent and fail Start with errors.ErrUnsupported until one exists
 	Format    string      // image format (e.g. "qcow2", "raw"); backend default when empty
 	Size      units.Bytes // created at this size if the image is absent
 }

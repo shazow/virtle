@@ -431,6 +431,19 @@ func TestRunIgnoresSIGTSTPWhenMachineCannotSuspend(t *testing.T) {
 	}
 }
 
+// TestRunTreatsSuspendDuringStartupAsCleanExit: a suspend request serviced
+// while the backend was still starting saved the state and stopped the
+// machine, so the launch exits cleanly, as it does after handoff.
+func TestRunTreatsSuspendDuringStartupAsCleanExit(t *testing.T) {
+	start := func(context.Context, backend.Backend, *vm.Spec, *manifest.Manifest, ResumeMode) (backend.Machine, bool, error) {
+		return nil, false, sessionbridge.ErrSavedSuspendExit
+	}
+	err := Run(context.Background(), backendtest.NewMemoryBackend(nil), &vm.Spec{}, &manifest.Manifest{}, Options{Resume: ResumeNo, Hooks: Hooks{Start: start}})
+	if err != nil {
+		t.Fatalf("Run = %v, want nil after a suspend during startup", err)
+	}
+}
+
 func TestRunPrintsSSHHintToStdout(t *testing.T) {
 	b := newNotifyingBackend(nil)
 	ctx, cancel := context.WithCancel(context.Background())

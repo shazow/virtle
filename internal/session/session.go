@@ -161,6 +161,11 @@ func Run(ctx context.Context, b backend.Backend, spec *vm.Spec, mf *manifest.Man
 	m, resumed, err := opts.Hooks.Start(machineCtx, b, spec, mf, opts.Resume)
 	stopStartupCancel()
 	if err != nil {
+		if sessionbridge.IsSavedSuspendExit(err) {
+			// A suspend request serviced during startup saved the state and
+			// stopped the machine: a clean exit, as it is after handoff.
+			return nil
+		}
 		return err
 	}
 	s := &Session{Machine: m, Manifest: mf, Options: opts, Logger: opts.Logger, bridge: bridge, signals: signals, logger: logger}

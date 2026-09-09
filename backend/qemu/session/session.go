@@ -39,7 +39,17 @@ const (
 // foreground session, and --ssh attaches over vsock with optional key
 // autoprovisioning through the guest agent.
 func Hooks() shared.Hooks {
-	return shared.Hooks{Start: start, Ready: ready, RunSSH: runSSH, SSHCommandHint: launch.BuildSSHCommandHint}
+	return shared.Hooks{Start: start, Ready: ready, RunSSH: runSSH, SSHCommandHint: sshCommandHint}
+}
+
+// sshCommandHint renders the manifest's SSH command for the machine's vsock
+// CID. A machine without a vsock device (vsock.enabled = false reports CID
+// 0) has no SSH destination, so it gets no hint rather than an unusable one.
+func sshCommandHint(mf *manifest.Manifest, cid int) (string, error) {
+	if cid == 0 {
+		return "", nil
+	}
+	return launch.BuildSSHCommandHint(mf, cid)
 }
 
 func start(ctx context.Context, b backend.Backend, spec *vm.Spec, mf *manifest.Manifest, mode shared.ResumeMode) (backend.Machine, bool, error) {
@@ -106,6 +116,9 @@ func runSSH(ctx context.Context, s *shared.Session) error {
 	status, err := reporter.Status(ctx)
 	if err != nil {
 		return err
+	}
+	if status.CID == 0 {
+		return fmt.Errorf("--ssh needs the QEMU vsock device, which this manifest disables (vsock.enabled = false): %w", errors.ErrUnsupported)
 	}
 	logger := s.Logger.With("package", "ssh")
 	opts := s.Options

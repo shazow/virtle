@@ -249,10 +249,19 @@ func (s *Server) effectiveRequestReadTimeout() time.Duration {
 	return limits.DefaultRequestReadTimeout
 }
 
+// rejectConn answers a connection accepted over MaxHandlers with a
+// resource-limit error. The request is read (and discarded) first, bounded
+// like a served request: closing a Unix socket before the peer has written
+// fails the peer's write with EPIPE, and it would never see the response
+// that explains the rejection.
 func (s *Server) rejectConn(conn net.Conn, err error) {
 	defer conn.Close()
-	_ = conn.SetWriteDeadline(time.Now().Add(s.effectiveRequestReadTimeout()))
-	writeResponse(conn, responseEnvelope{Error: &RPCError{Code: ErrResourceLimit, Message: err.Error()}})
+	timeout := s.effectiveRequestReadTimeout()
+	_ = conn.SetReadDeadline(time.Now().Add(timeout))
+	var req requestEnvelope
+	_ = decodeRequest(conn, s.effectiveMaxRequestSize(), &req)
+	_ = conn.SetWriteDeadline(time.Now().Add(timeout))
+	writeResponse(conn, responseEnvelope{ID: req.ID, Error: &RPCError{Code: ErrResourceLimit, Message: err.Error()}})
 }
 
 func decodeRequest(reader io.Reader, maxSize int64, req *requestEnvelope) error {

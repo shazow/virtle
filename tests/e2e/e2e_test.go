@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -119,43 +120,17 @@ func (f fixture) guests() []guest {
 	}
 }
 
-// consoleLog collects guest console output and reports the first complete
-// line equal to a marker. It is what a consumer has to write today to learn
-// that a guest is ready: the backends expose the console only as an
-// io.Writer configured before Start.
+// consoleLog keeps everything the guest printed, for the failure report; it
+// is the Backend's ConsoleOutput writer.
 type consoleLog struct {
-	marker string
-
-	mu    sync.Mutex
-	buf   bytes.Buffer
-	seen  bool
-	ready chan struct{}
-}
-
-func newConsoleLog(marker string) *consoleLog {
-	return &consoleLog{marker: marker, ready: make(chan struct{})}
+	mu  sync.Mutex
+	buf bytes.Buffer
 }
 
 func (c *consoleLog) Write(p []byte) (int, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.buf.Write(p)
-	if !c.seen && c.hasLine(c.marker) {
-		c.seen = true
-		close(c.ready)
-	}
-	return len(p), nil
-}
-
-// hasLine reports whether a complete console line equals line; callers hold mu.
-func (c *consoleLog) hasLine(line string) bool {
-	text := strings.ReplaceAll(c.buf.String(), "\r\n", "\n")
-	for _, l := range strings.Split(text, "\n") {
-		if strings.TrimSpace(l) == line {
-			return true
-		}
-	}
-	return false
+	return c.buf.Write(p)
 }
 
 func (c *consoleLog) String() string {
@@ -164,18 +139,29 @@ func (c *consoleLog) String() string {
 	return c.buf.String()
 }
 
-// waitReady blocks until the marker line arrived, m exited, or the deadline
-// passed.
-func (c *consoleLog) waitReady(ctx context.Context, m backend.Machine, timeout time.Duration) error {
+// waitForLine reads console lines from term until one equals want. It gives
+// up when m exits, the timeout passes, or ctx ends; the caller closes term,
+// which also ends the reader.
+func waitForLine(ctx context.Context, term io.Reader, want string, m backend.Machine, timeout time.Duration) error {
+	found := make(chan struct{})
+	go func() {
+		scanner := bufio.NewScanner(term)
+		for scanner.Scan() {
+			if strings.TrimSpace(scanner.Text()) == want {
+				close(found)
+				return
+			}
+		}
+	}()
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {
-	case <-c.ready:
+	case <-found:
 		return nil
 	case <-m.Done():
-		return fmt.Errorf("guest exited before printing %q: %v", c.marker, m.Err())
+		return fmt.Errorf("guest exited before printing %q: %v", want, m.Err())
 	case <-timer.C:
-		return fmt.Errorf("guest did not print %q within %s", c.marker, timeout)
+		return fmt.Errorf("guest did not print %q within %s", want, timeout)
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -183,24 +169,37 @@ func (c *consoleLog) waitReady(ctx context.Context, m backend.Machine, timeout t
 
 // readyBackend starts machines through g and hands them out only once the
 // guest printed the readiness line, so subtests that act immediately (a
-// Shutdown right after Start) meet a booted guest. Each Start gets its own
-// backend value because the console writer is per-backend, not per-machine.
+// Shutdown right after Start) meet a booted guest. Readiness is read from
+// Machine.Console, which replays what the guest printed before the attach,
+// so it cannot be missed. Each Start gets its own backend value because the
+// diagnostic ConsoleOutput writer is per-backend.
 type readyBackend struct {
 	guest   guest
 	console *consoleLog
 }
 
 func (b *readyBackend) Start(ctx context.Context, spec *vm.Spec) (backend.Machine, error) {
-	console := newConsoleLog(readyLine)
-	m, err := b.guest.newBackend(console).Start(ctx, spec)
+	log := &consoleLog{}
+	m, err := b.guest.newBackend(log).Start(ctx, spec)
 	if err != nil {
 		return nil, err
 	}
-	if err := console.waitReady(ctx, m, readyTimeout); err != nil {
+	provider, ok := m.(backend.ConsoleProvider)
+	if !ok {
 		_ = m.Kill()
-		return nil, fmt.Errorf("%w\n--- console ---\n%s", err, console.String())
+		return nil, fmt.Errorf("%s machine offers no console to read readiness from", b.guest.name)
 	}
-	b.console = console
+	term, err := provider.Console(ctx)
+	if err != nil {
+		_ = m.Kill()
+		return nil, err
+	}
+	defer term.Close()
+	if err := waitForLine(ctx, term, readyLine, m, readyTimeout); err != nil {
+		_ = m.Kill()
+		return nil, fmt.Errorf("%w\n--- console ---\n%s", err, log.String())
+	}
+	b.console = log
 	return m, nil
 }
 
@@ -297,6 +296,37 @@ func TestScratchDisk(t *testing.T) {
 			}
 			if got := strings.TrimSpace(string(out)); got != "42" {
 				t.Fatalf("result on the scratch disk = %q, want 42", got)
+			}
+		})
+	}
+}
+
+// TestConsole drives the guest's shell over backend.ConsoleProvider on both
+// backends: a Term attached after boot replays the boot log, carries input
+// to the console, and has no window or exit status of its own.
+func TestConsole(t *testing.T) {
+	f := loadFixture(t)
+	for _, g := range f.guests() {
+		t.Run(g.name, func(t *testing.T) {
+			m, log := startReady(t, g, g.spec(t))
+			term, err := m.(backend.ConsoleProvider).Console(context.Background())
+			if err != nil {
+				t.Fatalf("Console: %v", err)
+			}
+			defer term.Close()
+			if err := term.Resize(80, 24); !errors.Is(err, errors.ErrUnsupported) {
+				t.Fatalf("Resize = %v, want ErrUnsupported", err)
+			}
+			if _, err := term.Wait(context.Background()); !errors.Is(err, errors.ErrUnsupported) {
+				t.Fatalf("Wait = %v, want ErrUnsupported", err)
+			}
+			// BusyBox init offers the console shell once Enter arrives; the
+			// command line queued behind it is the shell's first input.
+			if _, err := io.WriteString(term, "\necho VIRTLE_SHELL:$((6*7))\n"); err != nil {
+				t.Fatalf("write to console: %v", err)
+			}
+			if err := waitForLine(context.Background(), term, "VIRTLE_SHELL:42", m, readyTimeout); err != nil {
+				t.Fatalf("%v\n--- console ---\n%s", err, log.String())
 			}
 		})
 	}

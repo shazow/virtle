@@ -238,6 +238,20 @@ func (v *VM) DialGuestAgent(ctx context.Context) (qga.Client, error) {
 	return v.m.waitForGuestAgent(ctx, v.running.plan.Paths.GuestAgentSocket, v.running.processes.Watchers())
 }
 
+// Console returns a vm.Term over the guest's serial port when the console
+// is printed (kernel.serial = "print"); see backend.ConsoleProvider. The
+// session replays recent output before live output; Resize and Wait report
+// errors.ErrUnsupported.
+func (v *VM) Console(ctx context.Context) (vm.Term, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if v.running.console == nil {
+		return nil, fmt.Errorf("no serial console to attach; set kernel.serial (qemu.Backend.Console) to print: %w", errors.ErrUnsupported)
+	}
+	return v.running.console.Attach(), nil
+}
+
 // ShutdownGuest asks the guest to power down through the guest agent (or
 // the manifest's shutdown_exec command). It does not wait for the VM to
 // exit; pair it with Wait.

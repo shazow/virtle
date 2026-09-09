@@ -142,9 +142,14 @@ type DeviceAttacher interface {
 	Detach(ctx context.Context, dev vm.Device) error
 }
 
-// ConsoleProvider is implemented by machines whose backend exposes a
-// serial/chardev console — the no-daemon debug path. The returned Term
-// may lack resize and exit semantics (see vm.Term).
+// ConsoleProvider is implemented by machines that expose the guest's serial
+// console as a vm.Term — the no-daemon path to a guest. QEMU and Firecracker
+// machines offer it when their console is set to print; without one Console
+// returns an error wrapping errors.ErrUnsupported. The Term replays the
+// recent console output before live output, so a session attached after
+// boot still sees the boot log and readiness lines, and its Resize and Wait
+// report errors.ErrUnsupported (see vm.Term). Closing it leaves the machine
+// running.
 type ConsoleProvider interface {
 	Console(ctx context.Context) (vm.Term, error)
 }

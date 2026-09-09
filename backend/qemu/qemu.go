@@ -279,6 +279,15 @@ func (m *Machine) Status(ctx context.Context) (backend.Status, error) {
 	return m.vm.Status(ctx)
 }
 
+// Console implements backend.ConsoleProvider: a vm.Term over the guest's
+// serial port, available when Backend.Console is ConsolePrint. The session
+// replays the recent console output first, so one attached after boot still
+// sees what the guest printed; its Resize and Wait report
+// errors.ErrUnsupported. Closing it leaves the machine running.
+func (m *Machine) Console(ctx context.Context) (vm.Term, error) {
+	return m.vm.Console(ctx)
+}
+
 // Suspend implements backend.Suspender: it saves the running machine's state
 // via QMP migration to its state directory and stops the VM. A machine
 // started without vm.Spec.Dir has no durable state directory, so Suspend
@@ -327,11 +336,12 @@ func (m *Machine) Detach(ctx context.Context, dev vm.Device) error {
 }
 
 var (
-	_ backend.Backend        = (*Backend)(nil)
-	_ backend.Resumer        = (*Backend)(nil)
-	_ backend.Machine        = (*Machine)(nil)
-	_ backend.Suspender      = (*Machine)(nil)
-	_ backend.MemoryResizer  = (*Machine)(nil)
-	_ backend.DeviceAttacher = (*Machine)(nil)
-	_ backend.StatusReporter = (*Machine)(nil)
+	_ backend.Backend         = (*Backend)(nil)
+	_ backend.Resumer         = (*Backend)(nil)
+	_ backend.Machine         = (*Machine)(nil)
+	_ backend.Suspender       = (*Machine)(nil)
+	_ backend.MemoryResizer   = (*Machine)(nil)
+	_ backend.DeviceAttacher  = (*Machine)(nil)
+	_ backend.StatusReporter  = (*Machine)(nil)
+	_ backend.ConsoleProvider = (*Machine)(nil)
 )

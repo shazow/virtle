@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/shazow/virtle/backend"
+	"github.com/shazow/virtle/internal/console"
 	"github.com/shazow/virtle/internal/control"
 	"github.com/shazow/virtle/internal/diskimage"
 	"github.com/shazow/virtle/internal/executor"
@@ -46,6 +47,7 @@ type Machine struct {
 	ephemeralState  string // temporary state directory removed on exit, or ""
 	shutdownTimeout time.Duration
 	diagnostics     *diagnosticWriter
+	console         *console.Hub // serial console fan-out; nil when the console is off
 
 	// stopped closes once the VMM has exited and its runtime files are
 	// released; done closes after the control server has also delivered the
@@ -144,14 +146,29 @@ func (b *Backend) start(ctx context.Context, mf *imanifest.Manifest, ephemeralSt
 	cmd.Stdout = io.Discard
 	cmd.Stderr = m.diagnostics
 	if cfg.Console == imanifest.KernelSerialPrint {
+		// The guest's serial port rides the VMM's standard streams: the hub
+		// prints it, retains it, and serves Machine.Console sessions.
+		// Firecracker's own stderr diagnostics share the output writer.
 		serialized := &lockedWriter{writer: b.consoleOutput()}
-		cmd.Stdout, cmd.Stderr = serialized, io.MultiWriter(m.diagnostics, serialized)
+		hub, err := console.New(serialized)
+		if err != nil {
+			rollback()
+			return nil, err
+		}
+		m.console = hub
+		cmd.Stdin, cmd.Stdout, cmd.Stderr = hub.Stdin(), hub, io.MultiWriter(m.diagnostics, serialized)
 	}
 	logger.Info("starting firecracker", "binary", cfg.Binary, "api_socket", socket)
 	m.process, err = (&executor.Runner{Logger: logger}).Start(cmd)
 	if err != nil {
+		if m.console != nil {
+			_ = m.console.Close()
+		}
 		rollback()
 		return nil, err
+	}
+	if m.console != nil {
+		m.console.Started()
 	}
 	// Firecracker's graceful path is its API, never SIGTERM: Stop only ever
 	// hard-kills here, and the grace period bounds its wait for the reaper.
@@ -308,6 +325,9 @@ func (m *Machine) startupFailure(err error) error {
 func (m *Machine) reap() {
 	err := m.process.Wait()
 	cleanupErr := errors.Join(m.control.Close(), os.RemoveAll(m.runtimeDir), m.lock.Close())
+	if m.console != nil {
+		cleanupErr = errors.Join(cleanupErr, m.console.Close())
+	}
 	if m.ephemeralState != "" {
 		cleanupErr = errors.Join(cleanupErr, os.RemoveAll(m.ephemeralState))
 	}
@@ -457,6 +477,21 @@ func (m *Machine) RemoteControl() (vm.Guest, error) {
 	return nil, fmt.Errorf("firecracker has no guest control transport: %w", errors.ErrUnsupported)
 }
 
+// Console implements backend.ConsoleProvider: a vm.Term over the guest's
+// serial port, available when Backend.Console is ConsolePrint. The session
+// replays the recent console output first, so one attached after boot still
+// sees what the guest printed; its Resize and Wait report
+// errors.ErrUnsupported. Closing it leaves the machine running.
+func (m *Machine) Console(ctx context.Context) (vm.Term, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if m.console == nil {
+		return nil, fmt.Errorf("firecracker: no serial console to attach; set Backend.Console to ConsolePrint: %w", errors.ErrUnsupported)
+	}
+	return m.console.Attach(), nil
+}
+
 // Status reports the machine's lifecycle state, PID, and socket paths. The
 // API socket is reported as the monitor socket.
 func (m *Machine) Status(ctx context.Context) (backend.Status, error) {
@@ -469,6 +504,7 @@ func (m *Machine) Status(ctx context.Context) (backend.Status, error) {
 }
 
 var (
-	_ backend.Machine        = (*Machine)(nil)
-	_ backend.StatusReporter = (*Machine)(nil)
+	_ backend.Machine         = (*Machine)(nil)
+	_ backend.StatusReporter  = (*Machine)(nil)
+	_ backend.ConsoleProvider = (*Machine)(nil)
 )

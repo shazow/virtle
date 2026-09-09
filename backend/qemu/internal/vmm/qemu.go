@@ -12,11 +12,16 @@ import (
 	govmmQemu "github.com/kata-containers/govmm/qemu"
 	"github.com/shazow/virtle/backend/qemu/internal/balloon"
 	"github.com/shazow/virtle/backend/qemu/internal/hotplug"
+	"github.com/shazow/virtle/internal/console"
 	"github.com/shazow/virtle/internal/executor"
 	"github.com/shazow/virtle/internal/manifest"
 )
 
-func buildQEMUCommand(mf *manifest.Manifest, cid int, incoming bool, consoleOutput io.Writer) (*exec.Cmd, error) {
+// buildQEMUCommand prepares the QEMU process. With a print console and a
+// hub, the guest's serial port (a stdio chardev) rides the hub's streams so
+// it can be printed, retained, and attached to; an interactive console owns
+// the host terminal instead.
+func buildQEMUCommand(mf *manifest.Manifest, cid int, incoming bool, consoleOutput io.Writer, hub *console.Hub) (*exec.Cmd, error) {
 	qemu, err := mf.ResolvedQEMU()
 	if err != nil {
 		return nil, err
@@ -37,6 +42,9 @@ func buildQEMUCommand(mf *manifest.Manifest, cid int, incoming bool, consoleOutp
 	if qemu.Console.Enabled() {
 		cmd.Stdout = consoleOutput
 		cmd.Stderr = consoleOutput
+	}
+	if hub != nil && qemu.Console.Enabled() && !qemu.Console.Interactive() {
+		cmd.Stdin, cmd.Stdout = hub.Stdin(), hub
 	}
 	return cmd, nil
 }

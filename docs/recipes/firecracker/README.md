@@ -69,7 +69,9 @@ on that reset; `poweroff` alone leaves the VMM running. See Firecracker's
 The manifest uses the common `[machine]`, `[kernel]`, and `[[mounts]]` sections.
 Paths resolve against `working_dir` (default: the launch directory). Firecracker
 does not expand shell variables or Go templates in executable/image paths.
-Disks must already exist and use raw format. Virtle supplies `console=ttyS0`
+Disks use raw format; a missing image is created as an empty ext4 filesystem
+when `image.create = true` and `image.size` (at least 256 MiB) are set, as on
+QEMU. Virtle supplies `console=ttyS0`
 (for `serial = "print"`) and `reboot=k panic=-1` ahead of `kernel.params`; an
 image mounted at `/` (`target = "/"`) would also get `root=/dev/vdX` and `ro`
 or `rw`. This recipe boots from the initrd and attaches its disk as data, so

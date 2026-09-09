@@ -17,9 +17,9 @@ compact before/after examples.
 - `[[mounts]] type = "image"` gains `target = "/"`, naming the root device on
   both backends: virtle passes `root=/dev/vdX` and `ro`/`rw` for it, and
   `kernel.initrd_path` is optional when a boot names its root device (or
-  carries its own `root=`). **Breaking (Firecracker):** the first disk is no
-  longer the root device automatically; add `target = "/"` to keep booting
-  from it.
+  carries its own `root=`). Nothing is picked automatically on either
+  backend: a disk boot without an initrd must set `target = "/"` on its
+  root image or pass `root=`, and fails validation otherwise.
 - QEMU manifests can set `vsock.enabled = false` for guests that do not use
   host-guest vsock, dropping the `/dev/vhost-vsock` requirement.
 - `virtle launch` lets `Machine.Shutdown` stop the guest gracefully on
@@ -36,11 +36,14 @@ compact before/after examples.
 ### Library changes
 
 - New `backend/firecracker` package: `&firecracker.Backend{}` implements
-  `backend.Backend` and `backend.StatusReporter` with the same `vm.Spec` and
-  `backend.Machine` as QEMU. Spec features it cannot honor fail `Start` with
-  an error wrapping `errors.ErrUnsupported`.
+  `backend.Backend`, and its machines implement `backend.StatusReporter` and
+  `backend.ConsoleProvider`, with the same `vm.Spec` and `backend.Machine`
+  as QEMU. Spec features it cannot honor fail `Start` with an error wrapping
+  `errors.ErrUnsupported`.
 - `vm.Disk{GuestPath: "/"}` names the root device on both backends (virtle
-  passes `root=` for it); other guest paths still need a guest agent.
+  passes `root=` for it). Any other `GuestPath` needs a guest agent and now
+  fails `Start` with an error wrapping `errors.ErrUnsupported` on both
+  backends; QEMU used to ignore it silently.
 - `vm.Disk.Size` (manifest `image.create` + `image.size`) creates a missing
   raw ext4 image on Firecracker too, with QEMU's 256 MiB minimum.
 - `backend.ConsoleProvider` is implemented by QEMU and Firecracker machines
@@ -66,12 +69,23 @@ compact before/after examples.
   temporary directory that is removed when the machine exits. QEMU used to
   work in a never-removed temporary directory, so relative Spec paths did
   not resolve against the caller's directory. `Suspend` and `Resume` need a
-  `Dir`, since saved state lives in its `.virtle`.
+  `Dir`, since saved state lives in its `.virtle`:
+  ```go
+  // Before: state landed in a temporary directory that outlived the machine.
+  m, err := b.Start(ctx, &vm.Spec{Kernel: vm.Kernel{Path: "vmlinuz"}})
+  // After: set Dir to keep state across runs (and to Suspend/Resume).
+  m, err := b.Start(ctx, &vm.Spec{Dir: dir, Kernel: vm.Kernel{Path: "vmlinuz"}})
+  ```
 - A zero `vm.Spec.CPUs` selects the host CPU count on Firecracker too
   (within its limit of 32), matching QEMU. Small guests should set `CPUs`
   and `Memory` explicitly, as the test fixtures do.
 - `qemu.Backend.DisableVSock` is the Go counterpart of `vsock.enabled = false`.
 - The deprecated `backend.Shutdown` helper is gone; call `Machine.Shutdown`.
+- **Breaking:** `backend/qemu/session` no longer exports `Run`, `Options`,
+  and `ExitCode`; the CLI foreground loop is backend-neutral and lives in
+  `internal/session`. Programs that embedded it should drive
+  `backend.Machine` directly (`Start`, `Wait`, `Shutdown`, `Console`) or run
+  the `virtle launch` command.
 
 ## 2026-09-03
 

@@ -14,12 +14,13 @@ must match the host architecture: an ELF `vmlinux` on x86_64, an uncompressed
 ## What works
 
 - Direct kernel boot with an optional initrd (`[kernel]` / `vm.Kernel`).
-- Existing raw disk images attached as virtio-block devices (`[[mounts]]
-  type = "image"` / `vm.Disk`); `read_only` / `vm.Disk.ReadOnly` controls
-  guest write access. The image mounted at `/` (`target = "/"` /
-  `vm.Disk.GuestPath: "/"`) is the root device: virtle passes `root=/dev/vdX`
-  and `ro` or `rw` for it, on QEMU alike, so a kernel boots from it without
-  an initrd.
+- Raw disk images attached as virtio-block devices (`[[mounts]] type =
+  "image"` / `vm.Disk`); `read_only` / `vm.Disk.ReadOnly` controls guest
+  write access, and a missing image is created as an empty ext4 filesystem
+  from `image.create` + `image.size` / `vm.Disk.Size` (256 MiB minimum), as
+  on QEMU. The image mounted at `/` (`target = "/"` / `vm.Disk.GuestPath:
+  "/"`) is the root device: virtle passes `root=/dev/vdX` and `ro` or `rw`
+  for it, on QEMU alike, so a kernel boots from it without an initrd.
 - The serial console (`kernel.serial = "print"` /
   `firecracker.Backend{Console: firecracker.ConsolePrint}`): printed to the
   host, and available as a `vm.Term` through `backend.ConsoleProvider`
@@ -32,9 +33,10 @@ must match the host architecture: an ELF `vmlinux` on x86_64, an uncompressed
 - The same state directory and VM-name lock as QEMU, so a QEMU and a
   Firecracker launch of one manifest exclude each other.
 
-Defaults follow QEMU's: an omitted vCPU count means every host CPU (within
-Firecracker's limit of 32), and an omitted memory size means 1024 MiB
-(`firecracker.DefaultMemory`). Small guests should set both explicitly.
+The vCPU default follows QEMU's: an omitted count means every host CPU
+(within Firecracker's limit of 32). An omitted memory size means 1024 MiB
+(`firecracker.DefaultMemory`, the manifest default; the QEMU Go API defaults
+to 2048 MiB). Small guests should set both explicitly.
 `[firecracker] binary`, `startup_timeout`, and `shutdown_timeout` (or the
 matching `Backend` fields) tune the VMM.
 
@@ -80,7 +82,7 @@ features it cannot honor fail `Start` with an error wrapping
 | --- | --- |
 | Guest control (`Machine.RemoteControl`), SSH, guest files, workspace mounts | No guest agent transport yet; see the [guest daemon design](https://github.com/shazow/virtle/pull/67). |
 | Networking, port forwards, vsock | No TAP or vsock device is configured. |
-| virtiofs and 9p shares, qcow2, disk cache/serial options | Raw images only. A missing image is created as an empty ext4 filesystem from `image.create` + `image.size` / `vm.Disk.Size`, as on QEMU. |
+| virtiofs and 9p shares, qcow2, disk cache/serial options | Raw images only, created on demand as above. |
 | Interactive console (`serial = "console"`) | Only `off` and `print`. |
 | Suspend/resume, balloon, hotplug | Capability interfaces are not implemented. |
 | `[run]` helpers, `[notifications]`, `[qemu]` settings | QEMU-only. |

@@ -21,6 +21,7 @@ import (
 	"github.com/shazow/virtle/backend"
 	"github.com/shazow/virtle/backend/firecracker"
 	"github.com/shazow/virtle/backend/qemu"
+	qemusession "github.com/shazow/virtle/backend/qemu/session"
 	"github.com/shazow/virtle/internal/control"
 	"github.com/shazow/virtle/internal/manifest"
 	manifestschema "github.com/shazow/virtle/internal/manifest/schema"
@@ -92,25 +93,28 @@ func runLaunch(options *Options) error {
 	if err != nil {
 		return fmt.Errorf("load manifest %q: %w", resolvedPath, err)
 	}
-	if qemuBackend, ok := b.(*qemu.Backend); ok {
-		qemuBackend.Logger = rootLogger
-		qemuBackend.ConsoleOutput = os.Stderr
+	opts := session.Options{
+		Resume:        session.ResumeMode(options.Launch.Resume),
+		SSH:           options.Launch.SSH,
+		RemoteCommand: options.Launch.Args.RemoteCommand,
+		Logger:        rootLogger,
 	}
-	if fcBackend, ok := b.(*firecracker.Backend); ok {
-		fcBackend.Logger = rootLogger
-		fcBackend.ConsoleOutput = os.Stderr
+	// The CLI is the driver: it knows which backend the manifest selected and
+	// wires that backend's logging and CLI-only session adapters explicitly.
+	switch b := b.(type) {
+	case *qemu.Backend:
+		b.Logger = rootLogger
+		b.ConsoleOutput = os.Stderr
+		opts.Hooks = qemusession.Hooks()
+	case *firecracker.Backend:
+		b.Logger = rootLogger
+		b.ConsoleOutput = os.Stderr
 	}
 	loaded, err := doc.ManifestWithOptions(manifest.ResolveOptions{Logger: rootLogger.With("package", "manifest")})
 	if err != nil {
 		return fmt.Errorf("load manifest %q: %w", resolvedPath, err)
 	}
-
-	return session.Run(context.Background(), b, spec, loaded, session.Options{
-		Resume:        options.Launch.Resume,
-		SSH:           options.Launch.SSH,
-		RemoteCommand: options.Launch.Args.RemoteCommand,
-		Logger:        rootLogger,
-	})
+	return session.Run(context.Background(), b, spec, loaded, opts)
 }
 
 // controlSession loads the manifest, resolves its control socket, and returns

@@ -114,3 +114,8 @@ jobs:
 
       - name: Run integration tests
         run: nix flake check
+
+      # The KVM checks boot real VMMs; keep their test output visible in the
+      # job so a passing run shows which scenarios ran and how long they took.
+      - name: Show Go API end-to-end log
+        run: nix log .#checks.x86_64-linux.e2e-api

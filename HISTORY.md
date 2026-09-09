@@ -16,6 +16,9 @@ compact before/after examples.
   readiness and teardown timings and are labeled directional. The reusable
   `e2e-fast-fixture` and `checks.x86_64-linux.e2e-fast` verify both real KVM
   backends without performance assertions or skip-success when KVM is absent.
+- `e2e-fast-userspace-fixture` adds eventfd, inotify, file locking and Unix
+  sockets to the tiny kernel for common Go/libuv-style userspace. Its separate
+  KVM check preserves `e2e-fast-fixture` as the minimal backend benchmark.
 - QEMU manifests can set `vsock.enabled = false` for guests that do not need
   host-guest vsock communication, avoiding the `/dev/vhost-vsock` dependency.
   Disabled devices use CID 0 without host allocation, including on resume.

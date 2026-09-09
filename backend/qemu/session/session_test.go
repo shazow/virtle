@@ -1,10 +1,12 @@
 package session
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -44,6 +46,48 @@ func (b *commitTracker) committedResume() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.committed
+}
+
+// noVSockBackend resumes in-memory machines whose status reports CID 0, as a
+// QEMU machine with vsock.enabled = false does.
+type noVSockBackend struct{ backend.Backend }
+
+type noVSockMachine struct{ backend.Machine }
+
+func (noVSockMachine) Status(context.Context) (backend.Status, error) {
+	return backend.Status{State: backend.StateReady}, nil
+}
+
+func (b noVSockBackend) Resume(ctx context.Context, spec *vm.Spec) (backend.Machine, error) {
+	m, err := b.Backend.Start(ctx, spec)
+	if err != nil {
+		return nil, err
+	}
+	return noVSockMachine{m}, nil
+}
+
+func (noVSockBackend) StateVersion() string { return "test-v1" }
+
+// TestSSHNeedsVSock covers a machine without a vsock device: there is no SSH
+// destination, so the session prints no hint and --ssh fails with
+// ErrUnsupported instead of running ssh against CID 0.
+func TestSSHNeedsVSock(t *testing.T) {
+	mf := &manifest.Manifest{SSH: manifest.SSH{Argv: []string{"ssh"}, User: "agent"}}
+	if hint, err := Hooks().SSHCommandHint(mf, 0); err != nil || hint != "" {
+		t.Fatalf("hint for CID 0 = %q, %v; want none", hint, err)
+	}
+	if hint, err := Hooks().SSHCommandHint(mf, 3); err != nil || hint == "" {
+		t.Fatalf("hint for CID 3 = %q, %v; want a command", hint, err)
+	}
+	var stdout bytes.Buffer
+	b := noVSockBackend{backendtest.NewMemoryBackend(nil)}
+	err := shared.Run(context.Background(), b, &vm.Spec{}, mf, shared.Options{Resume: shared.ResumeForce, SSH: true, Stdout: &stdout, Hooks: Hooks()})
+	if !errors.Is(err, errors.ErrUnsupported) || !strings.Contains(err.Error(), "vsock") {
+		t.Fatalf("Run --ssh without vsock = %v, want ErrUnsupported naming vsock", err)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want no ssh hint", stdout.String())
+	}
 }
 
 func TestRunPreservesResumeStateWhenSSHStartFails(t *testing.T) {

@@ -127,8 +127,17 @@ nix run path:. -- --manifest "$PWD/result-fast-fixture/firecracker.toml" rpc shu
 
 Use `qemu.toml` for QEMU, or `e2e-fast-userspace-fixture` for the
 userspace-capable kernel. The fixture output also exposes `vmlinux`, `bzImage`,
-`kernel.config`, `initrd`, and `fixture.json`. Its Nix passthru attributes are
-`kernel`, `initrd`, `firecracker`, and `qemu`. Other E2E derivations can import
+`kernel.config`, `initrd`, `rootfs.ext4` (the same guest tree as a raw root
+disk, for boots without an initrd), and `fixture.json`. Its Nix passthru
+attributes are `kernel`, `initrd`, `rootfs`, `firecracker`, and `qemu`.
+
+The `e2e-api` flake check boots the same fixture through the public Go API
+instead of the CLI: the Go tests in this directory (build tag `integration`)
+run the backend conformance suite from `backend/backendtest` against both
+backends and cover the `vm.Spec.Dir` contract, booting from the root disk, a
+scratch disk the host reads back, and the serial console. They read
+`VIRTLE_E2E_FIXTURE`, `VIRTLE_E2E_QEMU`, and `VIRTLE_E2E_FIRECRACKER` and skip
+without them. Other E2E derivations can import
 `fixtures/fast` with `{ inherit pkgs; workload = ./my-ready-script; }` to run a
 different BusyBox workload on the same kernel. Keep the readiness protocol
 when reusing this runner. Tests needing disks or guest agents can reuse the

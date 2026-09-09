@@ -150,6 +150,16 @@
             env.CGO_ENABLED = 0;
             buildTestBinaries = true;
           };
+          # Public-API scenarios against real VMMs (tests/e2e); run under KVM.
+          e2eTest = pkgs.buildGoModule {
+            pname = "virtle-e2e-test-binary";
+            inherit (release) version vendorHash;
+            src = ./.;
+            subPackages = [ "tests/e2e" ];
+            tags = [ "integration" ];
+            env.CGO_ENABLED = 0;
+            buildTestBinaries = true;
+          };
         in
         {
           e2e-runner =
@@ -199,6 +209,22 @@
                   --fixture ${self.packages.${system}.e2e-fast-fixture} \
                   --pairs 2 --warmup-pairs 0 \
                   --output "$output/results"
+                touch $out
+              '';
+          # Both backends driven through the Go API (vm.Spec, backend.Machine)
+          # on the same tiny guest: the backend conformance suite plus the
+          # Spec.Dir, root disk, scratch disk, and console scenarios.
+          e2e-api =
+            pkgs.runCommand "virtle-e2e-api"
+              {
+                requiredSystemFeatures = [ "kvm" ];
+                nativeBuildInputs = [ pkgs.e2fsprogs ];
+              }
+              ''
+                export VIRTLE_E2E_FIXTURE=${self.packages.${system}.e2e-fast-fixture}
+                export VIRTLE_E2E_QEMU=${pkgs.qemu_kvm}/bin/qemu-system-x86_64
+                export VIRTLE_E2E_FIRECRACKER=${pkgs.firecracker}/bin/firecracker
+                timeout --kill-after=30 600 ${e2eTest}/bin/e2e.test -test.v
                 touch $out
               '';
           # Firecracker requires real KVM; no TCG fallback and no skip-success.

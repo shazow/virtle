@@ -19,6 +19,14 @@ const (
 )
 
 type Document struct {
+	// Preserve input presence so backend validation can distinguish explicit
+	// unsupported settings (even zero/default values) from decoder defaults.
+	decoded       bool
+	explicitSSH   bool
+	explicitVSock bool
+
+	Backend       string             `json:"backend,omitempty" toml:"backend" default:"qemu" jsonschema:"Virtual machine backend: qemu (default) or firecracker."`
+	Firecracker   FirecrackerInput   `json:"firecracker,omitempty" toml:"firecracker" jsonschema:"Firecracker executable and lifecycle timeouts."`
 	HostName      string             `json:"host_name,omitempty" toml:"host_name" default:"virtle" jsonschema:"Guest-visible VM name used for QEMU naming and derived runtime files."`
 	WorkingDir    string             `json:"working_dir,omitempty" toml:"working_dir" default:"." jsonschema:"Host working directory used to resolve relative paths in the manifest."`
 	StateDir      string             `json:"state_dir,omitempty" toml:"state_dir" default:".virtle" jsonschema:"Host directory used for runtime state such as locks sockets and generated files."`
@@ -277,6 +285,7 @@ type SSHInput struct {
 }
 
 type VSockInput struct {
+	Enabled  *bool      `json:"enabled,omitempty" toml:"enabled" jsonschema:"Attach the QEMU vsock device; defaults to true. Disable for guests that do not use host-guest vsock communication."`
 	CIDRange RangeInput `json:"cid_range,omitempty" toml:"cid_range" jsonschema:"Inclusive range of vsock CIDs virtle may allocate at launch."`
 }
 

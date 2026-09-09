@@ -25,9 +25,9 @@ import (
 	"os"
 
 	"github.com/shazow/virtle/backend"
-	"github.com/shazow/virtle/backend/qemu/internal/sessionbridge"
 	"github.com/shazow/virtle/backend/qemu/internal/vmm"
 	imanifest "github.com/shazow/virtle/internal/manifest"
+	"github.com/shazow/virtle/internal/sessionbridge"
 	"github.com/shazow/virtle/units"
 	"github.com/shazow/virtle/vm"
 )

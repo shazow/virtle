@@ -35,21 +35,51 @@
 
           default = virtle;
         }
+        // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
+          e2e-fast-fixture = import ./tests/e2e/fixtures/fast { inherit pkgs; };
+          e2e-fast-userspace-fixture = import ./tests/e2e/fixtures/fast {
+            inherit pkgs;
+            userspace = true;
+          };
+          benchmark-backends = pkgs.writeShellApplication {
+            name = "virtle-benchmark-backends";
+            runtimeInputs = [ pkgs.python3 ];
+            text = ''
+              exec python ${./tests/e2e/run.py} \
+                --virtle ${self.packages.${system}.virtle}/bin/virtle \
+                --fixture ${self.packages.${system}.e2e-fast-fixture} "$@"
+            '';
+          };
+        }
       );
 
-      apps = forAllSystems (system: {
-        default = {
-          type = "app";
-          program = "${self.packages.${system}.virtle}/bin/virtle";
-          meta.description = "Run virtle";
-        };
-      });
+      apps = forAllSystems (
+        system:
+        {
+          default = {
+            type = "app";
+            program = "${self.packages.${system}.virtle}/bin/virtle";
+            meta.description = "Run virtle";
+          };
+        }
+        // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
+          benchmark-backends = {
+            type = "app";
+            program = "${self.packages.${system}.benchmark-backends}/bin/virtle-benchmark-backends";
+            meta.description = "Directional Firecracker vs QEMU/KVM comparison";
+          };
+        }
+      );
 
       checks = forAllSystems (
         system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
           guestKernelPackage = pkgs.linuxPackages.kernel;
+          firecrackerGuest = import ./docs/recipes/firecracker/guest.nix {
+            inherit pkgs;
+            virtle = self.packages.${system}.virtle;
+          };
           guestCompressedModules = pkgs.makeModulesClosure {
             kernel = guestKernelPackage.modules;
             firmware = guestKernelPackage;
@@ -122,6 +152,15 @@
           };
         in
         {
+          e2e-runner =
+            pkgs.runCommand "virtle-e2e-runner-tests"
+              {
+                nativeBuildInputs = [ pkgs.python3 ];
+              }
+              ''
+                PYTHONDONTWRITEBYTECODE=1 python -m unittest discover -s ${./tests/e2e} -v
+                touch $out
+              '';
           # Runs the launch integration tests in a small VM where /bin/sh is
           # dash, covering the absolute guest shell path Virtle sends to QGA.
           integration = pkgs.vmTools.runInLinuxVM (
@@ -142,6 +181,61 @@
                 touch $out
               ''
           );
+        }
+        // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
+          e2e-fast =
+            pkgs.runCommand "virtle-fast-e2e"
+              {
+                requiredSystemFeatures = [ "kvm" ];
+                nativeBuildInputs = [ pkgs.python3 ];
+              }
+              ''
+                output=$(mktemp -d)
+                python ${./tests/e2e/run.py} \
+                  --virtle ${self.packages.${system}.virtle}/bin/virtle \
+                  --fixture ${self.packages.${system}.e2e-fast-fixture} \
+                  --pairs 2 --warmup-pairs 0 \
+                  --output "$output/results"
+                touch $out
+              '';
+          e2e-fast-userspace =
+            pkgs.runCommand "virtle-fast-userspace-e2e"
+              {
+                requiredSystemFeatures = [ "kvm" ];
+                nativeBuildInputs = [ pkgs.python3 ];
+              }
+              ''
+                fixture=${self.packages.${system}.e2e-fast-userspace-fixture}
+                grep -qx 'CONFIG_EVENTFD=y' "$fixture/kernel.config"
+                grep -qx 'CONFIG_INOTIFY_USER=y' "$fixture/kernel.config"
+                grep -qx 'CONFIG_FILE_LOCKING=y' "$fixture/kernel.config"
+                grep -qx 'CONFIG_NET=y' "$fixture/kernel.config"
+                grep -qx 'CONFIG_UNIX=y' "$fixture/kernel.config"
+                for option in AF_UNIX_OOB BQL ETHTOOL_NETLINK NETWORK_FILESYSTEMS NET_FLOW_LIMIT RFS_ACCEL WIRELESS; do
+                  grep -qx "# CONFIG_$option is not set" "$fixture/kernel.config"
+                done
+                output=$(mktemp -d)
+                python ${./tests/e2e/run.py} \
+                  --virtle ${self.packages.${system}.virtle}/bin/virtle \
+                  --fixture "$fixture" \
+                  --pairs 2 --warmup-pairs 0 \
+                  --output "$output/results"
+                touch $out
+              '';
+          # Firecracker requires real KVM; no TCG fallback and no skip-success.
+          # SendCtrlAltDel (used to verify guest shutdown) is x86-only.
+          firecracker =
+            pkgs.runCommand "virtle-firecracker-e2e"
+              {
+                requiredSystemFeatures = [ "kvm" ];
+                nativeBuildInputs = [ pkgs.python3 ];
+              }
+              ''
+                test -r /dev/kvm && test -w /dev/kvm
+                python ${./docs/recipes/firecracker/check.py} \
+                  ${self.packages.${system}.virtle}/bin/virtle ${firecrackerGuest.manifest}
+                touch $out
+              '';
         }
       );
 

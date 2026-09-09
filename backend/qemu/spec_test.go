@@ -272,7 +272,7 @@ func TestSpecDocumentOverlaysBase(t *testing.T) {
 		Memory: 4096 * units.Mebibyte,
 		Kernel: vm.Kernel{Path: "vmlinuz", Initrd: "initrd.img"},
 		Shares: []vm.Share{{Tag: "src", HostPath: "/host/new", GuestPath: "/workspace", ReadOnly: true}},
-		Disks:  []vm.Disk{{Path: "new.qcow2", Format: "qcow2", Size: 256 * units.Mebibyte}},
+		Disks:  []vm.Disk{{Path: "new.qcow2", Format: "qcow2", Size: 256 * units.Mebibyte, ReadOnly: true}},
 		Ports:  []vm.Forward{{Proto: "udp", HostAddr: "127.0.0.1:8080", GuestAddr: "10.0.2.15:80"}},
 		Files:  []vm.File{{GuestPath: "/etc/new", Content: strings.NewReader("new content"), Mode: 0o640}},
 	}

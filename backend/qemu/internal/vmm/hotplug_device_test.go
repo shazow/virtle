@@ -32,11 +32,11 @@ func TestAdHocHotplugDevicesReceiveExecutablePlansAndDefaults(t *testing.T) {
 		t.Errorf("share helper args = %#v, want %#v", got, want)
 	}
 
-	disk, err := hotplugDeviceFor(resolver, vm.Disk{Path: "/imgs/scratch.img"})
+	disk, err := hotplugDeviceFor(resolver, vm.Disk{Path: "/imgs/scratch.img", ReadOnly: true})
 	if err != nil {
 		t.Fatalf("disk: %v", err)
 	}
-	if disk.Block.ImagePath != "/imgs/scratch.img" || disk.Block.Format != "raw" {
+	if disk.Block.ImagePath != "/imgs/scratch.img" || disk.Block.Format != "raw" || !disk.Block.ReadOnly {
 		t.Errorf("disk device = %+v", disk)
 	}
 	if strings.ContainsAny(disk.ID, "/ ") {

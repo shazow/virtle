@@ -7,6 +7,30 @@ import (
 	"github.com/shazow/virtle/units"
 )
 
+func TestDocumentVSockDeviceSelection(t *testing.T) {
+	for _, tc := range []struct {
+		name, settings, wantID string
+	}{
+		{"default", "", "vsock0"},
+		{"enabled", "[vsock]\nenabled = true\n", "vsock0"},
+		{"disabled", "[vsock]\nenabled = false\n", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			doc, err := DecodeDocumentBytes([]byte("[kernel]\npath = '/kernel'\ninitrd_path = '/initrd'\n"+tc.settings), "toml")
+			if err != nil {
+				t.Fatal(err)
+			}
+			mf, err := doc.Manifest()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := mf.QEMU.Devices.VSOCK.ID; got != tc.wantID {
+				t.Fatalf("vsock device ID = %q, want %q", got, tc.wantID)
+			}
+		})
+	}
+}
+
 func TestDocumentWithDefaultsPreservesExplicitEmptyNetworks(t *testing.T) {
 	document := validDocument()
 	document.Networks = []NetworkInput{}

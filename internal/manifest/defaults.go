@@ -43,6 +43,18 @@ func DefaultDocument() Document {
 // explicitly.
 func DocumentWithDefaults(document Document) Document {
 	defaults := DefaultDocument()
+	defaults.decoded = document.decoded
+	defaults.explicitSSH = document.explicitSSH
+	defaults.explicitVSock = document.explicitVSock
+	if document.Backend != "" {
+		defaults.Backend = document.Backend
+	}
+	defaults.Firecracker = document.Firecracker
+	if defaults.Backend == "firecracker" {
+		defaults.Networks = nil
+		defaults.SSH = SSHInput{}
+		defaults.VSock = VSockInput{}
+	}
 
 	if document.HostName != "" {
 		defaults.HostName = document.HostName
@@ -206,6 +218,9 @@ func mergeSSHInput(base SSHInput, override SSHInput) SSHInput {
 }
 
 func mergeVSockInput(base VSockInput, override VSockInput) VSockInput {
+	if override.Enabled != nil {
+		base.Enabled = override.Enabled
+	}
 	if override.CIDRange.Min != 0 {
 		base.CIDRange.Min = override.CIDRange.Min
 	}

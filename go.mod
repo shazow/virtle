@@ -12,6 +12,7 @@ require (
 	github.com/kata-containers/govmm v0.0.0-20220119175834-88960a15dacd
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51
 	golang.org/x/crypto v0.52.0
+	golang.org/x/sys v0.45.0
 )
 
 require (
@@ -26,5 +27,4 @@ require (
 	github.com/sirupsen/logrus v1.9.4 // indirect
 	github.com/stretchr/testify v1.11.1 // indirect
 	github.com/ulikunitz/xz v0.5.15 // indirect
-	golang.org/x/sys v0.45.0 // indirect
 )

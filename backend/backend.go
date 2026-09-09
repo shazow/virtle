@@ -1,7 +1,7 @@
 // Package backend defines the implementer contract for virtle VM backends,
 // mirroring the database/sql/driver split: consumers hold the interfaces
 // declared here, implementations live in backend-named subpackages
-// (backend/qemu today). Optional functionality is declared as standalone
+// (backend/qemu and backend/firecracker). Optional functionality is declared as standalone
 // capability interfaces (Suspender, MemoryResizer, ...) discovered by type
 // assertion, the way driver.Conn implementations opt into driver.ConnBeginTx.
 //
@@ -19,8 +19,7 @@ import (
 )
 
 // Backend starts virtual machines. Implementations live under backend/
-// (backend/qemu today; backend/firecracker, an in-process libkrun
-// backend, ... later).
+// (backend/qemu and backend/firecracker).
 type Backend interface {
 	Start(ctx context.Context, spec *vm.Spec) (Machine, error)
 }

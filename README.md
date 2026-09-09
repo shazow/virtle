@@ -12,14 +12,15 @@ Background: Originally designed to be used with [`agentspace`](https://github.co
 
 ## How does it work?
 
-`virtle` reads a manifest, starts the required host processes, launches QEMU,
-waits for guest SSH readiness, attaches an active session with `--ssh`.
+`virtle` reads a manifest and launches the selected VM backend: QEMU by default,
+or Firecracker with `backend = "firecracker"`. QEMU workflows can start host
+helpers, wait for guest SSH readiness, and attach a session with `--ssh`.
 
 It also handles teardown, QMP-based shutdown, disk-backed suspend/resume, runtime vsock CID allocation, QGA-based remote commands, and more.
 
 ### Features
 
-- Runs a QEMU microvm.
+- Runs QEMU or Firecracker microVMs through the same CLI and Go interfaces.
 - Allocates block overlay images.
 - Manages [`virtiofsd`](https://gitlab.com/virtio-fs/virtiofsd) daemons for virtiofs mounts.
 - Provisions SSH between host and guest.
@@ -30,6 +31,58 @@ It also handles teardown, QMP-based shutdown, disk-backed suspend/resume, runtim
 - Exposes a `virtle.sock` for RPC (also usable via `virtle rpc` sub-command).
 - (Experimental) Balloon memory: Auto-adjust memory available to the VM based on internal memory pressure metrics.
 - (Experimental) Hotplug: Attach/detach devices during runtime (requires full VM).
+
+Guest control, sharing, SSH, suspend, ballooning, and hotplug currently require
+QEMU. Firecracker supports direct kernel boot, an optional initrd, existing raw
+disks, serial output, and lifecycle/status RPCs. See the complete
+[Firecracker recipe](docs/recipes/firecracker/README.md) for a Nix-built guest
+and a real KVM boot/shutdown check.
+
+### Firecracker
+
+```toml
+backend = "firecracker"
+
+[machine]
+vcpu = 1
+memory = 256
+
+[kernel]
+path = "vmlinux"
+initrd_path = "initrd" # optional when the kernel can boot the root disk directly
+serial = "print"
+params = ["console=ttyS0", "reboot=k", "panic=-1"]
+
+[[mounts]]
+type = "image"
+source = "rootfs.ext4"
+read_only = true
+image.format = "raw"
+
+[firecracker]
+binary = "firecracker"
+startup_timeout = "10s"
+shutdown_timeout = "10s"
+```
+
+Use `virtle launch`, `virtle status`, and `virtle rpc shutdown`. The Go entry
+point is `&firecracker.Backend{}` with the same `vm.Spec` and `backend.Machine`
+interfaces as QEMU. `vm.Disk.ReadOnly` controls write access on both backends.
+
+Firecracker requires Linux amd64/arm64 with accessible KVM and a matching guest
+kernel (ELF `vmlinux` on amd64, uncompressed `Image` on arm64). There is no software
+emulation fallback. The default is one vCPU and 1024 MiB. `Start` and status
+`ready` indicate that the VMM accepted boot; workload readiness must be verified
+inside the guest. The recipe demonstrates this distinction.
+
+On amd64, graceful shutdown uses `SendCtrlAltDel`: the guest needs i8042/AT
+keyboard drivers and an init handler that cleans up and reboots with `reboot=k`.
+On arm64, this action is unavailable and shutdown currently kills the VMM with
+an error. Deadlines and startup failures also force teardown. Unsupported
+manifest features fail validation; they are not silently dropped. Firecracker
+runs directly with its default seccomp policy; virtle does not manage a jailer,
+user/network namespaces, or cgroups. See [WIP.md](WIP.md) for the full capability
+and validation record.
 
 ## Usage
 

@@ -77,6 +77,7 @@ func hotplugDeviceFor(resolver hotplugResolver, dev vm.Device) (manifest.Hotplug
 		return resolver.ResolveHotplugMount(manifest.ImageMountInput{
 			Type:       manifest.MountTypeImage,
 			SourcePath: d.Path,
+			ReadOnly:   d.ReadOnly,
 			Image:      manifest.ImageInput{Format: d.Format, Serial: &id},
 		})
 	case vm.Forward:

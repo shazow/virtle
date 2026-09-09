@@ -3,30 +3,31 @@ package runtime
 import (
 	"context"
 	"log/slog"
+	"net"
 
 	"github.com/shazow/virtle/internal/control"
 )
 
-// startControl serves the control socket at socketPath; an empty path
-// disables the socket and returns a nil server.
-func startControl(ctx context.Context, socketPath string, router *control.Router, logger *slog.Logger) (*control.Server, error) {
-	if socketPath == "" {
-		return nil, nil
-	}
-	listener, err := control.Listen(socketPath)
-	if err != nil {
-		return nil, err
-	}
-	server, err := control.NewServer(router)
-	if err != nil {
-		_ = listener.Close()
-		return nil, err
-	}
+// serveControl starts serving listener and waits for startup.
+func serveControl(ctx context.Context, listener net.Listener, server *control.Server, logger *slog.Logger) error {
+	served := make(chan error, 1)
 	go func() {
-		if err := server.Serve(listener); err != nil && ctx.Err() == nil && logger != nil {
+		err := server.Serve(listener)
+		_ = server.Close()
+		_ = listener.Close()
+		served <- err
+		if err != nil && ctx.Err() == nil && logger != nil {
 			logger.Warn("control socket stopped", "err", err)
 		}
 	}()
-	<-server.Started()
-	return server, nil
+	select {
+	case <-server.Started():
+		return nil
+	case err := <-served:
+		// Close may win before Serve registers its listener and signals Started.
+		if err == nil {
+			err = net.ErrClosed
+		}
+		return err
+	}
 }

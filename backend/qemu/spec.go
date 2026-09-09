@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
-	"strings"
 
 	imanifest "github.com/shazow/virtle/internal/manifest"
 	"github.com/shazow/virtle/units"
@@ -80,7 +79,12 @@ func specDocument(spec *vm.Spec, cfg *Backend, base *imanifest.Document) (imanif
 	if spec.Kernel != (vm.Kernel{}) {
 		doc.Kernel.Path = spec.Kernel.Path
 		doc.Kernel.InitrdPath = spec.Kernel.Initrd
-		doc.Kernel.Params = strings.Fields(spec.Kernel.Cmdline)
+		// The command line is passed through verbatim as one parameter, the
+		// same way every backend treats vm.Kernel.Cmdline.
+		doc.Kernel.Params = nil
+		if spec.Kernel.Cmdline != "" {
+			doc.Kernel.Params = []string{spec.Kernel.Cmdline}
+		}
 	}
 	if doc.Kernel.Path == "" {
 		return imanifest.Document{}, fmt.Errorf("the qemu backend requires a direct kernel boot source (vm.Spec.Kernel)")
@@ -143,6 +147,10 @@ func specDocument(spec *vm.Spec, cfg *Backend, base *imanifest.Document) (imanif
 	}
 	if cfg.HotplugPorts > doc.QEMU.HotplugPorts {
 		doc.QEMU.HotplugPorts = cfg.HotplugPorts
+	}
+	if cfg.DisableVSock {
+		enabled := false
+		doc.VSock.Enabled = &enabled
 	}
 
 	if err := applySpecDevices(&doc, spec); err != nil {

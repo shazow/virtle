@@ -69,15 +69,27 @@ type Status struct {
 	Stats RuntimeStats `json:"stats"`
 }
 
-// StatusPaths are host-side sockets associated with a machine.
+// StatusPaths are host-side sockets associated with a machine. The JSON
+// names are the frozen wire names from the QEMU-only days; the Go names say
+// what each path is for on any backend.
 type StatusPaths struct {
-	ControlSocket      string `json:"controlSocket"`
-	MonitorSocket      string `json:"qmpSocket"`
+	// ControlSocket is virtle's own control socket for this machine.
+	ControlSocket string `json:"controlSocket"`
+	// MonitorSocket is the VMM's control endpoint: the QMP socket for QEMU,
+	// the HTTP API socket for Firecracker.
+	MonitorSocket string `json:"qmpSocket"`
+	// GuestControlSocket is the host end of the guest-control transport
+	// (the guest-agent socket for QEMU), when the machine has one.
 	GuestControlSocket string `json:"guestAgentSocket,omitempty"`
-	ReadySocket        string `json:"sshReadySocket,omitempty"`
+	// ReadySocket is the socket the guest signals session readiness on,
+	// when the backend uses one.
+	ReadySocket string `json:"sshReadySocket,omitempty"`
 }
 
 // RuntimeStats reports lifecycle timing captured during launch and teardown.
+// MonitorReadyAt is when the VMM's control endpoint accepted configuration;
+// the remaining fields are populated by backends that have the corresponding
+// phase.
 type RuntimeStats struct {
 	StartedAt        time.Time `json:"startedAt,omitempty"`
 	BootStartedAt    time.Time `json:"bootStartedAt,omitempty"`
@@ -135,11 +147,4 @@ type DeviceAttacher interface {
 // may lack resize and exit semantics (see vm.Term).
 type ConsoleProvider interface {
 	Console(ctx context.Context) (vm.Term, error)
-}
-
-// Shutdown stops a machine gracefully by calling m.Shutdown.
-//
-// Deprecated: call Machine.Shutdown directly.
-func Shutdown(ctx context.Context, m Machine) error {
-	return m.Shutdown(ctx)
 }

@@ -27,7 +27,8 @@ func TestIntegrationBackend(t *testing.T) {
 				Logger: slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 					Level: slog.LevelDebug,
 				})),
-				disableVSock: true,
+				// Nested CI guests have no vhost-vsock device.
+				DisableVSock: true,
 			}, &vm.Spec{
 				CPUs:   1,
 				Memory: 256 * units.Mebibyte,

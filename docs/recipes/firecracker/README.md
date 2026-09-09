@@ -56,9 +56,8 @@ adapt `/init` to switch root.
 
 The rootfs derivation normalizes source ownership to root inside fakeroot,
 fixes modes and timestamps, and checks the resulting `/`, `/lost+found`, and
-`/input` inodes with `debugfs`. Its build and `--rebuild` comparison passed with
-identical output. This verifies the rootfs image's reproducibility; the whole
-guest closure has not undergone a reproducibility comparison.
+`/input` inodes with `debugfs`, so the image builds reproducibly (compare with
+`nix build --rebuild`). The whole guest closure makes no such claim.
 
 The guest loads `virtio_mmio`, `virtio_blk`, `ext4`, `i8042`, and `atkbd`.
 BusyBox modprobe receives i8042 options explicitly, since it does not import
@@ -71,22 +70,20 @@ The manifest uses the common `[machine]`, `[kernel]`, and `[[mounts]]` sections.
 Paths resolve against `working_dir` (default: the launch directory). Firecracker
 does not expand shell variables or Go templates in executable/image paths.
 Virtle marks the first disk as root; disks must already exist and use raw
-format. Firecracker then appends `root=/dev/vda` and `ro` or `rw` according to
-that disk's `read_only` setting. A conflicting command line such as
-`root=/dev/vda1` is currently unsupported; caller parameters are passed to the
-API, but Firecracker extends the effective guest command line. See the
+format. Virtle supplies `console=ttyS0` (for `serial = "print"`) and
+`reboot=k panic=-1` ahead of `kernel.params`; Firecracker then appends
+`root=/dev/vda` and `ro` or `rw` according to that disk's `read_only` setting,
+so a conflicting `root=/dev/vda1` is unsupported. See the
 [Firecracker root-device setup](https://github.com/firecracker-microvm/firecracker/blob/v1.15.1/src/vmm/src/builder.rs#L625-L633).
 No networking, guest control, SSH, file sharing, hotplug, or suspend is enabled.
 
-Virtle creates `.virtle` with mode 0700 and locks the manifest's VM name, shared
-with QEMU. It binds `.virtle/virtle.sock` without removing any existing entry;
-after an unclean host crash a stale control socket must be inspected and removed
-manually before restarting. The API lives in a fresh private `virtle-fc-*`
-directory under `TMPDIR`. Shutdown removes only runtime paths owned by this
-launch. A programmatic backend with no `Spec.Dir` also removes its temporary
-state directory. Persistent lock files remain harmless after the lock is released.
+Virtle creates `.virtle` and locks the manifest's VM name there, shared with
+QEMU, then serves `.virtle/virtle.sock`; a socket left behind by a crashed
+launch is replaced once the lock proves nothing else owns the directory. The
+API socket lives in a fresh private `virtle-fc-*` directory under `TMPDIR`;
+shutdown removes only runtime paths owned by this launch.
 
 For multi-tenant deployment, supply host isolation separately: this backend
 launches Firecracker directly with its default seccomp filters and does not
-configure the Firecracker jailer or cgroups. Full capability limits and exact
-validation results are recorded in [WIP.md](../../../WIP.md).
+configure the Firecracker jailer or cgroups. The supported feature set and its
+limits are documented in [docs/firecracker.md](../../firecracker.md).

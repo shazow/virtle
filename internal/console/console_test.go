@@ -5,16 +5,29 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/shazow/virtle/vm"
 )
 
 const testTimeout = 5 * time.Second
 
 func newTestHub(t *testing.T, output io.Writer) *Hub {
 	t.Helper()
-	hub, err := New(output)
+	return newLoggedHub(t, output, nil)
+}
+
+// newLoggedHub returns a hub whose warnings go to logs (nil discards them).
+func newLoggedHub(t *testing.T, output io.Writer, logs io.Writer) *Hub {
+	t.Helper()
+	var logger *slog.Logger
+	if logs != nil {
+		logger = slog.New(slog.NewTextHandler(logs, nil))
+	}
+	hub, err := New(output, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,16 +120,49 @@ func TestCloseEndsTermsWithEOFAfterPendingOutput(t *testing.T) {
 }
 
 func TestSlowReaderIsDroppedNotTheConsole(t *testing.T) {
-	hub := newTestHub(t, nil)
+	var logs bytes.Buffer
+	hub := newLoggedHub(t, nil, &logs)
 	term := hub.Attach()
 	chunk := bytes.Repeat([]byte("x"), 64<<10)
-	for range pendingLimit/len(chunk) + 1 {
+	for range pendingLimit/len(chunk) + 2 {
 		if _, err := hub.Write(chunk); err != nil {
 			t.Fatalf("console write blocked or failed on a slow reader: %v", err)
 		}
 	}
-	if _, err := io.ReadAll(term); !errors.Is(err, ErrFellBehind) {
-		t.Fatalf("slow reader ended with %v, want ErrFellBehind", err)
+	data, err := io.ReadAll(term)
+	if !errors.Is(err, vm.ErrTermFellBehind) {
+		t.Fatalf("slow reader ended with %v, want vm.ErrTermFellBehind", err)
+	}
+	if len(data) == 0 || len(data) > pendingLimit {
+		t.Fatalf("dropped reader got %d bytes; want the output queued before the drop", len(data))
+	}
+	if _, err := io.WriteString(term, "x"); !errors.Is(err, vm.ErrTermFellBehind) {
+		t.Fatalf("write on a dropped session = %v, want vm.ErrTermFellBehind", err)
+	}
+	// The drop is reported once, on the hub's logger, even though writes
+	// kept coming after it.
+	if n := strings.Count(logs.String(), "level=WARN"); n != 1 || !strings.Contains(logs.String(), "fell behind") {
+		t.Fatalf("logged %d warnings, want one naming the dropped session:\n%s", n, logs.String())
+	}
+	// The console itself is unaffected: a fresh session replays the history
+	// (one long line of x's) and then sees live output.
+	fresh := hub.Attach()
+	defer fresh.Close()
+	if _, err := io.WriteString(hub, "still here\n"); err != nil {
+		t.Fatal(err)
+	}
+	lines := make(chan string, 1)
+	go func() {
+		line, _ := bufio.NewReader(fresh).ReadString('\n')
+		lines <- line
+	}()
+	select {
+	case line := <-lines:
+		if !strings.HasSuffix(line, "still here\n") {
+			t.Fatalf("fresh session read %d bytes ending in %q, want the history then the live line", len(line), line[max(0, len(line)-16):])
+		}
+	case <-time.After(testTimeout):
+		t.Fatal("fresh session got no output after another was dropped")
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"sync"
 
@@ -22,17 +23,16 @@ const (
 	// it printed.
 	historyLimit = 256 << 10
 	// pendingLimit bounds unread output per Term; a reader that falls
-	// further behind is dropped rather than stalling the VMM's console.
+	// further behind is dropped (vm.ErrTermFellBehind) rather than
+	// stalling the VMM's console.
 	pendingLimit = 1 << 20
 )
-
-// ErrFellBehind ends a Term whose reader stopped consuming output.
-var ErrFellBehind = errors.New("console: reader fell behind")
 
 // Hub is one machine's serial console. It is an io.Writer for the VMM's
 // standard output and owns the pipe behind its standard input.
 type Hub struct {
 	output io.Writer
+	logger *slog.Logger
 	input  *os.File // write end of the VMM's stdin pipe
 	stdin  *os.File // read end, handed to the VMM process
 
@@ -43,13 +43,17 @@ type Hub struct {
 }
 
 // New returns a hub that copies console output to output (nil discards it)
-// and to attached terminals.
-func New(output io.Writer) (*Hub, error) {
+// and to attached terminals. Dropped sessions are reported as warnings on
+// logger (nil discards them); pass a logger that names the machine.
+func New(output io.Writer, logger *slog.Logger) (*Hub, error) {
 	stdin, input, err := os.Pipe()
 	if err != nil {
 		return nil, fmt.Errorf("console input pipe: %w", err)
 	}
-	return &Hub{output: output, input: input, stdin: stdin, terms: map[*Term]struct{}{}}, nil
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
+	return &Hub{output: output, logger: logger, input: input, stdin: stdin, terms: map[*Term]struct{}{}}, nil
 }
 
 // Stdin is the file to hand the VMM process as its standard input.
@@ -61,12 +65,13 @@ func (h *Hub) Started() { _ = h.stdin.Close() }
 
 // Write implements io.Writer for the VMM's standard output: the bytes go to
 // the output writer, into the bounded history, and to every attached Term.
+// A Term whose reader fell behind is dropped and reported once.
 func (h *Hub) Write(p []byte) (int, error) {
 	if h.output != nil {
 		_, _ = h.output.Write(p)
 	}
+	var dropped []*Term
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	h.history = append(h.history, p...)
 	if excess := len(h.history) - historyLimit; excess > 0 {
 		h.history = append([]byte(nil), h.history[excess:]...)
@@ -74,7 +79,13 @@ func (h *Hub) Write(p []byte) (int, error) {
 	for t := range h.terms {
 		if !t.push(p) {
 			delete(h.terms, t)
+			dropped = append(dropped, t)
 		}
+	}
+	h.mu.Unlock()
+	for _, t := range dropped {
+		h.logger.Warn("console session dropped: its reader fell behind",
+			"unread_bytes", t.unread(), "limit_bytes", pendingLimit)
 	}
 	return len(p), nil
 }
@@ -139,13 +150,20 @@ func (t *Term) push(p []byte) bool {
 		return false
 	}
 	if len(t.pending)+len(p) > pendingLimit {
-		t.err = ErrFellBehind
+		t.err = fmt.Errorf("console session: %w (%d bytes unread)", vm.ErrTermFellBehind, len(t.pending))
 		t.cond.Broadcast()
 		return false
 	}
 	t.pending = append(t.pending, p...)
 	t.cond.Broadcast()
 	return true
+}
+
+// unread reports the output queued for the reader.
+func (t *Term) unread() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return len(t.pending)
 }
 
 func (t *Term) end(err error) {
@@ -158,7 +176,8 @@ func (t *Term) end(err error) {
 }
 
 // Read returns console output, blocking until some arrives. It returns
-// io.EOF once the machine has exited and the queued output is consumed.
+// io.EOF once the machine has exited and the queued output is consumed, or
+// an error wrapping vm.ErrTermFellBehind when the session was dropped.
 func (t *Term) Read(p []byte) (int, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()

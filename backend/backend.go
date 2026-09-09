@@ -150,6 +150,12 @@ type DeviceAttacher interface {
 // boot still sees the boot log and readiness lines, and its Resize and Wait
 // report errors.ErrUnsupported (see vm.Term). Closing it leaves the machine
 // running.
+//
+// A session must keep reading: one whose reader falls 1 MiB behind the
+// guest is dropped rather than stalling the console. Its Read ends with an
+// error wrapping vm.ErrTermFellBehind after the output already queued, the
+// machine's Logger records a warning, and Console can be called again for
+// a fresh session.
 type ConsoleProvider interface {
 	Console(ctx context.Context) (vm.Term, error)
 }

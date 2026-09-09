@@ -139,6 +139,7 @@ type Term struct {
 	cond    *sync.Cond
 	pending []byte
 	err     error // set once no more output will arrive
+	closed  bool  // set by Close: reads end, writes fail
 }
 
 // push queues output for the reader; it reports false when the reader fell
@@ -176,13 +177,17 @@ func (t *Term) end(err error) {
 }
 
 // Read returns console output, blocking until some arrives. It returns
-// io.EOF once the machine has exited and the queued output is consumed, or
-// an error wrapping vm.ErrTermFellBehind when the session was dropped.
+// io.EOF once the session is closed, or once the machine has exited and the
+// queued output is consumed, and an error wrapping vm.ErrTermFellBehind when
+// the session was dropped.
 func (t *Term) Read(p []byte) (int, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	for len(t.pending) == 0 && t.err == nil {
+	for len(t.pending) == 0 && t.err == nil && !t.closed {
 		t.cond.Wait()
+	}
+	if t.closed {
+		return 0, io.EOF
 	}
 	if len(t.pending) == 0 {
 		return 0, t.err
@@ -192,12 +197,19 @@ func (t *Term) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-// Write sends bytes to the guest's serial input.
+// Write sends bytes to the guest's serial input. It fails, wrapping
+// os.ErrClosed, once the session is closed or the machine has exited, and
+// with the dropping error once the session fell behind.
 func (t *Term) Write(p []byte) (int, error) {
 	t.mu.Lock()
-	err := t.err
+	closed, err := t.closed, t.err
 	t.mu.Unlock()
-	if err != nil && err != io.EOF {
+	switch {
+	case closed:
+		return 0, fmt.Errorf("console session: %w", os.ErrClosed)
+	case errors.Is(err, io.EOF):
+		return 0, fmt.Errorf("console session: the machine exited: %w", os.ErrClosed)
+	case err != nil:
 		return 0, err
 	}
 	n, err := t.hub.input.Write(p)
@@ -207,10 +219,14 @@ func (t *Term) Write(p []byte) (int, error) {
 	return n, nil
 }
 
-// Close detaches the session; the machine keeps running.
+// Close detaches the session; the machine keeps running. Later reads return
+// io.EOF and writes fail.
 func (t *Term) Close() error {
 	t.hub.detach(t)
-	t.end(io.EOF)
+	t.mu.Lock()
+	t.closed = true
+	t.cond.Broadcast()
+	t.mu.Unlock()
 	return nil
 }
 

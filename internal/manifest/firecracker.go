@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"time"
 
@@ -15,12 +16,17 @@ import (
 // the VMM's own limits.
 const (
 	defaultFirecrackerBinary  = "firecracker"
-	defaultFirecrackerCPUs    = 1
 	defaultFirecrackerTimeout = 10 * time.Second
 	// MaxFirecrackerCPUs is the largest vCPU count Firecracker accepts.
 	MaxFirecrackerCPUs      = 32
 	maxFirecrackerMemoryMiB = units.MiB(1 << 20)
 )
+
+// defaultFirecrackerCPUs is the vCPU count for an omitted machine.vcpu: every
+// host CPU, as QEMU derives it, within Firecracker's limit.
+func defaultFirecrackerCPUs() int {
+	return max(1, min(runtime.NumCPU(), MaxFirecrackerCPUs))
+}
 
 // unsupported reports a manifest setting that configures something the
 // Firecracker backend cannot honor, wrapping errors.ErrUnsupported so callers
@@ -182,7 +188,7 @@ func (d Document) firecrackerManifest() (*Manifest, error) {
 		fc.Binary = m.resolvePath(fc.Binary)
 	}
 	if fc.CPUs == 0 {
-		fc.CPUs = defaultFirecrackerCPUs
+		fc.CPUs = defaultFirecrackerCPUs()
 	}
 	if fc.StartupTimeout < 0 || fc.ShutdownTimeout < 0 {
 		return nil, fmt.Errorf("manifest.firecracker timeouts must not be negative")

@@ -54,12 +54,9 @@ func (b *Backend) resolveSpec(spec *vm.Spec, stateDir string) (*imanifest.Manife
 	if stateDir != "" {
 		doc.StateDir = stateDir
 	}
-	cpus := spec.CPUs
-	if cpus == 0 && b.doc == nil {
-		cpus = DefaultCPUs
-	}
-	if cpus != 0 {
-		doc.Machine.VCPU = cpus
+	// A zero CPU count is derived by manifest resolution (every host CPU).
+	if spec.CPUs != 0 {
+		doc.Machine.VCPU = spec.CPUs
 	}
 	memory := spec.Memory
 	if memory == 0 && b.doc == nil {

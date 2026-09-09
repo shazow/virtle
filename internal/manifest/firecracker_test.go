@@ -93,7 +93,7 @@ func TestFirecrackerManifestDefaults(t *testing.T) {
 				Binary:          "firecracker",
 				StartupTimeout:  10 * time.Second,
 				ShutdownTimeout: 10 * time.Second,
-				CPUs:            1,
+				CPUs:            defaultFirecrackerCPUs(),
 				MemoryMiB:       units.MiB(1024),
 				Kernel:          FirecrackerKernel{Path: "/work/vmlinux", Cmdline: "reboot=k panic=-1"},
 				Console:         KernelSerialOff,

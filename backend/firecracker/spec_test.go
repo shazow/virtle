@@ -6,9 +6,11 @@ import (
 	"io"
 	"net/http"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
+	imanifest "github.com/shazow/virtle/internal/manifest"
 	"github.com/shazow/virtle/units"
 	"github.com/shazow/virtle/vm"
 )
@@ -88,7 +90,8 @@ func TestSpecDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	fc := mf.Firecracker
-	if fc.CPUs != DefaultCPUs || fc.MemoryMiB != DefaultMemory.Mebibytes() || fc.Console != "off" || fc.Kernel.Cmdline != "reboot=k panic=-1" {
+	// Like QEMU, a zero CPU count means every host CPU (within the VMM's limit).
+	if fc.CPUs != min(runtime.NumCPU(), imanifest.MaxFirecrackerCPUs) || fc.MemoryMiB != DefaultMemory.Mebibytes() || fc.Console != "off" || fc.Kernel.Cmdline != "reboot=k panic=-1" {
 		t.Fatalf("defaults: %+v", fc)
 	}
 	if got := mf.ResolvedLockPath(); got != "/state/virtle.lock" {

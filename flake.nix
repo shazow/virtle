@@ -193,6 +193,13 @@
           );
         }
         // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
+          # Nothing boots the userspace-capable fixture yet; generating its
+          # kernel configuration keeps the Kconfig fragment valid without a
+          # second kernel build.
+          e2e-fast-userspace-config = pkgs.runCommand "virtle-fast-userspace-config" { } ''
+            test -s ${self.packages.${system}.e2e-fast-userspace-fixture.kernel.configfile}
+            touch $out
+          '';
           e2e-fast =
             pkgs.runCommand "virtle-fast-e2e"
               {
@@ -224,7 +231,11 @@
                 export VIRTLE_E2E_FIXTURE=${self.packages.${system}.e2e-fast-fixture}
                 export VIRTLE_E2E_QEMU=${pkgs.qemu_kvm}/bin/qemu-system-x86_64
                 export VIRTLE_E2E_FIRECRACKER=${pkgs.firecracker}/bin/firecracker
-                timeout --kill-after=30 600 ${e2eTest}/bin/e2e.test -test.v
+                # A scenario that cannot run fails the check instead of skipping.
+                export VIRTLE_E2E_REQUIRED=1
+                # Go's own timeout fires first, so a hang ends with a goroutine
+                # dump rather than the outer SIGTERM.
+                timeout --kill-after=30 600 ${e2eTest}/bin/e2e.test -test.v -test.timeout 9m
                 touch $out
               '';
           # Firecracker requires real KVM; no TCG fallback and no skip-success.

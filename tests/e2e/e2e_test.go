@@ -22,6 +22,7 @@ import (
 	"github.com/shazow/virtle/backend/backendtest"
 	"github.com/shazow/virtle/backend/firecracker"
 	"github.com/shazow/virtle/backend/qemu"
+	"github.com/shazow/virtle/manifest"
 	"github.com/shazow/virtle/units"
 	"github.com/shazow/virtle/vm"
 )
@@ -53,14 +54,25 @@ func loadFixture(t *testing.T) fixture {
 		firecracker: os.Getenv("VIRTLE_E2E_FIRECRACKER"),
 	}
 	if f.dir == "" || f.qemu == "" || f.firecracker == "" {
-		t.Skip("requires VIRTLE_E2E_FIXTURE, VIRTLE_E2E_QEMU and VIRTLE_E2E_FIRECRACKER (Linux x86_64 with KVM)")
+		skipOrFail(t, "requires VIRTLE_E2E_FIXTURE, VIRTLE_E2E_QEMU and VIRTLE_E2E_FIRECRACKER (Linux x86_64 with KVM)")
 	}
-	for _, name := range []string{"vmlinux", "bzImage", "initrd"} {
+	for _, name := range []string{"vmlinux", "bzImage", "initrd", "rootfs.ext4"} {
 		if _, err := os.Stat(filepath.Join(f.dir, name)); err != nil {
 			t.Fatalf("fixture: %v", err)
 		}
 	}
 	return f
+}
+
+// skipOrFail skips the test unless VIRTLE_E2E_REQUIRED is set, as it is in
+// the e2e-api flake check: there a scenario that cannot run must fail the
+// check rather than let it pass without booting anything.
+func skipOrFail(t *testing.T, reason string) {
+	t.Helper()
+	if os.Getenv("VIRTLE_E2E_REQUIRED") != "" {
+		t.Fatalf("%s (VIRTLE_E2E_REQUIRED forbids skipping)", reason)
+	}
+	t.Skip(reason)
 }
 
 func (f fixture) path(name string) string { return filepath.Join(f.dir, name) }
@@ -172,15 +184,22 @@ func waitForLine(ctx context.Context, term io.Reader, want string, m backend.Mac
 // Shutdown right after Start) meet a booted guest. Readiness is read from
 // Machine.Console, which replays what the guest printed before the attach,
 // so it cannot be missed. Each Start gets its own backend value because the
-// diagnostic ConsoleOutput writer is per-backend.
+// diagnostic ConsoleOutput writer is per-backend; a backend supplied by the
+// caller (one loaded from a manifest) is used as is, and its console is
+// recorded from the Term instead.
 type readyBackend struct {
 	guest   guest
+	backend backend.Backend // when set, started instead of guest.newBackend
 	console *consoleLog
 }
 
 func (b *readyBackend) Start(ctx context.Context, spec *vm.Spec) (backend.Machine, error) {
 	log := &consoleLog{}
-	m, err := b.guest.newBackend(log).Start(ctx, spec)
+	inner := b.backend
+	if inner == nil {
+		inner = b.guest.newBackend(log)
+	}
+	m, err := inner.Start(ctx, spec)
 	if err != nil {
 		return nil, err
 	}
@@ -195,7 +214,11 @@ func (b *readyBackend) Start(ctx context.Context, spec *vm.Spec) (backend.Machin
 		return nil, err
 	}
 	defer term.Close()
-	if err := waitForLine(ctx, term, readyLine, m, readyTimeout); err != nil {
+	var console io.Reader = term
+	if b.backend != nil {
+		console = io.TeeReader(term, log)
+	}
+	if err := waitForLine(ctx, console, readyLine, m, readyTimeout); err != nil {
 		_ = m.Kill()
 		return nil, fmt.Errorf("%w\n--- console ---\n%s", err, log.String())
 	}
@@ -271,6 +294,58 @@ func TestRootDisk(t *testing.T) {
 	}
 }
 
+// manifest renders the manifest virtle launch would use for backend name:
+// the fixture's CLI settings with the raw root image mounted at "/" instead
+// of the initrd, working in dir.
+func (f fixture) manifest(name, dir string) string {
+	params := strings.Fields(strings.Replace(fixtureCmdline, "rdinit=/init", "init=/init", 1))
+	for i, p := range params {
+		params[i] = fmt.Sprintf("%q", p)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "backend = %q\nworking_dir = %q\nnetworks = []\n[machine]\nvcpu = 1\nmemory = 128\n", name, dir)
+	kernel := f.path("vmlinux")
+	if name == "qemu" {
+		kernel = f.path("bzImage")
+		b.WriteString("type = \"microvm\"\nkvm = true\n")
+	}
+	fmt.Fprintf(&b, "[kernel]\npath = %q\nserial = \"print\"\nparams = [%s]\n", kernel, strings.Join(params, ", "))
+	fmt.Fprintf(&b, "[[mounts]]\ntype = \"image\"\nsource = %q\ntarget = \"/\"\nread_only = true\n", f.path("rootfs.ext4"))
+	switch name {
+	case "qemu":
+		fmt.Fprintf(&b, "[qemu]\nexec = [%q]\n", f.qemu)
+		b.WriteString(`machine_options = { accel = "kvm", acpi = "off", pcie = "off", pit = "off", pic = "off", rtc = "off", usb = "off", x-option-roms = "off" }` + "\n[vsock]\nenabled = false\n")
+	case "firecracker":
+		fmt.Fprintf(&b, "[firecracker]\nbinary = %q\n", f.firecracker)
+	}
+	return b.String()
+}
+
+// TestManifestRootDisk boots the raw root image the way virtle launch does:
+// the manifest is lowered to a Spec and a Backend by the public manifest
+// package, and the backend trusts that Spec at Start. It guards the manifest
+// path of the root-device rule, which the Spec-only tests cannot see.
+func TestManifestRootDisk(t *testing.T) {
+	f := loadFixture(t)
+	for _, g := range f.guests() {
+		t.Run(g.name, func(t *testing.T) {
+			spec, b, err := manifest.Load(strings.NewReader(f.manifest(g.name, t.TempDir())))
+			if err != nil {
+				t.Fatalf("load manifest: %v", err)
+			}
+			if len(spec.Disks) != 1 || spec.Disks[0].GuestPath != "/" {
+				t.Fatalf("Disks = %+v, want the root image at /", spec.Disks)
+			}
+			ready := &readyBackend{guest: g, backend: b}
+			m, err := ready.Start(context.Background(), spec)
+			if err != nil {
+				t.Fatalf("start %s from its manifest: %v", g.name, err)
+			}
+			t.Cleanup(func() { _ = m.Kill() })
+		})
+	}
+}
+
 // TestScratchDisk attaches a disk that does not exist yet: virtle creates it
 // as an empty ext4 image on both backends, the guest leaves its result on
 // it, and the host reads that back after the machine exits.
@@ -278,7 +353,7 @@ func TestScratchDisk(t *testing.T) {
 	f := loadFixture(t)
 	debugfs, err := exec.LookPath("debugfs")
 	if err != nil {
-		t.Skip("debugfs (e2fsprogs) is required to read the image back")
+		skipOrFail(t, "debugfs (e2fsprogs) is required to read the image back")
 	}
 	for _, g := range f.guests() {
 		t.Run(g.name, func(t *testing.T) {

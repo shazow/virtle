@@ -52,7 +52,9 @@ Two package outputs keep capability scope explicit:
   `NET` defaults. These common primitives support Go, libuv and similar Nix
   closures without adopting a distribution kernel's PCI, ACPI, modules, device
   drivers, filesystems, cgroups or namespaces. It reuses the same initramfs and
-  manifests; the minimal profile remains the benchmark baseline.
+  manifests; the minimal profile remains the benchmark baseline. No check boots
+  it yet: `nix flake check` only generates its kernel configuration
+  (`e2e-fast-userspace-config`), so the fragment stays valid.
 
 Both use the **identical initramfs**, 1 vCPU and 128 MiB RAM. The initramfs is
 the root filesystem: a static BusyBox, small init scripts and an input file

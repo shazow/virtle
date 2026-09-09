@@ -115,7 +115,12 @@ jobs:
       - name: Run integration tests
         run: nix flake check
 
-      # The KVM checks boot real VMMs; keep their test output visible in the
-      # job so a passing run shows which scenarios ran and how long they took.
-      - name: Show Go API end-to-end log
-        run: nix log .#checks.x86_64-linux.e2e-api
+      # The KVM checks boot real VMMs; keep their output visible in the job
+      # whether they passed or failed (Nix itself prints only a short tail on
+      # failure), so the run shows which scenarios ran and how long they took.
+      - name: Show KVM check logs
+        if: ${{ !cancelled() }}
+        run: |
+          for check in e2e-api e2e-fast firecracker; do
+            nix log ".#checks.x86_64-linux.$check" || true
+          done

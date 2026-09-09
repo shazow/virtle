@@ -540,6 +540,9 @@ def main():
         ).strip()
         for index, entry in enumerate(schedule(args.pairs, args.warmup_pairs)):
             directory = args.output / f"{index:03d}-{entry['backend']}"
+            # Announce each trial before it starts so a stalled run shows
+            # which backend and phase it stopped in.
+            print(f"--- trial {index:03d}: {entry['backend']} launch", file=sys.stderr, flush=True)
             try:
                 row = trial(
                     args.virtle,

@@ -46,8 +46,27 @@ Firecracker raw-disk recipe checks remain separate.
 Linux source. Serial console, KVM guest support, virtio MMIO/block/console,
 ext4, and the i8042 keyboard shutdown path are built in. Modules, PCI and ACPI
 are disabled. Gzip replaces tinyconfig's XZ kernel compression to reduce
-QEMU's decompression cost. The same kernel build supplies ELF `vmlinux` to Firecracker and
-`bzImage` to QEMU; the formats differ because their loaders differ.
+QEMU's decompression cost. The same kernel build supplies ELF `vmlinux` to
+Firecracker and `bzImage` to QEMU; the formats differ because their loaders
+differ.
+
+Two package outputs keep capability scope explicit:
+
+- `e2e-fast-fixture` is the frozen minimal backend benchmark.
+- `e2e-fast-userspace-fixture` adds built-in eventfd, inotify, file locking and
+  Unix-domain sockets (`NET` plus `UNIX`). It explicitly disables unrelated
+  optional `NET` defaults such as wireless, network filesystems and ethtool
+  netlink support. These common primitives support Go, libuv and similar Nix
+  closures without adopting a distribution kernel's PCI, ACPI, modules, device
+  drivers, filesystems, cgroups or namespaces.
+
+The userspace profile reuses the same initramfs, manifests, 1 vCPU and 128 MiB
+RAM. In a counterbalanced 10-trial-per-variant measurement on the example host,
+it increased `bzImage` from 1.68 to 1.93 MiB and `vmlinux` from 12.26 to 12.44
+MiB. Median readiness was effectively unchanged on Firecracker (120.0 versus
+119.9 ms) and changed from 296.4 to 299.9 ms on QEMU. These measurements are
+directional and are not performance thresholds. The minimal profile remains
+the default for backend comparisons.
 
 Both use the **identical initramfs**, 1 vCPU and 128 MiB RAM. The initramfs is
 the root filesystem: a static BusyBox, small init scripts and an input file
@@ -151,10 +170,18 @@ when reusing this runner. Tests needing disks or guest agents can reuse the
 kernel and grow their own initramfs/manifests beside this fixture, leaving the
 baseline benchmark stable. Kernel changes are centralized in `kernel.nix`.
 
+Use the userspace-capable kernel without changing the benchmark baseline:
+
+```sh
+nix build path:.#e2e-fast-userspace-fixture -o result-fast-userspace
+nix run path:. -- --manifest "$PWD/result-fast-userspace/qemu.toml" launch
+```
+
 ```sh
 python3 -m unittest discover -s tests/e2e -v
 nix build path:.#checks.x86_64-linux.e2e-runner --no-link -L
 nix build path:.#e2e-fast-fixture.initrd --no-link --rebuild -L
+nix build path:.#checks.x86_64-linux.e2e-fast-userspace --no-link -L
 nix fmt -- flake.nix tests/e2e/fixtures/fast/default.nix tests/e2e/fixtures/fast/kernel.nix
 umask 022
 go test -race -shuffle=on ./...

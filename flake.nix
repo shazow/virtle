@@ -37,6 +37,10 @@
         }
         // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
           e2e-fast-fixture = import ./tests/e2e/fixtures/fast { inherit pkgs; };
+          e2e-fast-userspace-fixture = import ./tests/e2e/fixtures/fast {
+            inherit pkgs;
+            userspace = true;
+          };
           benchmark-backends = pkgs.writeShellApplication {
             name = "virtle-benchmark-backends";
             runtimeInputs = [ pkgs.python3 ];
@@ -190,6 +194,30 @@
                 python ${./tests/e2e/run.py} \
                   --virtle ${self.packages.${system}.virtle}/bin/virtle \
                   --fixture ${self.packages.${system}.e2e-fast-fixture} \
+                  --pairs 2 --warmup-pairs 0 \
+                  --output "$output/results"
+                touch $out
+              '';
+          e2e-fast-userspace =
+            pkgs.runCommand "virtle-fast-userspace-e2e"
+              {
+                requiredSystemFeatures = [ "kvm" ];
+                nativeBuildInputs = [ pkgs.python3 ];
+              }
+              ''
+                fixture=${self.packages.${system}.e2e-fast-userspace-fixture}
+                grep -qx 'CONFIG_EVENTFD=y' "$fixture/kernel.config"
+                grep -qx 'CONFIG_INOTIFY_USER=y' "$fixture/kernel.config"
+                grep -qx 'CONFIG_FILE_LOCKING=y' "$fixture/kernel.config"
+                grep -qx 'CONFIG_NET=y' "$fixture/kernel.config"
+                grep -qx 'CONFIG_UNIX=y' "$fixture/kernel.config"
+                for option in AF_UNIX_OOB BQL ETHTOOL_NETLINK NETWORK_FILESYSTEMS NET_FLOW_LIMIT RFS_ACCEL WIRELESS; do
+                  grep -qx "# CONFIG_$option is not set" "$fixture/kernel.config"
+                done
+                output=$(mktemp -d)
+                python ${./tests/e2e/run.py} \
+                  --virtle ${self.packages.${system}.virtle}/bin/virtle \
+                  --fixture "$fixture" \
                   --pairs 2 --warmup-pairs 0 \
                   --output "$output/results"
                 touch $out

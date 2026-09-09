@@ -1,9 +1,10 @@
 {
   pkgs,
   workload ? ./ready,
+  userspace ? false,
 }:
 let
-  kernel = import ./kernel.nix { inherit pkgs; };
+  kernel = import ./kernel.nix { inherit pkgs userspace; };
   busybox = pkgs.pkgsStatic.busybox;
   initrd =
     pkgs.runCommand "virtle-fast-initrd"
@@ -61,6 +62,7 @@ let
   '';
   metadata = pkgs.writeText "virtle-fast-fixture.json" (
     builtins.toJSON {
+      kernel_profile = if userspace then "userspace" else "minimal";
       kernel_version = kernel.version;
       busybox_version = busybox.version;
       firecracker_version = pkgs.firecracker.version;

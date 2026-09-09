@@ -361,9 +361,6 @@ func memoryBackend(host HostInput, hasVirtioFS bool) string {
 	return "default"
 }
 
-// kernelParams assembles the kernel command line: console parameters for
-// the resolved serial mode, virtle's fixed reboot/panic policy, then the
-// manifest's own parameters.
 // kernelParams assembles the guest command line: console parameters for the
 // serial mode, virtle's fixed reboot/panic policy, the root device (see
 // rootDevice), then the manifest's own parameters, which therefore win.
@@ -387,7 +384,9 @@ func kernelParams(host HostInput, serialMode string, root []string, extra []stri
 // target is "/". virtle passes the kernel's root= for it on every backend
 // (virtio-blk devices enumerate as /dev/vda, /dev/vdb, ... in mount order),
 // so one Spec boots the same way under QEMU and Firecracker. It returns the
-// mount's index, or -1, and the kernel parameters that select it.
+// mount's index, or -1, and the kernel parameters that select it. Errors
+// name image mounts by their position among the images
+// (manifest.mounts.image[i]), as the volume validation does.
 func rootDevice(mounts []ImageMountInput) (int, []string, error) {
 	root := -1
 	for i, mount := range mounts {
@@ -395,18 +394,18 @@ func rootDevice(mounts []ImageMountInput) (int, []string, error) {
 		case "":
 		case "/":
 			if root >= 0 {
-				return 0, nil, fmt.Errorf("manifest.mounts[%d].target: mounts[%d] is already the root device", i, root)
+				return 0, nil, fmt.Errorf("manifest.mounts.image[%d].target: mounts.image[%d] is already the root device", i, root)
 			}
 			root = i
 		default:
-			return 0, nil, fmt.Errorf("manifest.mounts[%d].target %q: only \"/\" (the root device) is supported for images at boot", i, mount.Target)
+			return 0, nil, fmt.Errorf("manifest.mounts.image[%d].target %q: only \"/\" (the root device) is supported for images at boot", i, mount.Target)
 		}
 	}
 	if root < 0 {
 		return -1, nil, nil
 	}
 	if root >= 26 {
-		return 0, nil, fmt.Errorf("manifest.mounts[%d].target: the root device must be among the first 26 images", root)
+		return 0, nil, fmt.Errorf("manifest.mounts.image[%d].target: the root device must be among the first 26 images", root)
 	}
 	access := "rw"
 	if mounts[root].ReadOnly {
@@ -684,6 +683,11 @@ func (m *Manifest) ResolveHotplugMount(entry MountEntry) (HotplugDevice, error) 
 }
 
 func (m *Manifest) resolveImageHotplug(entry ImageMountInput) (HotplugDevice, error) {
+	if entry.Target != "" {
+		// Only a boot-time image can be the root device; a hotplugged one has
+		// no guest mount point without a guest agent.
+		return HotplugDevice{}, fmt.Errorf("target %q is not supported for hotplugged images", entry.Target)
+	}
 	// The image serial doubles as the hotplug id and may itself be a template.
 	serial := stringValue(entry.Image.Serial)
 	if serial == "" {

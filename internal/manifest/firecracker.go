@@ -113,8 +113,8 @@ func unconfigured[T any](section T, baselines ...T) bool {
 // rejected rather than silently dropped, so a QEMU manifest switched to
 // Firecracker fails loudly instead of losing behavior. Values equal to what
 // virtle itself defaults QEMU-only sections to (the user network, the ssh
-// command) never count as configuration, so a document that already went
-// through DocumentWithDefaults resolves like the raw one.
+// command) never count as configuration, so a decoded document that already
+// went through DocumentWithDefaults resolves like the raw one.
 func (d Document) firecrackerManifest() (*Manifest, error) {
 	seeded, defaults := seededDocument(), DefaultDocument()
 	switch {

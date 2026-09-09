@@ -122,7 +122,9 @@ kvm = true  # Default: Enabled on Linux when supported
 [kernel]
 # virtle cannot infer the guest kernel/initrd: these are build artifacts from
 # the surrounding system. They must be explicit so launch is decoupled from Nix
-# evaluation and can also work with hand-written manifests.
+# evaluation and can also work with hand-written manifests. The initrd is
+# optional when an image mount with target = "/" (or a root= parameter) names
+# the root device.
 path = "/run/booted-system/kernel"
 initrd_path = "/run/booted-system/initrd"
 
@@ -194,6 +196,10 @@ type = "image"
 # starts.
 source = ".virtle/root.img"
 read_only = false  # Default: attach writable
+# target = "/" makes this image the root device on every backend: virtle passes
+# root=/dev/vdX (in image-mount order) and ro or rw for it, so a kernel can boot
+# from it without an initrd. Other targets are not supported for images at boot.
+# target = "/"  # Default: unset (a data disk)
 
 # Auto-creation lets a manifest describe persistent storage without a separate
 # provisioning step. The size and filesystem matter because virtle can only

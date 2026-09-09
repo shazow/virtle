@@ -93,10 +93,11 @@ func specFromDocument(doc imanifest.Document) (*vm.Spec, error) {
 	}
 	for _, mount := range doc.Mounts.Image() {
 		spec.Disks = append(spec.Disks, vm.Disk{
-			ReadOnly: mount.ReadOnly,
-			Path:     mount.SourcePath,
-			Format:   mount.Image.Format,
-			Size:     mount.Image.Size.Bytes(),
+			ReadOnly:  mount.ReadOnly,
+			Path:      mount.SourcePath,
+			Format:    mount.Image.Format,
+			Size:      mount.Image.Size.Bytes(),
+			GuestPath: mount.Target, // "/" names the root device
 		})
 	}
 	for _, network := range doc.Networks {

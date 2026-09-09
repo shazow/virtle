@@ -7,7 +7,7 @@ const (
 
 // DefaultDocument returns the manifest input defaults that virtle assumes when
 // optional fields are omitted. Required fields without defaults, such as
-// kernel.path and kernel.initrd_path, are intentionally left unset.
+// kernel.path, are intentionally left unset.
 func DefaultDocument() Document {
 	doc := Document{
 		Graphics: &GraphicsInput{

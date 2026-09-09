@@ -50,6 +50,21 @@ params = ["quiet"]`+mounts)
 			t.Fatalf("disks = %+v, want only the second marked root", disks)
 		}
 	})
+	t.Run("writable root", func(t *testing.T) {
+		doc := decodeFirecracker(t, `[kernel]
+path = "vmlinux"
+[[mounts]]
+type = "image"
+source = "root.img"
+target = "/"`)
+		m, err := doc.Manifest()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := m.Firecracker.Kernel.Cmdline; !strings.Contains(got, "root=/dev/vda rw") {
+			t.Fatalf("cmdline = %q, want root=/dev/vda rw for a writable root image", got)
+		}
+	})
 	t.Run("no root device", func(t *testing.T) {
 		doc := decodeFirecracker(t, `[kernel]
 path = "vmlinux"

@@ -57,7 +57,15 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (result 
 	// files are provisioned.
 	var writeBackOnExit atomic.Bool
 	socketCleanupReached := false
-	cleanupRuntime := func() error { return runtimeLock.Cleanup() }
+	cleanupRuntime := func() error {
+		err := runtimeLock.Cleanup()
+		if plan.Options.RemoveStateDir {
+			// The caller created this state directory for this launch alone;
+			// nothing else keeps sockets, locks, or saved state in it.
+			err = errors.Join(err, os.RemoveAll(plan.Manifest.ResolvedPersistenceStateDir()))
+		}
+		return err
+	}
 	defer func() {
 		if err == nil {
 			return

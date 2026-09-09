@@ -2,9 +2,11 @@ package qemu
 
 import (
 	"bytes"
+	"errors"
 	"log/slog"
 	"maps"
 	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -189,6 +191,42 @@ func TestSpecDocumentAcceleration(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A Spec without Dir works in the process working directory, as for
+// exec.Cmd.Dir, while its runtime state goes to the directory Start
+// created for it alone.
+func TestResolveSpecWithoutDirUsesProcessWorkingDirectory(t *testing.T) {
+	t.Chdir(t.TempDir())
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := t.TempDir()
+	mf, err := (&Backend{}).resolveSpec(&vm.Spec{Kernel: vm.Kernel{Path: "vmlinuz", Initrd: "initrd.img"}}, state, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatalf("resolveSpec: %v", err)
+	}
+	if got := mf.Paths.WorkingDir; got != cwd {
+		t.Errorf("working dir = %q, want the process working directory %q", got, cwd)
+	}
+	if got := mf.ResolvedPersistenceStateDir(); got != state {
+		t.Errorf("state dir = %q, want %q", got, state)
+	}
+	if got := mf.ResolvedLockPath(); filepath.Dir(got) != state {
+		t.Errorf("lock path = %q, want it under the state directory %q", got, state)
+	}
+}
+
+func TestSuspendAndResumeRequireDir(t *testing.T) {
+	err := (&Machine{ephemeralState: true}).Suspend(t.Context())
+	if !errors.Is(err, errors.ErrUnsupported) || !strings.Contains(err.Error(), "Dir") {
+		t.Errorf("Suspend without Dir = %v, want ErrUnsupported naming vm.Spec.Dir", err)
+	}
+	_, err = (&Backend{}).Resume(t.Context(), &vm.Spec{Kernel: vm.Kernel{Path: "vmlinuz", Initrd: "initrd.img"}})
+	if err == nil || !strings.Contains(err.Error(), "Dir") {
+		t.Errorf("Resume without Dir = %v, want an error naming vm.Spec.Dir", err)
 	}
 }
 

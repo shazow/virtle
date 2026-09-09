@@ -15,14 +15,22 @@ import (
 // no live resources and is reusable across Start and Resume calls, with
 // one caveat: Files content readers are consumed by Start (see File).
 type Spec struct {
-	CPUs   int         // zero selects the backend's default
+	CPUs   int         // zero selects the host CPU count (within the backend's limit)
 	Memory units.Bytes // zero selects the backend's default (e.g. qemu.DefaultMemory)
 	Kernel Kernel      // direct kernel boot (microVM style); zero value: none
 	Shares []Share     // host dirs shared into the guest (virtio-fs or similar)
 	Disks  []Disk      // block devices / volume images
 	Ports  []Forward   // host<->guest port forwards
 	Files  []File      // small files placed in the guest before workload start
-	Dir    string      // host working/state directory; default: derived tmp
+
+	// Dir is the host working directory: relative Kernel, Disk, and Share
+	// paths resolve against it, and the machine's runtime state (lock,
+	// sockets, suspend state, created volume images) lives in its .virtle
+	// subdirectory, as for a manifest's working_dir. Empty means the process
+	// working directory, as for exec.Cmd.Dir, with runtime state in a private
+	// temporary directory that is removed when the machine exits; set Dir to
+	// keep state across runs, which Suspend and Resume require.
+	Dir string
 }
 
 // Kernel configures direct kernel boot (microVM style).

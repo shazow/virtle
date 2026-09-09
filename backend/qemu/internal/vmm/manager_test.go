@@ -546,6 +546,46 @@ func TestManagerLaunchRemovesCleanupPathAfterQMPStartupFailure(t *testing.T) {
 	}
 }
 
+// TestManagerLaunchRemovesEphemeralStateDir covers a Spec without Dir: the
+// state directory the backend created for this launch alone goes away with
+// the runtime lock, on the failure path here and on shutdown alike.
+func TestManagerLaunchRemovesEphemeralStateDir(t *testing.T) {
+	for _, remove := range []bool{true, false} {
+		t.Run(fmt.Sprintf("remove=%v", remove), func(t *testing.T) {
+			tmpDir := t.TempDir()
+			state := filepath.Join(tmpDir, "state")
+			cfg := validManifest(tmpDir)
+			cfg.Persistence.StateDir = state
+			cfg.Paths.LockPath = filepath.Join(state, "virtle.lock")
+			cfg.Paths.RuntimeDir = manifest.RuntimeDir{Mode: manifest.RuntimeDirPath, Path: state}
+			cfg.Volumes[0].AutoCreate = false
+			cfg.QEMU.Devices.VirtioFS = nil
+			cfg.Run = []manifest.Run{{Exec: []string{"/bin/proxy"}}}
+
+			runner := &launchRunner{startErrors: map[string]error{"proxy": errors.New("proxy start failed")}}
+			var logOutput bytes.Buffer
+			manager := &manager{
+				locker:        &fileLocker{},
+				runner:        runner,
+				socketWaiter:  &fakeSocketWaiter{},
+				logger:        debugTestLogger(&logOutput),
+				shutdownDelay: 10 * time.Millisecond,
+			}
+			err := manager.launchWithOptions(context.Background(), cfg, launch.Options{Resume: ResumeModeNo, RemoveStateDir: remove})
+			if err == nil || !strings.Contains(err.Error(), "proxy start failed") {
+				t.Fatalf("expected run start error, got %v", err)
+			}
+			_, statErr := os.Stat(state)
+			if remove && !os.IsNotExist(statErr) {
+				t.Fatalf("ephemeral state directory survived the launch: %v", statErr)
+			}
+			if !remove && statErr != nil {
+				t.Fatalf("durable state directory was removed: %v", statErr)
+			}
+		})
+	}
+}
+
 func TestCreateVolumeImageCreatesNativeExt4(t *testing.T) {
 	account, err := user.Current()
 	if err != nil {

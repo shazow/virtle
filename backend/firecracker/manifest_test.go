@@ -27,6 +27,9 @@ type="image"
 source="original"
 target="/"
 read_only=true
+image.label="data"
+image.create=true
+image.size=256
 `), "")
 	if err != nil {
 		t.Fatal(err)
@@ -46,6 +49,12 @@ read_only=true
 	}
 	if mf.ResolvedPersistenceStateDir() != "/override/state" || len(fc.Disks) != 1 || fc.Disks[0].Path != "/override/replacement" || !fc.Disks[0].ReadOnly {
 		t.Fatalf("manifest %+v, disks %+v", mf, fc.Disks)
+	}
+	// The Spec disk overlays the manifest's mount by position: settings the
+	// Spec cannot express (image.label) survive, while the Spec's zero Size
+	// withdraws the manifest's create request, as on QEMU.
+	if fc.Disks[0].Label != "data" || fc.Disks[0].Create {
+		t.Fatalf("disk overlay lost manifest settings: %+v", fc.Disks[0])
 	}
 	spec.Disks = nil
 	mf, err = b.resolveSpec(spec, "")

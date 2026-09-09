@@ -1,7 +1,8 @@
 // Package firecracker implements a virtle backend that launches microVMs with
-// Firecracker. It boots a kernel (with an optional initrd) and existing raw
-// disk images, prints the guest serial console on request, and serves the
-// same lifecycle and status contract as backend/qemu.
+// Firecracker. It boots a kernel (with an optional initrd) and raw disk
+// images (creating missing ones from vm.Disk.Size), prints the guest serial
+// console on request or serves it as a vm.Term, and offers the same lifecycle
+// and status contract as backend/qemu.
 //
 // Firecracker runs only on Linux hosts (amd64 or arm64) with access to
 // /dev/kvm; there is no software-emulation fallback. Guest kernels must match

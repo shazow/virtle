@@ -39,6 +39,8 @@ compact before/after examples.
   an error wrapping `errors.ErrUnsupported`.
 - `vm.Disk{GuestPath: "/"}` names the root device on both backends (virtle
   passes `root=` for it); other guest paths still need a guest agent.
+- `vm.Disk.Size` (manifest `image.create` + `image.size`) creates a missing
+  raw ext4 image on Firecracker too, with QEMU's 256 MiB minimum.
 - `vm.Disk.ReadOnly` is honored by both backends and by QEMU hotplug.
   **Breaking:** a `vm.Disk` that replaces a manifest disk must now set
   `ReadOnly: true` itself to keep a read-only mount:

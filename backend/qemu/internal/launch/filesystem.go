@@ -5,14 +5,12 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"os/user"
 	"path/filepath"
 	"strconv"
 	"syscall"
 
-	backendfile "github.com/diskfs/go-diskfs/backend/file"
-	"github.com/diskfs/go-diskfs/filesystem/ext4"
+	"github.com/shazow/virtle/internal/diskimage"
 	"github.com/shazow/virtle/internal/manifest"
 )
 
@@ -138,55 +136,12 @@ func lookupUserIDs(name string) (int, int, error) {
 // CreateVolumeImage creates a volume image and optionally assigns the new file
 // to the host account configured for privilege-dropped QEMU.
 func CreateVolumeImage(volume manifest.Volume, runAsUser string) error {
-	sizeBytes := volume.Size.Bytes().Int64()
-	file, err := createPrivateFile(volume.ImagePath, runAsUser)
-	if err != nil {
-		return fmt.Errorf("create volume image %q: %w", volume.ImagePath, err)
-	}
-
-	created := false
-	defer func() {
-		if !created {
-			_ = os.Remove(volume.ImagePath)
-		}
-	}()
-
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("close volume image %q: %w", volume.ImagePath, err)
-	}
-
-	if chattrPath, lookErr := exec.LookPath("chattr"); lookErr == nil {
-		cmd := exec.Command(chattrPath, "+C", volume.ImagePath)
-		_ = cmd.Run()
-	}
-
-	if err := os.Truncate(volume.ImagePath, sizeBytes); err != nil {
-		return fmt.Errorf("truncate volume image %q: %w", volume.ImagePath, err)
-	}
-
-	image, err := backendfile.OpenFromPath(volume.ImagePath, false)
-	if err != nil {
-		return fmt.Errorf("open volume image %q: %w", volume.ImagePath, err)
-	}
-	defer image.Close()
-
-	params := &ext4.Params{}
-	if volume.Label != "" {
-		params.VolumeName = volume.Label
-	}
-	params.SectorsPerBlock = 8
-	fs, err := ext4.Create(image, sizeBytes, 0, int64(ext4.SectorSize512), params)
-	if err != nil {
-		return fmt.Errorf("format ext4 volume image %q: %w", volume.ImagePath, err)
-	}
-	if volume.Label == "" {
-		if err := fs.SetLabel(""); err != nil {
-			return fmt.Errorf("clear default ext4 volume label for %q: %w", volume.ImagePath, err)
-		}
-	}
-
-	created = true
-	return nil
+	return diskimage.Create(diskimage.Image{
+		Path:  volume.ImagePath,
+		Size:  volume.Size.Bytes().Int64(),
+		Label: volume.Label,
+		Owner: runAsUser,
+	})
 }
 
 var ErrStaleSocket = errors.New("stale socket")

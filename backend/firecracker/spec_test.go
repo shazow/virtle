@@ -68,7 +68,11 @@ func TestSpecValidation(t *testing.T) {
 		{"file", "unsupported", func(s *vm.Spec) { s.Files = []vm.File{{GuestPath: "/file", Content: strings.NewReader("x")}} }},
 		{"share", "unsupported", func(s *vm.Spec) { s.Shares = []vm.Share{{HostPath: "/work"}} }},
 		{"port", "unsupported", func(s *vm.Spec) { s.Ports = []vm.Forward{{HostAddr: ":80"}} }},
-		{"disk size", "unsupported", func(s *vm.Spec) { s.Disks = []vm.Disk{{Path: "disk", Size: 256 * units.Mebibyte}} }},
+		{"disk size", "MiB-aligned", func(s *vm.Spec) { s.Disks = []vm.Disk{{Path: "disk", Size: 256*units.Mebibyte + 1}} }},
+		{"disk too small to create", "at least", func(s *vm.Spec) {
+			s.Kernel.Initrd = "initrd"
+			s.Disks = []vm.Disk{{Path: "disk", Size: 8 * units.Mebibyte}}
+		}},
 		{"disk guest path", "unsupported", func(s *vm.Spec) { s.Disks = []vm.Disk{{Path: "disk", GuestPath: "/mnt"}} }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

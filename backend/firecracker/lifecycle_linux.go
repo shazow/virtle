@@ -16,6 +16,7 @@ import (
 
 	"github.com/shazow/virtle/backend"
 	"github.com/shazow/virtle/internal/control"
+	"github.com/shazow/virtle/internal/diskimage"
 	"github.com/shazow/virtle/internal/executor"
 	imanifest "github.com/shazow/virtle/internal/manifest"
 	"github.com/shazow/virtle/vm"
@@ -118,6 +119,20 @@ func (b *Backend) start(ctx context.Context, mf *imanifest.Manifest, ephemeralSt
 		return nil, fmt.Errorf("firecracker API socket path %q is too long; set a shorter TMPDIR", socket)
 	}
 	cfg := mf.Firecracker
+	logger := b.logger()
+	for _, disk := range cfg.Disks {
+		if !disk.Create {
+			continue
+		}
+		created, err := diskimage.Ensure(diskimage.Image{Path: disk.Path, Size: disk.SizeMiB.Bytes().Int64(), Label: disk.Label})
+		if err != nil {
+			rollback()
+			return nil, err
+		}
+		if created {
+			logger.Info("created disk image", "path", disk.Path, "size_mib", disk.SizeMiB)
+		}
+	}
 	cmd := exec.Command(cfg.Binary, "--api-sock", socket)
 	cmd.Dir = mf.Paths.WorkingDir
 	cmd.WaitDelay = time.Second // inherited output descriptors cannot hold teardown open
@@ -132,7 +147,6 @@ func (b *Backend) start(ctx context.Context, mf *imanifest.Manifest, ephemeralSt
 		serialized := &lockedWriter{writer: b.consoleOutput()}
 		cmd.Stdout, cmd.Stderr = serialized, io.MultiWriter(m.diagnostics, serialized)
 	}
-	logger := b.logger()
 	logger.Info("starting firecracker", "binary", cfg.Binary, "api_socket", socket)
 	m.process, err = (&executor.Runner{Logger: logger}).Start(cmd)
 	if err != nil {

@@ -76,7 +76,9 @@ func buildQEMUArgs(qemu manifest.QEMU, cid int, incoming bool) ([]string, error)
 	}
 
 	args = append(args, "-kernel", qemu.Kernel.Path)
-	args = append(args, "-initrd", qemu.Kernel.InitrdPath)
+	if qemu.Kernel.InitrdPath != "" {
+		args = append(args, "-initrd", qemu.Kernel.InitrdPath)
+	}
 
 	if qemu.Console.Enabled() {
 		chardev := "stdio,id=stdio,signal=off"

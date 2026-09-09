@@ -136,12 +136,22 @@ func lookupUserIDs(name string) (int, int, error) {
 // CreateVolumeImage creates a volume image and optionally assigns the new file
 // to the host account configured for privilege-dropped QEMU.
 func CreateVolumeImage(volume manifest.Volume, runAsUser string) error {
-	return diskimage.Create(diskimage.Image{
+	return diskimage.Create(volumeImage(volume, runAsUser))
+}
+
+// EnsureVolumeImage creates the volume image unless it already exists and
+// reports whether it did.
+func EnsureVolumeImage(volume manifest.Volume, runAsUser string) (bool, error) {
+	return diskimage.Ensure(volumeImage(volume, runAsUser))
+}
+
+func volumeImage(volume manifest.Volume, runAsUser string) diskimage.Image {
+	return diskimage.Image{
 		Path:  volume.ImagePath,
 		Size:  volume.Size.Bytes().Int64(),
 		Label: volume.Label,
 		Owner: runAsUser,
-	})
+	}
 }
 
 var ErrStaleSocket = errors.New("stale socket")

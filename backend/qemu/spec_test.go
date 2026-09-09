@@ -219,12 +219,11 @@ func TestResolveSpecWithoutDirUsesProcessWorkingDirectory(t *testing.T) {
 	}
 }
 
-func TestSuspendAndResumeRequireDir(t *testing.T) {
-	err := (&Machine{ephemeralState: true}).Suspend(t.Context())
-	if !errors.Is(err, errors.ErrUnsupported) || !strings.Contains(err.Error(), "Dir") {
-		t.Errorf("Suspend without Dir = %v, want ErrUnsupported naming vm.Spec.Dir", err)
-	}
-	_, err = (&Backend{}).Resume(t.Context(), &vm.Spec{Kernel: vm.Kernel{Path: "vmlinuz", Initrd: "initrd.img"}})
+// TestResumeRequiresDir: the matching Suspend rule lives in the VM runtime
+// (vmm.TestStartVMRefusesSuspendWithEphemeralState), where the control
+// socket's suspend request is refused as well.
+func TestResumeRequiresDir(t *testing.T) {
+	_, err := (&Backend{}).Resume(t.Context(), &vm.Spec{Kernel: vm.Kernel{Path: "vmlinuz", Initrd: "initrd.img"}})
 	if err == nil || !strings.Contains(err.Error(), "Dir") {
 		t.Errorf("Resume without Dir = %v, want an error naming vm.Spec.Dir", err)
 	}
@@ -240,6 +239,18 @@ func TestSpecDocumentRejectsUnalignedMemory(t *testing.T) {
 	spec := &vm.Spec{Kernel: vm.Kernel{Path: "k", Initrd: "i"}, Memory: 100 * units.Kibibyte, Dir: "/work"}
 	if _, err := specDocument(spec, &Backend{}, nil); err == nil {
 		t.Fatal("expected error for non-MiB-aligned memory")
+	}
+}
+
+// TestSpecRejectsNonRootGuestPath: only "/" (the root device) has a meaning
+// without a guest agent, so any other mount point is refused rather than
+// silently ignored, as on Firecracker.
+func TestSpecRejectsNonRootGuestPath(t *testing.T) {
+	spec := testSpec()
+	spec.Disks = []vm.Disk{{Path: "data.img", GuestPath: "/data"}}
+	_, err := specDocument(spec, &Backend{}, nil)
+	if !errors.Is(err, errors.ErrUnsupported) || !strings.Contains(err.Error(), "GuestPath") {
+		t.Fatalf("GuestPath /data = %v, want ErrUnsupported naming vm.Disk.GuestPath", err)
 	}
 }
 

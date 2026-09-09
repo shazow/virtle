@@ -1,6 +1,7 @@
 package qemu
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -241,6 +242,12 @@ func overlayDisk(input imanifest.ImageMountInput, disk vm.Disk) (imanifest.Image
 	}
 	if disk.Size != 0 && disk.Size%units.Mebibyte != 0 {
 		return imanifest.ImageMountInput{}, fmt.Errorf("disk %q: size %s is not MiB-aligned", disk.Path, disk.Size)
+	}
+	// "/" names the root device, which the kernel mounts itself; any other
+	// mount point needs an agent in the guest, which no backend has yet, so
+	// it is refused rather than silently ignored.
+	if disk.GuestPath != "" && disk.GuestPath != "/" {
+		return imanifest.ImageMountInput{}, fmt.Errorf("disk %q: guest mounting at %q (vm.Disk.GuestPath) needs a guest control transport: %w", disk.Path, disk.GuestPath, errors.ErrUnsupported)
 	}
 	input.Type = imanifest.MountTypeImage
 	input.ReadOnly = disk.ReadOnly

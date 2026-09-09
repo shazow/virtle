@@ -4,4 +4,16 @@ read -r value < /input
 echo "$((value * 2))" > /tmp/result
 read -r result < /tmp/result
 test "$result" = 42
+# A disk other than the root device is a scratch volume: leave the result on
+# it for the host to read back after the guest exits.
+root=$(sed -n 's/.*root=\/dev\/\([a-z]*\).*/\1/p' /proc/cmdline)
+for dev in /sys/block/vd*; do
+  [ -e "$dev" ] || continue
+  name=${dev##*/}
+  [ "$name" = "$root" ] && continue
+  mount -t ext4 "/dev/$name" /mnt
+  echo "$result" > /mnt/result
+  umount /mnt
+  break
+done
 echo "VIRTLE_READY:$result"

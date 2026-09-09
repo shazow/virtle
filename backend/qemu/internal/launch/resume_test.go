@@ -79,6 +79,40 @@ func TestResolveResumeState(t *testing.T) {
 	}
 }
 
+func TestResolveResumeStateRejectsVSockMismatch(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		savedCID int
+		vsockID  string
+		want     string
+	}{
+		{"device removed since the save", 7, "", "vsock device on but the manifest now has it off"},
+		{"device added since the save", 0, "vsock0", "vsock device off but the manifest now has it on"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := testManifest(t)
+			cfg.QEMU.Devices.VSOCK.ID = tc.vsockID
+			vmStatePath := VMStatePath(cfg)
+			if err := os.MkdirAll(filepath.Dir(vmStatePath), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(vmStatePath, []byte("state"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := WriteSuspendStateData(cfg, SuspendState{Version: testStateVersion, VMStatePath: vmStatePath, CID: tc.savedCID, Status: "saved"}); err != nil {
+				t.Fatal(err)
+			}
+			// Like a version mismatch, this errors even in auto mode: booting
+			// fresh would silently abandon the suspended session.
+			for _, mode := range []ResumeMode{ResumeModeAuto, ResumeModeForce} {
+				if _, err := ResolveResumeState(cfg, mode, testStateVersion); err == nil || !strings.Contains(err.Error(), tc.want) {
+					t.Fatalf("mode %q: got %v, want an error mentioning %q", mode, err, tc.want)
+				}
+			}
+		})
+	}
+}
+
 func TestResolveResumeStateRejectsVersionMismatch(t *testing.T) {
 	cfg := testManifest(t)
 	vmStatePath := VMStatePath(cfg)

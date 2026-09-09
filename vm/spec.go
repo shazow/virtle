@@ -15,8 +15,8 @@ import (
 // no live resources and is reusable across Start and Resume calls, with
 // one caveat: Files content readers are consumed by Start (see File).
 type Spec struct {
-	CPUs   int         // backend default: QEMU runtime.NumCPU, Firecracker 1
-	Memory units.Bytes // backend default: QEMU 2048 MiB, Firecracker 1024 MiB
+	CPUs   int         // zero selects the backend's default
+	Memory units.Bytes // zero selects the backend's default (e.g. qemu.DefaultMemory)
 	Kernel Kernel      // direct kernel boot (microVM style); zero value: none
 	Shares []Share     // host dirs shared into the guest (virtio-fs or similar)
 	Disks  []Disk      // block devices / volume images

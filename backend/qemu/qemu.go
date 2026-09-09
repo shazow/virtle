@@ -73,6 +73,11 @@ type Backend struct {
 	// the PCI transport (as any hotplug configuration does).
 	HotplugPorts int
 
+	// DisableVSock omits the vhost-vsock device, so the host needs no
+	// /dev/vhost-vsock and no CID is allocated. Guests then have no vsock
+	// transport for SSH; guest-agent control over virtio-serial still works.
+	DisableVSock bool
+
 	// RemoteControl selects the guest-control transport wired into
 	// Machine.RemoteControl, declaring what the VM image runs. Nil
 	// declares an image with no control agent: guest-dependent features
@@ -90,8 +95,6 @@ type Backend struct {
 	ConsoleOutput io.Writer
 
 	doc *imanifest.Document // base document of a manifest.Load backend; nil when configured in Go
-
-	disableVSock bool // integration-only: nested CI guests have no vhost-vsock device
 }
 
 // RemoteControl is a guest-control transport for Backend.RemoteControl.
@@ -165,9 +168,6 @@ func (b *Backend) resolveSpec(spec *vm.Spec, logger *slog.Logger) (*imanifest.Ma
 	mf, err := doc.ManifestWithOptions(imanifest.ResolveOptions{Logger: logger.With("package", "manifest")})
 	if err != nil {
 		return nil, fmt.Errorf("resolve vm spec: %w", err)
-	}
-	if b.disableVSock {
-		mf.QEMU.Devices.VSOCK.ID = ""
 	}
 	return mf, nil
 }

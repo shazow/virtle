@@ -71,11 +71,16 @@ type FirecrackerKernel struct {
 
 // FirecrackerDisk is a resolved raw block device. Root marks the image
 // mounted at "/"; virtle passes root= for it itself, so Firecracker's own
-// root-device boot arguments stay off.
+// root-device boot arguments stay off. Create asks the backend to format a
+// missing image as an empty ext4 filesystem of SizeMiB before launch, as
+// QEMU does for image.create.
 type FirecrackerDisk struct {
-	Path     string `json:"path"`
-	ReadOnly bool   `json:"readOnly,omitempty"`
-	Root     bool   `json:"root,omitempty"`
+	Path     string    `json:"path"`
+	ReadOnly bool      `json:"readOnly,omitempty"`
+	Root     bool      `json:"root,omitempty"`
+	Create   bool      `json:"create,omitempty"`
+	SizeMiB  units.MiB `json:"sizeMiB,omitempty"`
+	Label    string    `json:"label,omitempty"`
 }
 
 // seededDocument is the document DecodeDocumentBytes decodes into: every
@@ -214,12 +219,21 @@ func (d Document) firecrackerManifest() (*Manifest, error) {
 			return nil, fmt.Errorf("manifest.mounts[%d].source is required", i)
 		case mount.Image.Format != "" && mount.Image.Format != "raw":
 			return nil, unsupported("manifest.mounts[%d].image.format %q; only raw images are supported", i, mount.Image.Format)
-		case mount.Image.AutoCreate || mount.Image.Size != 0 || mount.Image.FSType != "" || mount.Image.Label != nil:
-			return nil, unsupported("manifest.mounts[%d] image creation; provide an existing raw image", i)
+		case mount.Image.FSType != "" && mount.Image.FSType != defaultVolumeFSType:
+			return nil, unsupported("manifest.mounts[%d].image.fs %q; created images are %s", i, mount.Image.FSType, defaultVolumeFSType)
+		case mount.Image.AutoCreate && mount.Image.Size < minAutoVolumeSize:
+			return nil, fmt.Errorf("manifest.mounts[%d].image.size must be at least %d when image.create is true, got %d", i, minAutoVolumeSize, mount.Image.Size)
 		case mount.Image.Serial != nil || mount.Image.Direct:
 			return nil, unsupported("manifest.mounts[%d] image.serial and image.direct", i)
 		}
-		fc.Disks = append(fc.Disks, FirecrackerDisk{Path: m.resolvePath(mount.SourcePath), ReadOnly: mount.ReadOnly, Root: i == rootIndex})
+		fc.Disks = append(fc.Disks, FirecrackerDisk{
+			Path:     m.resolvePath(mount.SourcePath),
+			ReadOnly: mount.ReadOnly,
+			Root:     i == rootIndex,
+			Create:   mount.Image.AutoCreate,
+			SizeMiB:  mount.Image.Size,
+			Label:    stringValue(mount.Image.Label),
+		})
 	}
 	m.Firecracker = fc
 	return m, nil

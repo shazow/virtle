@@ -75,7 +75,7 @@ features it cannot honor fail `Start` with an error wrapping
 | --- | --- |
 | Guest control (`Machine.RemoteControl`), SSH, guest files, workspace mounts | No guest agent transport yet; see the [guest daemon design](https://github.com/shazow/virtle/pull/67). |
 | Networking, port forwards, vsock | No TAP or vsock device is configured. |
-| virtiofs and 9p shares, disk creation, qcow2, disk cache/serial options | Raw, existing images only. |
+| virtiofs and 9p shares, qcow2, disk cache/serial options | Raw images only. A missing image is created as an empty ext4 filesystem from `image.create` + `image.size` / `vm.Disk.Size`, as on QEMU. |
 | Interactive console (`serial = "console"`) | Only `off` and `print`. |
 | Suspend/resume, balloon, hotplug | Capability interfaces are not implemented. |
 | `[run]` helpers, `[notifications]`, `[qemu]` settings | QEMU-only. |

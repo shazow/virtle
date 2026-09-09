@@ -24,6 +24,7 @@ import (
 	"github.com/shazow/virtle/backend"
 	"github.com/shazow/virtle/backend/backendtest"
 	"github.com/shazow/virtle/internal/control"
+	"github.com/shazow/virtle/units"
 	"github.com/shazow/virtle/vm"
 )
 
@@ -395,6 +396,30 @@ func TestShutdownTimeout(t *testing.T) {
 	case <-m.Done():
 	default:
 		t.Fatal("Shutdown returned without completing teardown")
+	}
+}
+
+// TestCreatesMissingDiskImages covers vm.Disk.Size: a missing image is
+// formatted before launch, as QEMU does, and an existing one is kept.
+func TestCreatesMissingDiskImages(t *testing.T) {
+	b, spec := helperBackend(t, "normal")
+	image := filepath.Join(spec.Dir, "scratch.img")
+	spec.Kernel.Initrd = "initrd" // the scratch disk is not the root
+	spec.Disks = []vm.Disk{{Path: image, Format: "raw", Size: 256 * units.Mebibyte}}
+	m, err := b.Start(t.Context(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill() })
+	info, err := os.Stat(image)
+	if err != nil || info.Size() != 256<<20 {
+		t.Fatalf("disk image not created before launch: %v %v", info, err)
+	}
+	if err := m.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(image); err != nil {
+		t.Fatalf("created disk image did not survive exit: %v", err)
 	}
 }
 

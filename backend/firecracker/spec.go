@@ -78,9 +78,6 @@ func (b *Backend) resolveSpec(spec *vm.Spec, stateDir string) (*imanifest.Manife
 	}
 	doc.Mounts = make(imanifest.MountsInput, 0, len(spec.Disks))
 	for _, disk := range spec.Disks {
-		if disk.Size != 0 {
-			return nil, fmt.Errorf("firecracker: disk %q: image creation (vm.Disk.Size): %w", disk.Path, errors.ErrUnsupported)
-		}
 		// "/" names the root device, which the kernel mounts itself; any
 		// other mount point needs an agent in the guest.
 		if disk.GuestPath != "" && disk.GuestPath != "/" {
@@ -89,7 +86,17 @@ func (b *Backend) resolveSpec(spec *vm.Spec, stateDir string) (*imanifest.Manife
 		if disk.Format != "" && disk.Format != "raw" {
 			return nil, fmt.Errorf("firecracker: disk %q: Format %q is not supported, only raw images are: %w", disk.Path, disk.Format, errors.ErrUnsupported)
 		}
-		doc.Mounts = append(doc.Mounts, imanifest.ImageMountInput{Type: imanifest.MountTypeImage, SourcePath: disk.Path, Target: disk.GuestPath, ReadOnly: disk.ReadOnly, Image: imanifest.ImageInput{Format: disk.Format}})
+		if disk.Size%units.Mebibyte != 0 {
+			return nil, fmt.Errorf("firecracker: disk %q: size %s is not MiB-aligned", disk.Path, disk.Size)
+		}
+		doc.Mounts = append(doc.Mounts, imanifest.ImageMountInput{
+			Type:       imanifest.MountTypeImage,
+			SourcePath: disk.Path,
+			Target:     disk.GuestPath,
+			ReadOnly:   disk.ReadOnly,
+			// As on QEMU, a size asks for the image to be created when missing.
+			Image: imanifest.ImageInput{Format: disk.Format, Size: disk.Size.Mebibytes(), AutoCreate: disk.Size != 0},
+		})
 	}
 	if b.Binary != "" {
 		doc.Firecracker.Binary = b.Binary

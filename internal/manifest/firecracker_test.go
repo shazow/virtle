@@ -139,7 +139,8 @@ func TestFirecrackerRejectsQEMUOnlySettings(t *testing.T) {
 		{"interactive console", "[kernel]\nserial = 'console'", "serial"},
 		{"virtiofs mount", "[[mounts]]\ntype = 'virtiofs'\ntag = 'src'\nsource = '/src'", "image mounts"},
 		{"qcow2", "[[mounts]]\ntype = 'image'\nsource = 'disk.qcow2'\nimage.format = 'qcow2'", "raw"},
-		{"image creation", "[[mounts]]\ntype = 'image'\nsource = 'disk.img'\nimage.create = true\nimage.size = 256", "creation"},
+		{"image fs", "[[mounts]]\ntype = 'image'\nsource = 'disk.img'\nimage.create = true\nimage.size = 256\nimage.fs = 'xfs'", "fs"},
+		{"image too small to create", "[[mounts]]\ntype = 'image'\nsource = 'disk.img'\nimage.create = true\nimage.size = 8", "at least"},
 		{"direct io", "[[mounts]]\ntype = 'image'\nsource = 'disk.img'\nimage.direct = true", "direct"},
 		{"too many cpus", "[machine]\nvcpu = 33", "vcpu"},
 		{"negative cpus", "[machine]\nvcpu = -1", "vcpu"},
@@ -165,6 +166,7 @@ func TestFirecrackerRejectsQEMUOnlySettings(t *testing.T) {
 		{"explicit empty networks", "networks = []\n" + kernel},
 		{"microvm", "[machine]\ntype = 'microvm'\nkvm = true"},
 		{"headless", "[graphics]\nbackend = 'headless'"},
+		{"image creation", "[[mounts]]\ntype = 'image'\nsource = 'scratch.img'\nimage.create = true\nimage.size = 256\nimage.label = 'scratch'"},
 	}
 	for _, tc := range accepted {
 		t.Run("accepts "+tc.name, func(t *testing.T) {

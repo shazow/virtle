@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -266,6 +267,36 @@ func TestRootDisk(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), "root device") {
 				t.Fatalf("error = %v, want it to name the missing root device", err)
+			}
+		})
+	}
+}
+
+// TestScratchDisk attaches a disk that does not exist yet: virtle creates it
+// as an empty ext4 image on both backends, the guest leaves its result on
+// it, and the host reads that back after the machine exits.
+func TestScratchDisk(t *testing.T) {
+	f := loadFixture(t)
+	debugfs, err := exec.LookPath("debugfs")
+	if err != nil {
+		t.Skip("debugfs (e2fsprogs) is required to read the image back")
+	}
+	for _, g := range f.guests() {
+		t.Run(g.name, func(t *testing.T) {
+			spec := g.spec(t)
+			image := filepath.Join(spec.Dir, "scratch.img")
+			spec.Disks = []vm.Disk{{Path: image, Format: "raw", Size: 256 * units.Mebibyte}}
+			m, _ := startReady(t, g, spec)
+			if err := m.Kill(); err != nil {
+				t.Fatalf("kill: %v", err)
+			}
+			waitExit(t, m)
+			out, err := exec.Command(debugfs, "-R", "cat /result", image).Output()
+			if err != nil {
+				t.Fatalf("read result back from %s: %v", image, err)
+			}
+			if got := strings.TrimSpace(string(out)); got != "42" {
+				t.Fatalf("result on the scratch disk = %q, want 42", got)
 			}
 		})
 	}

@@ -27,11 +27,10 @@ import (
 	"github.com/shazow/virtle/vm"
 )
 
-// DefaultMemory is the guest memory size used when vm.Spec.Memory is zero.
+// DefaultMemory is the guest memory size used when vm.Spec.Memory is zero. A
+// zero vm.Spec.CPUs selects every host CPU, as with QEMU, within
+// Firecracker's limit of 32 vCPUs.
 const DefaultMemory = 1024 * units.Mebibyte
-
-// DefaultCPUs is the vCPU count used when vm.Spec.CPUs is zero.
-const DefaultCPUs = 1
 
 // Console selects how the guest serial console is wired.
 type Console string

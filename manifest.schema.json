@@ -317,6 +317,10 @@
                 "type": "string",
                 "description": "Host disk image path."
               },
+              "target": {
+                "type": "string",
+                "description": "Guest mount point. Only / is supported at boot: it makes this image the root device, and virtle passes root= for it to the kernel on every backend."
+              },
               "read_only": {
                 "type": "boolean",
                 "description": "Attach the image read-only."
@@ -826,6 +830,10 @@
                     "type": "string",
                     "description": "Host disk image path."
                   },
+                  "target": {
+                    "type": "string",
+                    "description": "Guest mount point. Only / is supported at boot: it makes this image the root device, and virtle passes root= for it to the kernel on every backend."
+                  },
                   "read_only": {
                     "type": "boolean",
                     "description": "Attach the image read-only."
@@ -952,26 +960,5 @@
   "required": [
     "kernel"
   ],
-  "additionalProperties": false,
-  "if": {
-    "properties": {
-      "backend": {
-        "enum": [
-          "firecracker"
-        ]
-      }
-    },
-    "required": [
-      "backend"
-    ]
-  },
-  "else": {
-    "properties": {
-      "kernel": {
-        "required": [
-          "initrd_path"
-        ]
-      }
-    }
-  }
+  "additionalProperties": false
 }

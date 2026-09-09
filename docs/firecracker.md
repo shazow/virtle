@@ -15,8 +15,11 @@ must match the host architecture: an ELF `vmlinux` on x86_64, an uncompressed
 
 - Direct kernel boot with an optional initrd (`[kernel]` / `vm.Kernel`).
 - Existing raw disk images attached as virtio-block devices (`[[mounts]]
-  type = "image"` / `vm.Disk`). The first disk is the root device;
-  `read_only` / `vm.Disk.ReadOnly` controls guest write access.
+  type = "image"` / `vm.Disk`); `read_only` / `vm.Disk.ReadOnly` controls
+  guest write access. The image mounted at `/` (`target = "/"` /
+  `vm.Disk.GuestPath: "/"`) is the root device: virtle passes `root=/dev/vdX`
+  and `ro` or `rw` for it, on QEMU alike, so a kernel boots from it without
+  an initrd.
 - Serial console output on the host (`kernel.serial = "print"` /
   `firecracker.Backend{Console: firecracker.ConsolePrint}`).
 - Lifecycle and status: `Start`, `Wait`, `Kill`, `Shutdown`, and
@@ -40,10 +43,13 @@ example, a marker line on the serial console), as the
 
 virtle assembles the command line the same way it does for QEMU: console
 parameters when `serial` is not `off` (`console=ttyS0`), then `reboot=k
-panic=-1`, then the manifest's `kernel.params` / `vm.Kernel.Cmdline`.
-Firecracker itself appends `root=/dev/vda` and `ro` or `rw` for the first disk;
-a conflicting `root=` in your parameters is not supported. Firecracker exposes
-no PCI bus, so `pci=off` in your parameters skips a pointless probe.
+panic=-1`, then `root=/dev/vdX` and `ro` or `rw` for the image mounted at `/`,
+then the manifest's `kernel.params` / `vm.Kernel.Cmdline`, which come last
+and therefore win. No drive is marked as Firecracker's own root device, so
+Firecracker appends nothing itself. A boot from disks without an initrd must
+name a root device this way or carry its own `root=`; virtle rejects one that
+does neither instead of letting the kernel panic. Firecracker exposes no PCI
+bus, so `pci=off` in your parameters skips a pointless probe.
 
 ## Shutdown
 

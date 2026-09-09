@@ -245,6 +245,7 @@ func overlayDisk(input imanifest.ImageMountInput, disk vm.Disk) (imanifest.Image
 	input.Type = imanifest.MountTypeImage
 	input.ReadOnly = disk.ReadOnly
 	input.SourcePath = disk.Path
+	input.Target = disk.GuestPath
 	input.Image.Size = disk.Size.Mebibytes()
 	input.Image.Format = disk.Format
 	input.Image.AutoCreate = disk.Size != 0

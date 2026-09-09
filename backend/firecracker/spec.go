@@ -81,13 +81,15 @@ func (b *Backend) resolveSpec(spec *vm.Spec, stateDir string) (*imanifest.Manife
 		if disk.Size != 0 {
 			return nil, fmt.Errorf("firecracker: disk %q: image creation (vm.Disk.Size): %w", disk.Path, errors.ErrUnsupported)
 		}
-		if disk.GuestPath != "" {
-			return nil, fmt.Errorf("firecracker: disk %q: guest mounting (vm.Disk.GuestPath) needs a guest control transport: %w", disk.Path, errors.ErrUnsupported)
+		// "/" names the root device, which the kernel mounts itself; any
+		// other mount point needs an agent in the guest.
+		if disk.GuestPath != "" && disk.GuestPath != "/" {
+			return nil, fmt.Errorf("firecracker: disk %q: guest mounting at %q (vm.Disk.GuestPath) needs a guest control transport: %w", disk.Path, disk.GuestPath, errors.ErrUnsupported)
 		}
 		if disk.Format != "" && disk.Format != "raw" {
 			return nil, fmt.Errorf("firecracker: disk %q: Format %q is not supported, only raw images are: %w", disk.Path, disk.Format, errors.ErrUnsupported)
 		}
-		doc.Mounts = append(doc.Mounts, imanifest.ImageMountInput{Type: imanifest.MountTypeImage, SourcePath: disk.Path, ReadOnly: disk.ReadOnly, Image: imanifest.ImageInput{Format: disk.Format}})
+		doc.Mounts = append(doc.Mounts, imanifest.ImageMountInput{Type: imanifest.MountTypeImage, SourcePath: disk.Path, Target: disk.GuestPath, ReadOnly: disk.ReadOnly, Image: imanifest.ImageInput{Format: disk.Format}})
 	}
 	if b.Binary != "" {
 		doc.Firecracker.Binary = b.Binary

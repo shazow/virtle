@@ -51,6 +51,7 @@ serial = "print"
 [[mounts]]
 type = "image"
 source = "rootfs.ext4"
+target = "/"
 read_only = true
 ```
 

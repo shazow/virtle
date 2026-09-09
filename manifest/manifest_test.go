@@ -91,8 +91,8 @@ func TestLoad(t *testing.T) {
 }
 
 func TestLoadRejectsInvalidManifest(t *testing.T) {
-	// Missing kernel initrd_path fails resolution.
-	if _, _, err := Load(strings.NewReader("[kernel]\npath = \"vmlinuz\"\n")); err == nil {
+	// A boot from disks without an initrd needs a root device.
+	if _, _, err := Load(strings.NewReader("[kernel]\npath = \"vmlinuz\"\n[[mounts]]\ntype = \"image\"\nsource = \"data.img\"\n")); err == nil {
 		t.Fatal("expected invalid manifest to fail at Load")
 	}
 }

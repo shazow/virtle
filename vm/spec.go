@@ -52,7 +52,7 @@ type Share struct {
 type Disk struct {
 	ReadOnly  bool        // attach without allowing guest writes
 	Path      string      // host image path
-	GuestPath string      // guest mount point; optional
+	GuestPath string      // guest mount point; "/" makes this the root device (virtle passes root=), other paths need a guest agent
 	Format    string      // image format (e.g. "qcow2", "raw"); backend default when empty
 	Size      units.Bytes // created at this size if the image is absent
 }

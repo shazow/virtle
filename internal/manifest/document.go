@@ -213,6 +213,7 @@ type NinePInput struct {
 type ImageMountInput struct {
 	Type       string     `json:"type" toml:"type" jsonschema:"Mount kind; must be image for this entry."`
 	SourcePath string     `json:"source" toml:"source" jsonschema:"Host disk image path."`
+	Target     string     `json:"target,omitempty" toml:"target" jsonschema:"Guest mount point. Only / is supported at boot: it makes this image the root device, and virtle passes root= for it to the kernel on every backend."`
 	ReadOnly   bool       `json:"read_only,omitempty" toml:"read_only" jsonschema:"Attach the image read-only."`
 	Image      ImageInput `json:"image,omitempty" toml:"image" jsonschema:"Disk image creation and format settings."`
 }

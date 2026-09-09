@@ -33,21 +33,11 @@ func Generate() (*jsonschema.Schema, error) {
 	schema.ID = "https://shazow.github.io/virtle/manifest.schema.json"
 	schema.Title = "Virtle manifest"
 	schema.Description = "JSON Schema for the virtle manifest input format emitted by virtle."
-	// A missing backend selects QEMU. Only explicit Firecracker selection
-	// permits boot without an initrd; both backends require kernel.path.
+	// A missing backend selects QEMU. Both backends require kernel.path; an
+	// initrd is optional, and the resolver checks that a boot from disks
+	// without one names a root device.
 	schema.Properties["backend"].Enum = []any{manifest.BackendQEMU, manifest.BackendFirecracker}
 	schema.Properties["kernel"].Required = []string{"path"}
-	schema.If = &jsonschema.Schema{
-		Required: []string{"backend"},
-		Properties: map[string]*jsonschema.Schema{
-			"backend": {Enum: []any{manifest.BackendFirecracker}},
-		},
-	}
-	schema.Else = &jsonschema.Schema{
-		Properties: map[string]*jsonschema.Schema{
-			"kernel": {Required: []string{"initrd_path"}},
-		},
-	}
 	if err := applyDocumentDefaults(schema); err != nil {
 		return nil, err
 	}

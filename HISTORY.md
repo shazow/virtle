@@ -14,6 +14,12 @@ compact before/after examples.
   `status`, and `rpc` lifecycle. Linux with KVM only; guest control, SSH,
   networking, shares, suspend, balloon, and hotplug stay QEMU-only and fail
   validation. See [docs/firecracker.md](docs/firecracker.md).
+- `[[mounts]] type = "image"` gains `target = "/"`, naming the root device on
+  both backends: virtle passes `root=/dev/vdX` and `ro`/`rw` for it, and
+  `kernel.initrd_path` is optional when a boot names its root device (or
+  carries its own `root=`). **Breaking (Firecracker):** the first disk is no
+  longer the root device automatically; add `target = "/"` to keep booting
+  from it.
 - QEMU manifests can set `vsock.enabled = false` for guests that do not use
   host-guest vsock, dropping the `/dev/vhost-vsock` requirement.
 - `virtle launch` lets `Machine.Shutdown` stop the guest gracefully on
@@ -31,6 +37,8 @@ compact before/after examples.
   `backend.Backend` and `backend.StatusReporter` with the same `vm.Spec` and
   `backend.Machine` as QEMU. Spec features it cannot honor fail `Start` with
   an error wrapping `errors.ErrUnsupported`.
+- `vm.Disk{GuestPath: "/"}` names the root device on both backends (virtle
+  passes `root=` for it); other guest paths still need a guest agent.
 - `vm.Disk.ReadOnly` is honored by both backends and by QEMU hotplug.
   **Breaking:** a `vm.Disk` that replaces a manifest disk must now set
   `ReadOnly: true` itself to keep a read-only mount:

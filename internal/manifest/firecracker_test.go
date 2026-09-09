@@ -113,7 +113,8 @@ func TestFirecrackerManifestDefaults(t *testing.T) {
 // fail validation instead of being dropped, while defaults spelled out
 // explicitly are accepted.
 func TestFirecrackerRejectsQEMUOnlySettings(t *testing.T) {
-	const kernel = "[kernel]\npath = 'vmlinux'\n"
+	// An initrd keeps the disk cases clear of the root-device validation.
+	const kernel = "[kernel]\npath = 'vmlinux'\ninitrd_path = 'initrd'\n"
 	rejected := []struct{ name, toml, problem string }{
 		{"ssh exec", "[ssh]\nexec = ['ssh', '-v']", "ssh"},
 		{"ssh ready socket", "[ssh]\nready_socket = 'ready.sock'", "ssh"},
@@ -202,8 +203,23 @@ initrd_path = "initrd"`, BackendQEMU, ""},
 [kernel]
 path = "vmlinux"`, BackendFirecracker, ""},
 		{"unknown", `backend = "typo"`, "", "backend"},
-		{"qemu requires initrd", `[kernel]
-path = "kernel"`, "", "initrd_path"},
+		{"qemu boots a root disk without initrd", `[kernel]
+path = "kernel"
+[[mounts]]
+type = "image"
+source = "root.img"
+target = "/"`, BackendQEMU, ""},
+		{"disks without initrd need a root device", `[kernel]
+path = "kernel"
+[[mounts]]
+type = "image"
+source = "data.img"`, "", "root device"},
+		{"root= in params names the root", `[kernel]
+path = "kernel"
+params = ["root=/dev/vda1"]
+[[mounts]]
+type = "image"
+source = "disk.img"`, BackendQEMU, ""},
 		{"firecracker requires kernel", `backend = "firecracker"`, "", "kernel.path"},
 		{"firecracker section needs firecracker backend", `[kernel]
 path = "kernel"

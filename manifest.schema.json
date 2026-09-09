@@ -4,7 +4,11 @@
     "backend": {
       "type": "string",
       "description": "Virtual machine backend: qemu (default) or firecracker.",
-      "default": "qemu"
+      "default": "qemu",
+      "enum": [
+        "qemu",
+        "firecracker"
+      ]
     },
     "firecracker": {
       "type": "object",

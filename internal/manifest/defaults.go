@@ -43,19 +43,10 @@ func DefaultDocument() Document {
 // explicitly.
 func DocumentWithDefaults(document Document) Document {
 	defaults := DefaultDocument()
-	defaults.decoded = document.decoded
-	defaults.explicitSSH = document.explicitSSH
-	defaults.explicitVSock = document.explicitVSock
 	if document.Backend != "" {
 		defaults.Backend = document.Backend
 	}
 	defaults.Firecracker = document.Firecracker
-	if defaults.Backend == "firecracker" {
-		defaults.Networks = nil
-		defaults.SSH = SSHInput{}
-		defaults.VSock = VSockInput{}
-	}
-
 	if document.HostName != "" {
 		defaults.HostName = document.HostName
 	}

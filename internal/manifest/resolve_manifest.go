@@ -23,17 +23,31 @@ func (d Document) Manifest() (*Manifest, error) {
 	return d.ManifestWithOptions(ResolveOptions{})
 }
 
-func (d Document) ManifestWithOptions(options ResolveOptions) (*Manifest, error) {
-	if d.Backend != "" && d.Backend != "qemu" && d.Backend != "firecracker" {
-		return nil, fmt.Errorf("manifest.backend must be qemu or firecracker, got %q", d.Backend)
+// validateHostName rejects VM names that cannot serve as a file name: the
+// name is embedded in the state lock path (<state_dir>/<host_name>.lock)
+// that both backends share.
+func validateHostName(name string) error {
+	if name == "." || name == ".." || strings.ContainsRune(name, filepath.Separator) {
+		return fmt.Errorf("manifest.host_name %q must be a plain name without path separators", name)
 	}
-	if d.Backend == "firecracker" {
+	return nil
+}
+
+func (d Document) ManifestWithOptions(options ResolveOptions) (*Manifest, error) {
+	switch d.Backend {
+	case "", BackendQEMU:
+	case BackendFirecracker:
 		return d.firecrackerManifest()
+	default:
+		return nil, fmt.Errorf("manifest.backend must be %s or %s, got %q", BackendQEMU, BackendFirecracker, d.Backend)
 	}
 	if d.Firecracker != (FirecrackerInput{}) {
-		return nil, fmt.Errorf("manifest.firecracker requires backend = firecracker")
+		return nil, fmt.Errorf("manifest.firecracker requires backend = %q", BackendFirecracker)
 	}
 	d = DocumentWithDefaults(d)
+	if err := validateHostName(d.HostName); err != nil {
+		return nil, err
+	}
 	if d.Kernel.Path == "" {
 		return nil, fmt.Errorf("manifest.kernel.path is required")
 	}
@@ -42,7 +56,7 @@ func (d Document) ManifestWithOptions(options ResolveOptions) (*Manifest, error)
 	}
 	host := d.Host.withDefaults()
 	m := &Manifest{
-		Backend: "qemu",
+		Backend: BackendQEMU,
 		Identity: Identity{
 			HostName: d.HostName,
 		},

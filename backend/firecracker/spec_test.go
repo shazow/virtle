@@ -2,6 +2,7 @@ package firecracker
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"reflect"
@@ -14,7 +15,7 @@ import (
 
 func TestConfiguration(t *testing.T) {
 	spec := &vm.Spec{Dir: "/work", CPUs: 2, Memory: 256 * units.Mebibyte, Kernel: vm.Kernel{Path: "kernel", Initrd: "initrd", Cmdline: `console=ttyS0 init="a b"`}, Disks: []vm.Disk{{Path: "disk", Format: "raw", ReadOnly: true}}}
-	mf, err := (&Backend{}).resolveSpec(spec)
+	mf, err := (&Backend{}).resolveSpec(spec, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +39,9 @@ func TestConfiguration(t *testing.T) {
 	if bodies[0]["vcpu_count"] != float64(2) || bodies[0]["mem_size_mib"] != float64(256) {
 		t.Fatal(bodies[0])
 	}
-	if bodies[1]["kernel_image_path"] != "/work/kernel" || bodies[1]["initrd_path"] != "/work/initrd" || bodies[1]["boot_args"] != spec.Kernel.Cmdline {
+	// virtle's reboot/panic policy precedes the caller's command line, whose
+	// quoting survives intact; no console parameter without Console: print.
+	if bodies[1]["kernel_image_path"] != "/work/kernel" || bodies[1]["initrd_path"] != "/work/initrd" || bodies[1]["boot_args"] != "reboot=k panic=-1 "+spec.Kernel.Cmdline {
 		t.Fatal(bodies[1])
 	}
 	if bodies[2]["path_on_host"] != "/work/disk" || bodies[2]["is_read_only"] != true || bodies[2]["is_root_device"] != true {
@@ -54,27 +57,54 @@ func TestSpecValidation(t *testing.T) {
 		name, problem string
 		change        func(*vm.Spec)
 	}{
-		{"kernel", "kernel", func(s *vm.Spec) { s.Kernel.Path = "" }},
-		{"cpu", "vcpu", func(s *vm.Spec) { s.CPUs = 33 }},
+		{"kernel", "Kernel.Path", func(s *vm.Spec) { s.Kernel.Path = "" }},
+		{"cpu", "CPUs", func(s *vm.Spec) { s.CPUs = 33 }},
 		{"memory", "MiB", func(s *vm.Spec) { s.Memory = 1 }},
 		{"disk", "raw", func(s *vm.Spec) { s.Disks = []vm.Disk{{Path: "disk", Format: "qcow2"}} }},
 		{"file", "unsupported", func(s *vm.Spec) { s.Files = []vm.File{{GuestPath: "/file", Content: strings.NewReader("x")}} }},
 		{"share", "unsupported", func(s *vm.Spec) { s.Shares = []vm.Share{{HostPath: "/work"}} }},
 		{"port", "unsupported", func(s *vm.Spec) { s.Ports = []vm.Forward{{HostAddr: ":80"}} }},
+		{"disk size", "unsupported", func(s *vm.Spec) { s.Disks = []vm.Disk{{Path: "disk", Size: 256 * units.Mebibyte}} }},
+		{"disk guest path", "unsupported", func(s *vm.Spec) { s.Disks = []vm.Disk{{Path: "disk", GuestPath: "/mnt"}} }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := &vm.Spec{Kernel: vm.Kernel{Path: "kernel"}}
 			tc.change(s)
-			_, err := (&Backend{}).resolveSpec(s)
+			_, err := (&Backend{}).resolveSpec(s, "")
 			if err == nil || !strings.Contains(err.Error(), tc.problem) {
 				t.Fatalf("got %v, want %s", err, tc.problem)
+			}
+			// Missing capabilities are detectable, validation errors are not.
+			if tc.problem == "unsupported" && !errors.Is(err, errors.ErrUnsupported) {
+				t.Fatalf("%v does not wrap errors.ErrUnsupported", err)
 			}
 		})
 	}
 }
 
+func TestSpecDefaults(t *testing.T) {
+	mf, err := (&Backend{}).resolveSpec(&vm.Spec{Dir: "/work", Kernel: vm.Kernel{Path: "kernel"}}, "/state")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fc := mf.Firecracker
+	if fc.CPUs != DefaultCPUs || fc.MemoryMiB != DefaultMemory.Mebibytes() || fc.Console != "off" || fc.Kernel.Cmdline != "reboot=k panic=-1" {
+		t.Fatalf("defaults: %+v", fc)
+	}
+	if got := mf.ResolvedLockPath(); got != "/state/virtle.lock" {
+		t.Fatalf("state directory override: lock at %q", got)
+	}
+	mf, err = (&Backend{Console: ConsolePrint}).resolveSpec(&vm.Spec{Dir: "/work", Kernel: vm.Kernel{Path: "kernel", Cmdline: "quiet"}}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fc := mf.Firecracker; fc.Console != "print" || fc.Kernel.Cmdline != "console=ttyS0 reboot=k panic=-1 quiet" {
+		t.Fatalf("console print: %+v", fc)
+	}
+}
+
 func TestConfigurationStopsOnError(t *testing.T) {
-	mf, err := (&Backend{}).resolveSpec(&vm.Spec{Kernel: vm.Kernel{Path: "kernel"}})
+	mf, err := (&Backend{}).resolveSpec(&vm.Spec{Kernel: vm.Kernel{Path: "kernel"}}, "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -136,7 +136,7 @@ let
     path = "${kernel}"
     initrd_path = "${initrd}/initrd"
     serial = "print"
-    params = ["console=ttyS0", "reboot=k", "panic=-1", "pci=off", "rdinit=/init", "i8042.noaux", "i8042.nomux", "i8042.dumbkbd"]
+    params = ["pci=off", "rdinit=/init", "i8042.noaux", "i8042.nomux", "i8042.dumbkbd"]
     [[mounts]]
     type = "image"
     source = "${rootfs}/rootfs.ext4"

@@ -41,7 +41,7 @@ let
     [kernel]
     initrd_path = "${initrd}/initrd"
     serial = "print"
-    params = ["console=ttyS0", "reboot=k", "panic=-1", "pci=off", "rdinit=/init", "quiet", "i8042.noaux", "i8042.nomux", "i8042.dumbkbd", "i8042.nopnp"]
+    params = ["pci=off", "rdinit=/init", "quiet", "i8042.noaux", "i8042.nomux", "i8042.dumbkbd", "i8042.nopnp"]
   '';
   firecracker = pkgs.writeText "virtle-fast-firecracker.toml" ''
     backend = "firecracker"

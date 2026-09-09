@@ -8,15 +8,21 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"strings"
-	"time"
 
 	imanifest "github.com/shazow/virtle/internal/manifest"
 )
 
 const maxResponseSize = 64 * 1024
 
-type apiClient struct{ http *http.Client }
+// apiClient speaks Firecracker's HTTP API over its unix socket. Requests are
+// bounded only by the caller's context: InstanceStart in particular takes as
+// long as the guest kernel takes to load, so a fixed per-request timeout would
+// turn a slow boot into a spurious failure.
+type apiClient struct {
+	socket string
+	http   *http.Client
+}
+
 type action struct {
 	Type string `json:"action_type"`
 }
@@ -33,7 +39,7 @@ func (c *apiClient) configure(ctx context.Context, cfg *imanifest.Firecracker) e
 		Kernel string `json:"kernel_image_path"`
 		Initrd string `json:"initrd_path,omitempty"`
 		Args   string `json:"boot_args"`
-	}{cfg.Kernel.Path, cfg.Kernel.InitrdPath, strings.Join(cfg.Kernel.Params, " ")}
+	}{cfg.Kernel.Path, cfg.Kernel.InitrdPath, cfg.Kernel.Cmdline}
 	if err := c.put(ctx, "/boot-source", boot); err != nil {
 		return err
 	}
@@ -43,7 +49,7 @@ func (c *apiClient) configure(ctx context.Context, cfg *imanifest.Firecracker) e
 			Path     string `json:"path_on_host"`
 			Root     bool   `json:"is_root_device"`
 			ReadOnly bool   `json:"is_read_only"`
-		}{fmt.Sprintf("disk%d", i), disk.SourcePath, i == 0, disk.ReadOnly}
+		}{fmt.Sprintf("disk%d", i), disk.Path, i == 0, disk.ReadOnly}
 		if err := c.put(ctx, "/drives/"+drive.ID, drive); err != nil {
 			return err
 		}
@@ -52,18 +58,22 @@ func (c *apiClient) configure(ctx context.Context, cfg *imanifest.Firecracker) e
 }
 
 func newAPIClient(socket string) *apiClient {
-	transport := &http.Transport{
-		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return (&net.Dialer{}).DialContext(ctx, "unix", socket)
+	c := &apiClient{socket: socket}
+	c.http = &http.Client{
+		Transport: &http.Transport{
+			DialContext:            func(ctx context.Context, _, _ string) (net.Conn, error) { return c.dial(ctx) },
+			MaxResponseHeaderBytes: 8192,
+			DisableKeepAlives:      true,
 		},
-		MaxResponseHeaderBytes: 8192,
-		DisableKeepAlives:      true,
-	}
-	return &apiClient{http: &http.Client{
-		Transport:     transport,
-		Timeout:       5 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-	}}
+	}
+	return c
+}
+
+// dial connects to the API socket; Start polls it to learn when Firecracker
+// is accepting configuration.
+func (c *apiClient) dial(ctx context.Context) (net.Conn, error) {
+	return (&net.Dialer{}).DialContext(ctx, "unix", c.socket)
 }
 
 func (c *apiClient) put(ctx context.Context, path string, value any) error {

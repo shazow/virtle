@@ -47,7 +47,10 @@ compact before/after examples.
   whose console is `print`: `Machine.Console` returns a `vm.Term` over the
   guest's serial port that replays recent output before live output, so
   readiness detection and driving a console shell need only `bufio` and
-  `io`; without a print console it reports `errors.ErrUnsupported`.
+  `io`; without a print console it reports `errors.ErrUnsupported`. A
+  session whose reader falls 1 MiB behind is dropped with an error wrapping
+  `vm.ErrTermFellBehind` and a warning on the backend's `Logger`, so a
+  stalled consumer never stalls the guest.
 - `vm.Disk.ReadOnly` is honored by both backends and by QEMU hotplug.
   **Breaking:** a `vm.Disk` that replaces a manifest disk must now set
   `ReadOnly: true` itself to keep a read-only mount:

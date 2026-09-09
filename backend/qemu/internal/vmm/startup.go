@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -108,7 +109,11 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (result 
 	// prints it, retains it, and serves VM.Console sessions.
 	var hub *console.Hub
 	if serial := plan.Manifest.QEMU.Console; serial.Enabled() && !serial.Interactive() {
-		hub, err = console.New(m.consoleOutput)
+		var logger *slog.Logger
+		if m.logger != nil {
+			logger = m.logger.With("host_name", plan.Manifest.Identity.HostName)
+		}
+		hub, err = console.New(m.consoleOutput, logger)
 		if err != nil {
 			return nil, &launch.StageError{Stage: "preflight", Err: err}
 		}

@@ -150,7 +150,7 @@ func (b *Backend) start(ctx context.Context, mf *imanifest.Manifest, ephemeralSt
 		// prints it, retains it, and serves Machine.Console sessions.
 		// Firecracker's own stderr diagnostics share the output writer.
 		serialized := &lockedWriter{writer: b.consoleOutput()}
-		hub, err := console.New(serialized)
+		hub, err := console.New(serialized, logger.With("host_name", mf.Identity.HostName))
 		if err != nil {
 			rollback()
 			return nil, err

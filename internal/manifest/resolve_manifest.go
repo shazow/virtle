@@ -51,8 +51,12 @@ func (d Document) ManifestWithOptions(options ResolveOptions) (*Manifest, error)
 	if d.Kernel.Path == "" {
 		return nil, fmt.Errorf("manifest.kernel.path is required")
 	}
-	if d.Kernel.InitrdPath == "" {
-		return nil, fmt.Errorf("manifest.kernel.initrd_path is required")
+	rootIndex, rootParams, err := rootDevice(d.Mounts.Image())
+	if err != nil {
+		return nil, err
+	}
+	if err := validateBootSource(d.Kernel, d.Mounts.Image(), rootIndex); err != nil {
+		return nil, err
 	}
 	host := d.Host.withDefaults()
 	m := &Manifest{
@@ -91,7 +95,7 @@ func (d Document) ManifestWithOptions(options ResolveOptions) (*Manifest, error)
 		return nil, fmt.Errorf("manifest.qemu.hotplug_ports must not be negative, got %d", d.QEMU.HotplugPorts)
 	}
 	hotplugCount := d.hotplugCount()
-	qemu, err := d.resolveQEMU(host, hotplugCount)
+	qemu, err := d.resolveQEMU(host, hotplugCount, rootParams)
 	if err != nil {
 		return nil, err
 	}
@@ -128,7 +132,7 @@ func (h HostInput) withDefaults() HostInput {
 	return h
 }
 
-func (d Document) resolveQEMU(host HostInput, hotplugCount int) (QEMU, error) {
+func (d Document) resolveQEMU(host HostInput, hotplugCount int, rootParams []string) (QEMU, error) {
 	machineType := d.Machine.Type
 	graphics := resolveGraphics(d.Graphics)
 	transport := qemuTransport(machineType, d.Mounts, graphics, hotplugCount > 0)
@@ -203,7 +207,7 @@ func (d Document) resolveQEMU(host HostInput, hotplugCount int) (QEMU, error) {
 		Kernel: QEMUKernel{
 			Path:       d.Kernel.Path,
 			InitrdPath: d.Kernel.InitrdPath,
-			Params:     kernelParams(host, serialMode, d.Kernel.Params),
+			Params:     kernelParams(host, serialMode, rootParams, d.Kernel.Params),
 		},
 		SMP: QEMUSMP{
 			CPUs: cpus,
@@ -360,8 +364,11 @@ func memoryBackend(host HostInput, hasVirtioFS bool) string {
 // kernelParams assembles the kernel command line: console parameters for
 // the resolved serial mode, virtle's fixed reboot/panic policy, then the
 // manifest's own parameters.
-func kernelParams(host HostInput, serialMode string, extra []string) string {
-	params := make([]string, 0, len(extra)+3)
+// kernelParams assembles the guest command line: console parameters for the
+// serial mode, virtle's fixed reboot/panic policy, the root device (see
+// rootDevice), then the manifest's own parameters, which therefore win.
+func kernelParams(host HostInput, serialMode string, root []string, extra []string) string {
+	params := make([]string, 0, len(extra)+len(root)+3)
 	if serialMode != KernelSerialOff {
 		switch host.System {
 		case "x86_64-linux":
@@ -371,8 +378,63 @@ func kernelParams(host HostInput, serialMode string, extra []string) string {
 		}
 	}
 	params = append(params, "reboot=t", "panic=-1")
+	params = append(params, root...)
 	params = append(params, extra...)
 	return strings.Join(params, " ")
+}
+
+// rootDevice picks the image mount the guest boots from: the one whose
+// target is "/". virtle passes the kernel's root= for it on every backend
+// (virtio-blk devices enumerate as /dev/vda, /dev/vdb, ... in mount order),
+// so one Spec boots the same way under QEMU and Firecracker. It returns the
+// mount's index, or -1, and the kernel parameters that select it.
+func rootDevice(mounts []ImageMountInput) (int, []string, error) {
+	root := -1
+	for i, mount := range mounts {
+		switch mount.Target {
+		case "":
+		case "/":
+			if root >= 0 {
+				return 0, nil, fmt.Errorf("manifest.mounts[%d].target: mounts[%d] is already the root device", i, root)
+			}
+			root = i
+		default:
+			return 0, nil, fmt.Errorf("manifest.mounts[%d].target %q: only \"/\" (the root device) is supported for images at boot", i, mount.Target)
+		}
+	}
+	if root < 0 {
+		return -1, nil, nil
+	}
+	if root >= 26 {
+		return 0, nil, fmt.Errorf("manifest.mounts[%d].target: the root device must be among the first 26 images", root)
+	}
+	access := "rw"
+	if mounts[root].ReadOnly {
+		access = "ro"
+	}
+	return root, []string{fmt.Sprintf("root=/dev/vd%c", 'a'+root), access}, nil
+}
+
+// validateBootSource rejects a boot that can only end in a kernel panic:
+// disks but no initrd, and neither a root device nor a root= parameter.
+func validateBootSource(kernel KernelInput, mounts []ImageMountInput, rootIndex int) error {
+	if kernel.InitrdPath != "" || len(mounts) == 0 || rootIndex >= 0 || hasKernelParam(kernel.Params, "root=") {
+		return nil
+	}
+	return fmt.Errorf("manifest.kernel.initrd_path is empty and no disk is the root device: set target = \"/\" on the root image mount (vm.Disk.GuestPath) or pass root= in kernel.params")
+}
+
+// hasKernelParam reports whether any parameter starts with prefix; a single
+// entry may carry several space-separated parameters.
+func hasKernelParam(params []string, prefix string) bool {
+	for _, param := range params {
+		for _, field := range strings.Fields(param) {
+			if strings.HasPrefix(field, prefix) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func kernelSerialMode(kernel KernelInput) (string, error) {

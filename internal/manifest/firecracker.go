@@ -63,17 +63,19 @@ type FirecrackerKernel struct {
 	Path       string `json:"path"`
 	InitrdPath string `json:"initrdPath,omitempty"`
 	// Cmdline is the complete guest command line virtle passes to the API:
-	// console parameters, virtle's reboot/panic policy, then the manifest's
-	// kernel.params. Firecracker appends root=/dev/vda and ro or rw for the
-	// first disk itself.
+	// console parameters, virtle's reboot/panic policy, root= for the disk
+	// mounted at "/", then the manifest's kernel.params. No drive is marked
+	// as Firecracker's root device, so Firecracker appends nothing itself.
 	Cmdline string `json:"cmdline"`
 }
 
-// FirecrackerDisk is a resolved raw block device; the first one is the root
-// device.
+// FirecrackerDisk is a resolved raw block device. Root marks the image
+// mounted at "/"; virtle passes root= for it itself, so Firecracker's own
+// root-device boot arguments stay off.
 type FirecrackerDisk struct {
 	Path     string `json:"path"`
 	ReadOnly bool   `json:"readOnly,omitempty"`
+	Root     bool   `json:"root,omitempty"`
 }
 
 // seededDocument is the document DecodeDocumentBytes decodes into: every
@@ -155,6 +157,13 @@ func (d Document) firecrackerManifest() (*Manifest, error) {
 	if d.Machine.Memory <= 0 || d.Machine.Memory > maxFirecrackerMemoryMiB {
 		return nil, fmt.Errorf("manifest.machine.memory must be between 1 and %d MiB for firecracker, got %d", maxFirecrackerMemoryMiB, d.Machine.Memory)
 	}
+	rootIndex, rootParams, err := rootDevice(d.Mounts.Image())
+	if err != nil {
+		return nil, err
+	}
+	if err := validateBootSource(d.Kernel, d.Mounts.Image(), rootIndex); err != nil {
+		return nil, err
+	}
 	if err := d.ResolveWorkingDir(); err != nil {
 		return nil, err
 	}
@@ -176,7 +185,7 @@ func (d Document) firecrackerManifest() (*Manifest, error) {
 		Kernel: FirecrackerKernel{
 			Path:       m.resolvePath(d.Kernel.Path),
 			InitrdPath: m.resolvePath(d.Kernel.InitrdPath),
-			Cmdline:    firecrackerKernelParams(serialMode, d.Kernel.Params),
+			Cmdline:    firecrackerKernelParams(serialMode, rootParams, d.Kernel.Params),
 		},
 		Console: serialMode,
 	}
@@ -210,7 +219,7 @@ func (d Document) firecrackerManifest() (*Manifest, error) {
 		case mount.Image.Serial != nil || mount.Image.Direct:
 			return nil, unsupported("manifest.mounts[%d] image.serial and image.direct", i)
 		}
-		fc.Disks = append(fc.Disks, FirecrackerDisk{Path: m.resolvePath(mount.SourcePath), ReadOnly: mount.ReadOnly})
+		fc.Disks = append(fc.Disks, FirecrackerDisk{Path: m.resolvePath(mount.SourcePath), ReadOnly: mount.ReadOnly, Root: i == rootIndex})
 	}
 	m.Firecracker = fc
 	return m, nil
@@ -218,16 +227,18 @@ func (d Document) firecrackerManifest() (*Manifest, error) {
 
 // firecrackerKernelParams assembles the guest command line the same way
 // kernelParams does for QEMU: console parameters for the serial mode, then
-// virtle's fixed reboot/panic policy, then the manifest's own parameters.
-// Firecracker exits on the i8042 reset that reboot=k requests, which is also
-// how Shutdown's Ctrl-Alt-Del completes; panic=-1 turns a guest panic into
-// that reset. Both VMMs expose the serial console as ttyS0.
-func firecrackerKernelParams(serialMode string, extra []string) string {
-	params := make([]string, 0, len(extra)+3)
+// virtle's fixed reboot/panic policy, the root device, then the manifest's
+// own parameters. Firecracker exits on the i8042 reset that reboot=k
+// requests, which is also how Shutdown's Ctrl-Alt-Del completes; panic=-1
+// turns a guest panic into that reset. Both VMMs expose the serial console
+// as ttyS0.
+func firecrackerKernelParams(serialMode string, root []string, extra []string) string {
+	params := make([]string, 0, len(extra)+len(root)+3)
 	if serialMode != KernelSerialOff {
 		params = append(params, "console=ttyS0")
 	}
 	params = append(params, "reboot=k", "panic=-1")
+	params = append(params, root...)
 	params = append(params, extra...)
 	return strings.Join(params, " ")
 }

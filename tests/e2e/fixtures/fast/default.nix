@@ -6,6 +6,22 @@
 let
   kernel = import ./kernel.nix { inherit pkgs userspace; };
   busybox = pkgs.pkgsStatic.busybox;
+  # One guest tree, packed two ways: as the initramfs and as a raw ext4 root
+  # disk. Applets are linked at build time so a read-only root works.
+  guestTree = pkgs.runCommand "virtle-fast-guest-tree" { } ''
+    mkdir -p $out/{bin,dev,etc,mnt,proc,sys,tmp}
+    cp ${busybox}/bin/busybox $out/bin/busybox
+    for applet in $($out/bin/busybox --list); do
+      [ "$applet" = busybox ] || ln -sf busybox $out/bin/$applet
+    done
+    cp ${./init} $out/init
+    cp ${workload} $out/bin/ready
+    cp ${./shutdown} $out/bin/shutdown
+    chmod +x $out/init $out/bin/{ready,shutdown}
+    cp ${./inittab} $out/etc/inittab
+    echo 21 > $out/input
+    find $out -exec touch -h -d @1 '{}' +
+  '';
   initrd =
     pkgs.runCommand "virtle-fast-initrd"
       {
@@ -15,19 +31,31 @@ let
         ];
       }
       ''
-        mkdir -p root/{bin,dev,etc,proc,sys,tmp} $out
-        cp ${busybox}/bin/busybox root/bin/busybox
-        ln -s busybox root/bin/sh
-        cp ${./init} root/init
-        cp ${workload} root/bin/ready
-        cp ${./shutdown} root/bin/shutdown
-        chmod +x root/init root/bin/{ready,shutdown}
-        cp ${./inittab} root/etc/inittab
-        echo 21 > root/input
+        mkdir -p $out
         # Stable order, metadata and gzip header; no Nix store closure in the guest.
-        find root -exec touch -h -d @1 '{}' +
-        (cd root; find . -print0 | LC_ALL=C sort -z | \
+        (cd ${guestTree}; find . -print0 | LC_ALL=C sort -z | \
           cpio --null -o --format=newc --owner=0:0 --reproducible | gzip -n -1 > $out/initrd)
+      '';
+  rootfs =
+    pkgs.runCommand "virtle-fast-rootfs"
+      {
+        nativeBuildInputs = [
+          pkgs.e2fsprogs
+          pkgs.fakeroot
+        ];
+      }
+      ''
+        mkdir -p $out
+        cp -a ${guestTree} root
+        chmod -R u+w root
+        truncate -s 16M $out/rootfs.ext4
+        # chown and mke2fs must share a fakeroot session: -d imports source owners.
+        fakeroot -- sh -eu <<'EOF'
+        chown -R 0:0 root
+        E2FSPROGS_FAKE_TIME=1 mke2fs -q -t ext4 -F -U 00000000-0000-0000-0000-000000000042 \
+          -E root_owner=0:0,hash_seed=00000000-0000-0000-0000-000000000042,lazy_itable_init=0,lazy_journal_init=0 \
+          -d root $out/rootfs.ext4
+        EOF
       '';
   common = isQemu: ''
     networks = []
@@ -76,6 +104,7 @@ pkgs.runCommand "virtle-fast-fixture"
       inherit
         kernel
         initrd
+        rootfs
         firecracker
         qemu
         ;
@@ -89,5 +118,6 @@ pkgs.runCommand "virtle-fast-fixture"
     ln -s ${kernel}/bzImage $out/bzImage
     ln -s ${kernel.configfile} $out/kernel.config
     ln -s ${initrd}/initrd $out/initrd
+    ln -s ${rootfs}/rootfs.ext4 $out/rootfs.ext4
     ln -s ${metadata} $out/fixture.json
   ''

@@ -25,13 +25,14 @@ startup_timeout="3s"
 [[mounts]]
 type="image"
 source="original"
+target="/"
 read_only=true
 `), "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	b := NewBackendFromDocument(doc, Backend{}).(*Backend)
-	spec := &vm.Spec{Dir: "/override", CPUs: 4, Memory: 512 * units.Mebibyte, Disks: []vm.Disk{{Path: "replacement", ReadOnly: true}}}
+	spec := &vm.Spec{Dir: "/override", CPUs: 4, Memory: 512 * units.Mebibyte, Disks: []vm.Disk{{Path: "replacement", ReadOnly: true, GuestPath: "/"}}}
 	mf, err := b.resolveSpec(spec, "")
 	if err != nil {
 		t.Fatal(err)
@@ -40,7 +41,7 @@ read_only=true
 	if fc.CPUs != 4 || fc.MemoryMiB != 512 || fc.Kernel.Path != "/override/kernel" || fc.Binary != "/override/bin/firecracker" || fc.Console != imanifest.KernelSerialPrint || fc.StartupTimeout.String() != "3s" {
 		t.Fatalf("configuration %+v", fc)
 	}
-	if fc.Kernel.Cmdline != "console=ttyS0 reboot=k panic=-1" {
+	if fc.Kernel.Cmdline != "console=ttyS0 reboot=k panic=-1 root=/dev/vda ro" {
 		t.Fatalf("cmdline %q", fc.Kernel.Cmdline)
 	}
 	if mf.ResolvedPersistenceStateDir() != "/override/state" || len(fc.Disks) != 1 || fc.Disks[0].Path != "/override/replacement" || !fc.Disks[0].ReadOnly {

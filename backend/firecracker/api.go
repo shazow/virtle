@@ -49,7 +49,7 @@ func (c *apiClient) configure(ctx context.Context, cfg *imanifest.Firecracker) e
 			Path     string `json:"path_on_host"`
 			Root     bool   `json:"is_root_device"`
 			ReadOnly bool   `json:"is_read_only"`
-		}{fmt.Sprintf("disk%d", i), disk.Path, i == 0, disk.ReadOnly}
+		}{fmt.Sprintf("disk%d", i), disk.Path, false, disk.ReadOnly}
 		if err := c.put(ctx, "/drives/"+drive.ID, drive); err != nil {
 			return err
 		}

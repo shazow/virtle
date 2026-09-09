@@ -69,13 +69,12 @@ on that reset; `poweroff` alone leaves the VMM running. See Firecracker's
 The manifest uses the common `[machine]`, `[kernel]`, and `[[mounts]]` sections.
 Paths resolve against `working_dir` (default: the launch directory). Firecracker
 does not expand shell variables or Go templates in executable/image paths.
-Virtle marks the first disk as root; disks must already exist and use raw
-format. Virtle supplies `console=ttyS0` (for `serial = "print"`) and
-`reboot=k panic=-1` ahead of `kernel.params`; Firecracker then appends
-`root=/dev/vda` and `ro` or `rw` according to that disk's `read_only` setting,
-so a conflicting `root=/dev/vda1` is unsupported. See the
-[Firecracker root-device setup](https://github.com/firecracker-microvm/firecracker/blob/v1.15.1/src/vmm/src/builder.rs#L625-L633).
-No networking, guest control, SSH, file sharing, hotplug, or suspend is enabled.
+Disks must already exist and use raw format. Virtle supplies `console=ttyS0`
+(for `serial = "print"`) and `reboot=k panic=-1` ahead of `kernel.params`; an
+image mounted at `/` (`target = "/"`) would also get `root=/dev/vdX` and `ro`
+or `rw`. This recipe boots from the initrd and attaches its disk as data, so
+init mounts `/dev/vda` itself and no `root=` is passed. No networking, guest
+control, SSH, file sharing, hotplug, or suspend is enabled.
 
 Virtle creates `.virtle` and locks the manifest's VM name there, shared with
 QEMU, then serves `.virtle/virtle.sock`; a socket left behind by a crashed

@@ -16,7 +16,7 @@ import (
 )
 
 func TestConfiguration(t *testing.T) {
-	spec := &vm.Spec{Dir: "/work", CPUs: 2, Memory: 256 * units.Mebibyte, Kernel: vm.Kernel{Path: "kernel", Initrd: "initrd", Cmdline: `console=ttyS0 init="a b"`}, Disks: []vm.Disk{{Path: "disk", Format: "raw", ReadOnly: true}}}
+	spec := &vm.Spec{Dir: "/work", CPUs: 2, Memory: 256 * units.Mebibyte, Kernel: vm.Kernel{Path: "kernel", Initrd: "initrd", Cmdline: `console=ttyS0 init="a b"`}, Disks: []vm.Disk{{Path: "disk", Format: "raw", ReadOnly: true, GuestPath: "/"}}}
 	mf, err := (&Backend{}).resolveSpec(spec, "")
 	if err != nil {
 		t.Fatal(err)
@@ -41,12 +41,14 @@ func TestConfiguration(t *testing.T) {
 	if bodies[0]["vcpu_count"] != float64(2) || bodies[0]["mem_size_mib"] != float64(256) {
 		t.Fatal(bodies[0])
 	}
-	// virtle's reboot/panic policy precedes the caller's command line, whose
-	// quoting survives intact; no console parameter without Console: print.
-	if bodies[1]["kernel_image_path"] != "/work/kernel" || bodies[1]["initrd_path"] != "/work/initrd" || bodies[1]["boot_args"] != "reboot=k panic=-1 "+spec.Kernel.Cmdline {
+	// virtle's reboot/panic policy and the root device precede the caller's
+	// command line, whose quoting survives intact; no console parameter
+	// without Console: print.
+	if bodies[1]["kernel_image_path"] != "/work/kernel" || bodies[1]["initrd_path"] != "/work/initrd" || bodies[1]["boot_args"] != "reboot=k panic=-1 root=/dev/vda ro "+spec.Kernel.Cmdline {
 		t.Fatal(bodies[1])
 	}
-	if bodies[2]["path_on_host"] != "/work/disk" || bodies[2]["is_read_only"] != true || bodies[2]["is_root_device"] != true {
+	// virtle owns root=, so Firecracker's own root-device arguments stay off.
+	if bodies[2]["path_on_host"] != "/work/disk" || bodies[2]["is_read_only"] != true || bodies[2]["is_root_device"] != false {
 		t.Fatal(bodies[2])
 	}
 	if bodies[3]["action_type"] != "InstanceStart" {

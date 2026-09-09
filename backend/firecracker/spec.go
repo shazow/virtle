@@ -76,8 +76,11 @@ func (b *Backend) resolveSpec(spec *vm.Spec, stateDir string) (*imanifest.Manife
 			doc.Kernel.Params = []string{spec.Kernel.Cmdline}
 		}
 	}
+	// As on QEMU, Spec disks overlay the manifest's image mounts by position,
+	// so manifest-only settings such as image.label survive a manifest.Load.
+	base := doc.Mounts.Image()
 	doc.Mounts = make(imanifest.MountsInput, 0, len(spec.Disks))
-	for _, disk := range spec.Disks {
+	for i, disk := range spec.Disks {
 		// "/" names the root device, which the kernel mounts itself; any
 		// other mount point needs an agent in the guest.
 		if disk.GuestPath != "" && disk.GuestPath != "/" {
@@ -89,14 +92,15 @@ func (b *Backend) resolveSpec(spec *vm.Spec, stateDir string) (*imanifest.Manife
 		if disk.Size%units.Mebibyte != 0 {
 			return nil, fmt.Errorf("firecracker: disk %q: size %s is not MiB-aligned", disk.Path, disk.Size)
 		}
-		doc.Mounts = append(doc.Mounts, imanifest.ImageMountInput{
-			Type:       imanifest.MountTypeImage,
-			SourcePath: disk.Path,
-			Target:     disk.GuestPath,
-			ReadOnly:   disk.ReadOnly,
-			// As on QEMU, a size asks for the image to be created when missing.
-			Image: imanifest.ImageInput{Format: disk.Format, Size: disk.Size.Mebibytes(), AutoCreate: disk.Size != 0},
-		})
+		var mount imanifest.ImageMountInput
+		if i < len(base) {
+			mount = base[i]
+		}
+		mount.Type = imanifest.MountTypeImage
+		mount.SourcePath, mount.Target, mount.ReadOnly = disk.Path, disk.GuestPath, disk.ReadOnly
+		// As on QEMU, a size asks for the image to be created when missing.
+		mount.Image.Format, mount.Image.Size, mount.Image.AutoCreate = disk.Format, disk.Size.Mebibytes(), disk.Size != 0
+		doc.Mounts = append(doc.Mounts, mount)
 	}
 	if b.Binary != "" {
 		doc.Firecracker.Binary = b.Binary

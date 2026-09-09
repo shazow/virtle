@@ -164,19 +164,25 @@ func TestStartupRollback(t *testing.T) {
 	for _, mode := range []string{"exit", "reject", "hung-api", "missing-binary"} {
 		t.Run(mode, func(t *testing.T) {
 			b, spec := helperBackend(t, mode)
-			b.StartupTimeout = shortTimeout
+			if mode == "hung-api" {
+				b.StartupTimeout = shortTimeout // the only mode that needs the deadline
+			}
 			if mode == "missing-binary" {
 				b.Binary = "/nonexistent/virtle-firecracker"
 			}
-			if m, err := b.Start(t.Context(), spec); err == nil {
+			m, err := b.Start(t.Context(), spec)
+			if err == nil {
 				_ = m.Kill()
 				t.Fatal("expected startup failure")
+			}
+			if mode == "reject" && !strings.Contains(err.Error(), "test rejection") {
+				t.Fatalf("configuration rejection not surfaced: %v", err)
 			}
 			// Acquiring the same state after failed startup verifies rollback.
 			t.Setenv("VIRTLE_TEST_FIRECRACKER", "normal")
 			b.Binary, _ = os.Executable()
 			b.StartupTimeout = testTimeout
-			m, err := b.Start(t.Context(), spec)
+			m, err = b.Start(t.Context(), spec)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -255,6 +261,8 @@ func TestStateDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	first := m
+	t.Cleanup(func() { _ = first.Kill() })
 	if info, err := os.Stat(state); err != nil || info.Mode().Perm() != 0o700 {
 		t.Fatalf("state directory: %v %v", info, err)
 	}
@@ -273,6 +281,7 @@ func TestStateDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = m.Kill() })
 	if err := m.Kill(); err != nil {
 		t.Fatal(err)
 	}

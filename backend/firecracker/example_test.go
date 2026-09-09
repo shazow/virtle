@@ -11,7 +11,8 @@ import (
 )
 
 // ExampleBackend boots a microVM from an uncompressed kernel and a raw root
-// disk, printing the guest's serial console until the guest powers off.
+// disk, printing the guest's serial console until the guest reboots (which
+// exits Firecracker) or Shutdown stops it.
 func ExampleBackend() {
 	ctx := context.Background()
 	b := &firecracker.Backend{
@@ -22,7 +23,9 @@ func ExampleBackend() {
 		CPUs:   2,
 		Memory: 512 * units.Mebibyte,
 		Kernel: vm.Kernel{Path: "vmlinux", Cmdline: "pci=off"},
-		Disks:  []vm.Disk{{Path: "rootfs.ext4", Format: "raw"}},
+		// The image mounted at "/" is the root device: virtle passes
+		// root=/dev/vda ro for it, so no initrd is needed.
+		Disks: []vm.Disk{{Path: "rootfs.ext4", Format: "raw", ReadOnly: true, GuestPath: "/"}},
 	})
 	if err != nil {
 		log.Print(err)
@@ -35,7 +38,7 @@ func ExampleBackend() {
 	}()
 
 	// Start returns once Firecracker has accepted the configuration, not
-	// when the guest is ready: watch the console (or the disk) for that.
+	// when the guest is ready: watch the console (Machine.Console) for that.
 	// Wait returns when the guest reboots or panics, or after Shutdown.
 	if err := m.Wait(ctx); err != nil {
 		log.Print(err)

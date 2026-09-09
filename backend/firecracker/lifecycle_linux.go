@@ -194,9 +194,10 @@ func (b *Backend) start(ctx context.Context, mf *imanifest.Manifest, ephemeralSt
 	go func() {
 		if err := m.control.Serve(listener); err != nil {
 			// The control socket is a peripheral: losing it leaves the machine
-			// running for the caller that holds it.
+			// running for the caller that holds it. Serve has let go of the
+			// listener by now, so close it here rather than through the server.
 			logger.Warn("control server stopped", "err", err)
-			_ = m.control.Close()
+			_ = listener.Close()
 		}
 	}()
 	<-m.control.Started()
@@ -338,7 +339,7 @@ func (m *Machine) reap() {
 	m.status.Stats.CompletedAt = time.Now()
 	m.mu.Unlock()
 	close(m.stopped)
-	m.control.Wait()
+	m.control.WaitLifecycle() // as QEMU: a slow status client cannot hold up done
 	close(m.done)
 }
 
@@ -384,8 +385,8 @@ func (m *Machine) kill() error {
 	}
 }
 
-// Shutdown asks the guest to power off and waits for the VMM to exit,
-// killing it when Backend.ShutdownTimeout or ctx expires. Firecracker's only
+// Shutdown asks the guest to stop and waits for the VMM to exit, killing it
+// when Backend.ShutdownTimeout or ctx expires. Firecracker's only
 // guest shutdown request is the i8042 Ctrl-Alt-Del, which exists on amd64
 // alone: the guest needs the i8042 driver and an init that handles
 // Ctrl-Alt-Del with a reboot (virtle's reboot=k turns that into a VMM exit).

@@ -7,46 +7,41 @@ Keep entries terse. When a day includes both CLI and library changes, group
 them by type, CLI first. For compatibility-breaking usage migrations, include
 compact before/after examples.
 
-## 2026-09-08
+## 2026-09-09
 
-- QEMU `virtle launch` drains accepted wait/kill/shutdown/suspend responses
-  before exiting, without waiting for unrelated control handlers.
-- `nix run path:.#benchmark-backends` compares both CLI backends using a shared
-  minimal kernel and BusyBox initramfs. Raw counterbalanced trials separate
-  readiness and teardown timings and are labeled directional. The reusable
-  `e2e-fast-fixture` and `checks.x86_64-linux.e2e-fast` verify both real KVM
-  backends without performance assertions or skip-success when KVM is absent.
-- `e2e-fast-userspace-fixture` adds eventfd, inotify, file locking and Unix
-  sockets to the tiny kernel for common Go/libuv-style userspace. Its separate
-  KVM check preserves `e2e-fast-fixture` as the minimal backend benchmark.
-- QEMU manifests can set `vsock.enabled = false` for guests that do not need
-  host-guest vsock communication, avoiding the `/dev/vhost-vsock` dependency.
-  Disabled devices use CID 0 without host allocation, including on resume.
-  Existing manifests continue to attach the device by default.
-- `backend = "firecracker"` selects Firecracker through `manifest.Load` and the
-  CLI. QEMU remains the default. Firecracker supports kernel boot with an optional
-  initrd, raw disks, serial output, and status/wait/kill/shutdown RPCs, with private API
-  sockets, exclusive state ownership, bounded API responses, and startup rollback.
-  Unsupported QEMU/guest features, including explicit SSH readiness and vsock
-  settings, fail validation. Shutdown RPC responses drain before launcher exit.
-  Startup rollback stops wrapper descendants before releasing runtime ownership;
-  state-directory symlinks are rejected even with trailing separators.
-  Linux and KVM are required.
-- A Firecracker recipe built from locked nixpkgs and
-  `checks.x86_64-linux.firecracker` boot a guest, verify a raw-disk computation,
-  and require clean guest shutdown.
-  The rootfs normalizes and verifies root ownership; its rebuild comparison
-  verifies identical output.
-- The CLI foreground lifecycle is shared across backends. Signal handling now
-  gives `Machine.Shutdown` the opportunity to stop gracefully before canceling
-  the machine's lifetime. QEMU SSH and suspend behavior remains in its adapter.
-- `vm.Disk.ReadOnly` now represents manifest `read_only` on both backends.
-  **Library compatibility:** when replacing a manifest disk through `vm.Spec`,
-  explicitly retain `ReadOnly: true` if needed; false now makes it writable.
-  Manifest-only QEMU launches retain their configured read-only behavior.
-- Resolved manifests include their backend and Firecracker configuration.
-  Control status retains legacy JSON field names: `paths.qmpSocket` contains
-  the Firecracker API socket for Firecracker machines.
+- `backend = "firecracker"` launches a Firecracker microVM instead of QEMU:
+  direct kernel boot, raw disks, serial output, and the usual `virtle launch`,
+  `status`, and `rpc` lifecycle. Linux with KVM only; guest control, SSH,
+  networking, shares, suspend, balloon, and hotplug stay QEMU-only and fail
+  validation. See [docs/firecracker.md](docs/firecracker.md).
+- QEMU manifests can set `vsock.enabled = false` for guests that do not use
+  host-guest vsock, dropping the `/dev/vhost-vsock` requirement.
+- `virtle launch` lets `Machine.Shutdown` stop the guest gracefully on
+  SIGINT/SIGTERM before canceling the machine, and drains accepted
+  wait/kill/shutdown/suspend RPC responses before exiting. `^Z` (SIGTSTP) on
+  a backend that cannot suspend is ignored with a warning instead of shutting
+  the VM down.
+- `nix flake check` gains real-KVM end-to-end checks that boot both backends
+  through the CLI on a shared tiny kernel (they need a `kvm` builder; see
+  CONTRIBUTING.md); `nix run .#benchmark-backends` compares them.
+
+### Library changes
+
+- New `backend/firecracker` package: `&firecracker.Backend{}` implements
+  `backend.Backend` and `backend.StatusReporter` with the same `vm.Spec` and
+  `backend.Machine` as QEMU. Spec features it cannot honor fail `Start` with
+  an error wrapping `errors.ErrUnsupported`.
+- `vm.Disk.ReadOnly` is honored by both backends and by QEMU hotplug.
+  **Breaking:** a `vm.Disk` that replaces a manifest disk must now set
+  `ReadOnly: true` itself to keep a read-only mount:
+  ```go
+  // Before: the manifest's read_only = true survived the overlay.
+  spec.Disks[0] = vm.Disk{Path: "rootfs.img"}
+  // After: the Spec entry is the whole truth.
+  spec.Disks[0] = vm.Disk{Path: "rootfs.img", ReadOnly: true}
+  ```
+- `qemu.Backend.DisableVSock` is the Go counterpart of `vsock.enabled = false`.
+- The deprecated `backend.Shutdown` helper is gone; call `Machine.Shutdown`.
 
 ## 2026-09-03
 

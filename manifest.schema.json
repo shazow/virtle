@@ -406,15 +406,19 @@
         "properties": {
           "id": {
             "type": "string",
-            "description": "QEMU network device identifier."
+            "description": "Network device identifier."
           },
           "type": {
             "type": "string",
-            "description": "Network backend type."
+            "description": "Network type: user (the VMM's built-in user networking, the default), virtle (a network virtle runs in userspace), or tap (a host TAP device)."
           },
           "mac": {
             "type": "string",
-            "description": "Guest network interface MAC address."
+            "description": "Guest network interface MAC address; a virtle network allocates one when omitted."
+          },
+          "tap": {
+            "type": "string",
+            "description": "Host TAP device name, for type tap."
           },
           "forward": {
             "type": [
@@ -447,7 +451,7 @@
               ],
               "additionalProperties": false
             },
-            "description": "Port forwarding rules for this network backend."
+            "description": "Port forwarding rules for this network."
           }
         },
         "additionalProperties": false
@@ -900,15 +904,19 @@
             "properties": {
               "id": {
                 "type": "string",
-                "description": "QEMU network device identifier."
+                "description": "Network device identifier."
               },
               "type": {
                 "type": "string",
-                "description": "Network backend type."
+                "description": "Network type: user (the VMM's built-in user networking, the default), virtle (a network virtle runs in userspace), or tap (a host TAP device)."
               },
               "mac": {
                 "type": "string",
-                "description": "Guest network interface MAC address."
+                "description": "Guest network interface MAC address; a virtle network allocates one when omitted."
+              },
+              "tap": {
+                "type": "string",
+                "description": "Host TAP device name, for type tap."
               },
               "forward": {
                 "type": [
@@ -941,7 +949,7 @@
                   ],
                   "additionalProperties": false
                 },
-                "description": "Port forwarding rules for this network backend."
+                "description": "Port forwarding rules for this network."
               }
             },
             "additionalProperties": false

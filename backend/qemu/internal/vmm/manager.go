@@ -26,6 +26,7 @@ import (
 	"github.com/shazow/virtle/backend/qemu/internal/qmpclient"
 	"github.com/shazow/virtle/internal/executor"
 	"github.com/shazow/virtle/internal/manifest"
+	"github.com/shazow/virtle/vmnet"
 )
 
 const (
@@ -44,6 +45,10 @@ type manager struct {
 	// exactly one manifest.
 	launchManifest *manifest.Manifest
 	hotplugRuntime *hotplug.Runtime
+	// network is what a virtle NIC attaches to; attachedNet is that NIC once
+	// startWithPlan has attached it.
+	network     vmnet.Network
+	attachedNet *networkAttachment
 
 	locker              launch.Locker
 	vsockCIDChecker     launch.VSockCIDChecker
@@ -70,6 +75,7 @@ func newManagerFromConfig(config Config) *manager {
 		runner = &executor.Runner{Logger: logger}
 	}
 	return &manager{
+		network:             config.Network,
 		locker:              config.Locker,
 		vsockCIDChecker:     config.VSockCIDChecker,
 		runner:              runner,
@@ -308,6 +314,24 @@ func (h *launchSuspendHandler) saveAndExit(ctx context.Context) error {
 	return h.err
 }
 
+// suspendState is the record a resume needs: where the VM state is, and
+// the identity the guest NIC keeps on its network.
+func (m *manager) suspendState(qmpSocketPath, statePath string, cid int) launch.SuspendState {
+	state := launch.SuspendState{
+		Version:       StateVersion,
+		HostName:      m.launchManifest.Identity.HostName,
+		QMPSocketPath: qmpSocketPath,
+		VMStatePath:   statePath,
+		CID:           cid,
+		Status:        launch.SuspendStatusSaved,
+	}
+	if attached := m.attachedNet; attached != nil {
+		state.NetworkMAC = attached.port.MAC().String()
+		state.NetworkAddr = attached.port.Addr().String()
+	}
+	return state
+}
+
 func (m *manager) saveSuspendStateConnected(ctx context.Context, qmpSocketPath string, client qmpclient.Client, cid int, notifier launch.NotificationSink) error {
 	mf := m.launchManifest
 	if mf == nil {
@@ -324,14 +348,7 @@ func (m *manager) saveSuspendStateConnected(ctx context.Context, qmpSocketPath s
 		return launch.WrapStage("qmp suspend", err)
 	}
 
-	state := launch.SuspendState{
-		Version:       StateVersion,
-		HostName:      mf.Identity.HostName,
-		QMPSocketPath: qmpSocketPath,
-		VMStatePath:   statePath,
-		CID:           cid,
-		Status:        launch.SuspendStatusSaved,
-	}
+	state := m.suspendState(qmpSocketPath, statePath, cid)
 	if err := launch.WriteSuspendStateData(mf, state); err != nil {
 		return launch.WrapStage("qmp suspend", err)
 	}

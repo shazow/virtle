@@ -149,11 +149,58 @@ func specDocument(spec *vm.Spec, cfg *Backend, base *imanifest.Document) (imanif
 		enabled := false
 		doc.VSock.Enabled = &enabled
 	}
+	if err := applySpecLink(&doc, cfg); err != nil {
+		return imanifest.Document{}, err
+	}
 
 	if err := applySpecDevices(&doc, spec); err != nil {
 		return imanifest.Document{}, err
 	}
 	return doc, nil
+}
+
+// applySpecLink lowers Backend.Network and Backend.Link onto the network
+// type of the document's NICs. A nil Link with no Network leaves the
+// document's own choice in place.
+func applySpecLink(doc *imanifest.Document, cfg *Backend) error {
+	link := cfg.Link
+	if link == nil {
+		if cfg.Network == nil {
+			return nil
+		}
+		link = Stream{}
+	}
+	var netType, tap string
+	switch l := link.(type) {
+	case User:
+		if cfg.Network != nil {
+			return fmt.Errorf("qemu.Backend.Link User keeps networking inside QEMU and cannot attach to Network: %w", errors.ErrUnsupported)
+		}
+		netType = imanifest.NetworkTypeUser
+	case TAP:
+		if cfg.Network != nil {
+			return fmt.Errorf("qemu.Backend.Link TAP is networked by the host kernel and cannot attach to Network: %w", errors.ErrUnsupported)
+		}
+		if l.Name == "" {
+			return fmt.Errorf("qemu.Backend.Link TAP requires the device Name")
+		}
+		netType, tap = imanifest.NetworkTypeTAP, l.Name
+	case Stream:
+		if cfg.Network == nil {
+			return fmt.Errorf("qemu.Backend.Link Stream carries frames to Network, which is nil: %w", errors.ErrUnsupported)
+		}
+		netType = imanifest.NetworkTypeVirtle
+	default:
+		return fmt.Errorf("unsupported qemu.Backend.Link %T", link)
+	}
+	if len(doc.Networks) == 0 {
+		doc.Networks = imanifest.DefaultDocument().Networks
+	}
+	for i := range doc.Networks {
+		doc.Networks[i].Type = netType
+		doc.Networks[i].Tap = tap
+	}
+	return nil
 }
 
 // applySpecDevices replaces the document entries represented by the neutral

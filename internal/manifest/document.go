@@ -240,11 +240,19 @@ type WorkspaceInput struct {
 	MountCWD bool   `json:"mount_cwd,omitempty" toml:"mount_cwd" jsonschema:"Mount the current working directory into the guest after launch."`
 }
 
+// Network types accepted by networks[].type.
+const (
+	NetworkTypeUser   = "user"   // the VMM's built-in user networking (QEMU slirp)
+	NetworkTypeVirtle = "virtle" // a network virtle runs in userspace (vmnet)
+	NetworkTypeTAP    = "tap"    // a host TAP device the host kernel networks
+)
+
 type NetworkInput struct {
-	ID      string        `json:"id,omitempty" toml:"id" jsonschema:"QEMU network device identifier."`
-	Type    string        `json:"type,omitempty" toml:"type" jsonschema:"Network backend type."`
-	MAC     string        `json:"mac,omitempty" toml:"mac" jsonschema:"Guest network interface MAC address."`
-	Forward []ForwardPort `json:"forward,omitempty" toml:"forward" jsonschema:"Port forwarding rules for this network backend."`
+	ID      string        `json:"id,omitempty" toml:"id" jsonschema:"Network device identifier."`
+	Type    string        `json:"type,omitempty" toml:"type" jsonschema:"Network type: user (the VMM's built-in user networking, the default), virtle (a network virtle runs in userspace), or tap (a host TAP device)."`
+	MAC     string        `json:"mac,omitempty" toml:"mac" jsonschema:"Guest network interface MAC address; a virtle network allocates one when omitted."`
+	Tap     string        `json:"tap,omitempty" toml:"tap" jsonschema:"Host TAP device name, for type tap."`
+	Forward []ForwardPort `json:"forward,omitempty" toml:"forward" jsonschema:"Port forwarding rules for this network."`
 }
 
 type ForwardPort struct {

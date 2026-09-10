@@ -17,7 +17,8 @@ type runningLaunch struct {
 	suspend        *launch.SuspendCoordinator
 	suspendHandler *launchSuspendHandler
 	processes      *launch.ProcessSet
-	console        *console.Hub // serial console fan-out; nil without a print console
+	console        *console.Hub       // serial console fan-out; nil without a print console
+	network        *networkAttachment // the guest NIC on a vmnet.Network; nil without one
 }
 
 func (r *runningLaunch) Close() error {

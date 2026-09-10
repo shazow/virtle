@@ -30,6 +30,7 @@ import (
 	"github.com/shazow/virtle/internal/sessionbridge"
 	"github.com/shazow/virtle/units"
 	"github.com/shazow/virtle/vm"
+	"github.com/shazow/virtle/vmnet"
 )
 
 // DefaultMemory is the guest memory size used when vm.Spec.Memory is zero.
@@ -77,6 +78,21 @@ type Backend struct {
 	// /dev/vhost-vsock and no CID is allocated. Guests then have no vsock
 	// transport for SSH; guest-agent control over virtio-serial still works.
 	DisableVSock bool
+
+	// Network attaches the guest's NIC to a network virtle runs (see
+	// vmnet): the network fixes the guest's address and MAC, dials its
+	// traffic through the network's Egress, and exposes Spec.Ports on its
+	// port, so Attach(vm.Forward) needs no hotplug ports and the host can
+	// dial the guest directly; Status reports the address. Nil keeps QEMU's
+	// built-in user networking, today's default, until the userspace
+	// network reaches parity with it.
+	Network vmnet.Network
+
+	// Link selects the guest NIC's frame path: User (QEMU's built-in user
+	// networking), TAP (a host TAP device), or Stream (frames to Network).
+	// Nil means User without a Network and Stream with one; manifest.Load
+	// sets it from the manifest's [[networks]] type.
+	Link Link
 
 	// RemoteControl selects the guest-control transport wired into
 	// Machine.RemoteControl, declaring what the VM image runs. Nil
@@ -205,15 +221,21 @@ func (b *Backend) start(ctx context.Context, spec *vm.Spec, resume vmm.ResumeMod
 		return nil, err
 	}
 	bridge := sessionbridge.FromContext(ctx)
+	var egress *vm.Egress
+	if spec != nil {
+		egress = spec.Egress
+	}
 	handle, err := vmm.StartVM(ctx, mf, vmm.StartOptions{
 		Resume:               resume,
 		HasRemoteControl:     b.hasRemoteControl(),
 		DeferResumeCommit:    bridge != nil,
 		DeferSuspendHandling: bridge != nil,
 		EphemeralState:       ephemeralState != "",
+		Egress:               egress,
 	}, vmm.Config{
 		Logger:        logger,
 		ConsoleOutput: b.consoleOutput(),
+		Network:       b.Network,
 	})
 	if err != nil {
 		// A launch that failed before taking the runtime lock has not
@@ -311,11 +333,16 @@ func (m *Machine) ResizeMemory(ctx context.Context, size units.Bytes) error {
 	return m.vm.ResizeMemory(ctx, size.Int64())
 }
 
-// Attach implements backend.DeviceAttacher over QMP hotplug. The machine
-// must have PCIe hotplug ports reserved at Start: set Backend.HotplugPorts
-// (or a manifest [hotplug] section / hotplug.ports for manifest.Load
-// backends).
+// Attach implements backend.DeviceAttacher. On a machine with a
+// Backend.Network, a vm.Forward is exposed on its network port and needs
+// nothing else. Everything else goes over QMP hotplug, for which the
+// machine must have PCIe hotplug ports reserved at Start: set
+// Backend.HotplugPorts (or a manifest [hotplug] section / hotplug.ports
+// for manifest.Load backends).
 func (m *Machine) Attach(ctx context.Context, dev vm.Device) error {
+	if f, ok := dev.(vm.Forward); ok && m.vm.HasNetworkPort() {
+		return m.vm.ExposeForward(ctx, f)
+	}
 	hdev, err := m.vm.HotplugDevice(dev)
 	if err != nil {
 		return err
@@ -323,8 +350,12 @@ func (m *Machine) Attach(ctx context.Context, dev vm.Device) error {
 	return m.vm.AttachHotplugDevice(ctx, hdev)
 }
 
-// Detach implements backend.DeviceAttacher; see Attach.
+// Detach implements backend.DeviceAttacher; see Attach. On a machine with a
+// Backend.Network it also removes forwards given in Spec.Ports.
 func (m *Machine) Detach(ctx context.Context, dev vm.Device) error {
+	if f, ok := dev.(vm.Forward); ok && m.vm.HasNetworkPort() {
+		return m.vm.UnexposeForward(f)
+	}
 	hdev, err := m.vm.HotplugDevice(dev)
 	if err != nil {
 		return err

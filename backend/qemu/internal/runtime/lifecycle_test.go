@@ -23,7 +23,7 @@ func TestMarkReadyAndStatus(t *testing.T) {
 	markReady(state)
 	stats := launch.NewStats(time.Now())
 	stats.Timer(launch.TimerBootStarted, time.Now().Add(time.Second))
-	got := status(state, 7, 42, control.StatusPaths{ControlSocket: "/tmp/virtle.sock"}, stats)
+	got := status(state, 7, 42, control.StatusPaths{ControlSocket: "/tmp/virtle.sock"}, stats, nil)
 	if got.State != control.RuntimeReady || got.CID != 7 || got.PID != 42 || got.Paths.ControlSocket != "/tmp/virtle.sock" {
 		t.Fatalf("status: %#v", got)
 	}

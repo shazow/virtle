@@ -2203,7 +2203,7 @@ func TestBuildQEMUCommandOnlyConnectsRequestedConsole(t *testing.T) {
 	cfg := validManifest("/tmp/work")
 	cfg.QEMU.Console = manifest.QEMUConsoleOff
 
-	cmd, err := buildQEMUCommand(cfg, 42, false, &console, nil)
+	cmd, err := buildQEMUCommand(cfg, 42, false, &console, nil, nil)
 	if err != nil {
 		t.Fatalf("build headless qemu command: %v", err)
 	}
@@ -2212,7 +2212,7 @@ func TestBuildQEMUCommandOnlyConnectsRequestedConsole(t *testing.T) {
 	}
 
 	cfg.QEMU.Console = manifest.QEMUConsolePrint
-	cmd, err = buildQEMUCommand(cfg, 42, false, &console, nil)
+	cmd, err = buildQEMUCommand(cfg, 42, false, &console, nil, nil)
 	if err != nil {
 		t.Fatalf("build console qemu command: %v", err)
 	}
@@ -2233,7 +2233,7 @@ func TestBuildQEMUCommandRidesTheConsoleHub(t *testing.T) {
 	defer hub.Close()
 	cfg := validManifest("/tmp/work")
 	cfg.QEMU.Console = manifest.QEMUConsolePrint
-	cmd, err := buildQEMUCommand(cfg, 42, false, &output, hub)
+	cmd, err := buildQEMUCommand(cfg, 42, false, &output, hub, nil)
 	if err != nil {
 		t.Fatalf("build console qemu command: %v", err)
 	}
@@ -2241,7 +2241,7 @@ func TestBuildQEMUCommandRidesTheConsoleHub(t *testing.T) {
 		t.Fatalf("print console not on the hub: stdin=%v stdout=%T stderr=%T", cmd.Stdin, cmd.Stdout, cmd.Stderr)
 	}
 	cfg.QEMU.Console = manifest.QEMUConsoleOff
-	cmd, err = buildQEMUCommand(cfg, 42, false, &output, hub)
+	cmd, err = buildQEMUCommand(cfg, 42, false, &output, hub, nil)
 	if err != nil {
 		t.Fatalf("build headless qemu command: %v", err)
 	}
@@ -2858,7 +2858,7 @@ func debugTestLogger(w io.Writer) *slog.Logger {
 }
 
 func buildTestQEMUCommand(manifest *manifest.Manifest, cid int, incoming bool) (*exec.Cmd, error) {
-	return buildQEMUCommand(manifest, cid, incoming, io.Discard, nil)
+	return buildQEMUCommand(manifest, cid, incoming, io.Discard, nil, nil)
 }
 
 func validManifest(workingDir string) *manifest.Manifest {

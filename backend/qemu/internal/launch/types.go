@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/shazow/virtle/internal/manifest"
+	"github.com/shazow/virtle/vm"
 )
 
 type ResumeMode string
@@ -31,6 +32,10 @@ type Options struct {
 	// state is released. Callers set it for a state directory they created
 	// for this launch alone (a Spec without Dir).
 	RemoveStateDir bool
+
+	// Egress is the guest's egress policy, handed to the network a virtle
+	// NIC attaches to; nil means the network's default.
+	Egress *vm.Egress
 }
 
 type Spec struct {
@@ -53,6 +58,10 @@ type SuspendState struct {
 	CID           int       `json:"cid,omitempty"`
 	Timestamp     time.Time `json:"timestamp"`
 	Status        string    `json:"status"`
+	// NetworkMAC and NetworkAddr identify the guest NIC on its virtle
+	// network, so a resume re-attaches with the lease the guest still holds.
+	NetworkMAC  string `json:"networkMac,omitempty"`
+	NetworkAddr string `json:"networkAddr,omitempty"`
 }
 
 type NotificationSink interface {

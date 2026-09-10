@@ -8,6 +8,7 @@ import (
 	"github.com/shazow/virtle/backend/qemu/internal/launch"
 	"github.com/shazow/virtle/backend/qemu/internal/qga"
 	"github.com/shazow/virtle/backend/qemu/internal/qmpclient"
+	"github.com/shazow/virtle/vmnet"
 )
 
 type Config struct {
@@ -25,6 +26,10 @@ type Config struct {
 	QMPQuitTimeout      time.Duration
 	QMPMigrationTimeout time.Duration
 	Notifier            launch.NotificationSink
+
+	// Network is what a manifest NIC of type virtle attaches to; a launch
+	// with such a NIC and no Network fails as unsupported.
+	Network vmnet.Network
 }
 
 // StateVersion is the qemu suspend-state version this machinery stamps on
@@ -58,6 +63,9 @@ func mergeConfig(base Config, override Config) Config {
 	}
 	if override.ConsoleOutput != nil {
 		base.ConsoleOutput = override.ConsoleOutput
+	}
+	if override.Network != nil {
+		base.Network = override.Network
 	}
 	if override.ShutdownDelay != 0 {
 		base.ShutdownDelay = override.ShutdownDelay

@@ -34,6 +34,10 @@ type StartOptions struct {
 	// EphemeralState removes the manifest's state directory once runtime
 	// state is released; the caller created it for this launch alone.
 	EphemeralState bool
+
+	// Egress is the guest's egress policy on the network a virtle NIC
+	// attaches to; nil means the network's default.
+	Egress *vm.Egress
 }
 
 // StartVM starts a VM from a resolved manifest and returns a handle without
@@ -53,6 +57,7 @@ func StartVM(ctx context.Context, mf *manifest.Manifest, options StartOptions, c
 		Resume:           options.Resume,
 		HasRemoteControl: options.HasRemoteControl,
 		RemoveStateDir:   options.EphemeralState,
+		Egress:           options.Egress,
 	}})
 	if err != nil {
 		return nil, err
@@ -320,6 +325,27 @@ func (v *VM) ResizeMemory(ctx context.Context, sizeBytes int64) error {
 		return fmt.Errorf("resize memory: no balloon device configured: %w", errors.ErrUnsupported)
 	}
 	return balloon.SetActual(ctx, v.running.qmp, sizeBytes)
+}
+
+// HasNetworkPort reports whether the guest NIC is a port on a vmnet.Network,
+// where forwards are exposed rather than hotplugged.
+func (v *VM) HasNetworkPort() bool { return v.running.network != nil }
+
+// ExposeForward exposes a host->guest forward on the machine's network
+// port; it needs no hotplug ports.
+func (v *VM) ExposeForward(ctx context.Context, f vm.Forward) error {
+	if v.running.network == nil {
+		return fmt.Errorf("expose forward: the machine has no vmnet port: %w", errors.ErrUnsupported)
+	}
+	return v.running.network.expose(ctx, f)
+}
+
+// UnexposeForward removes a forward exposed at Start or by ExposeForward.
+func (v *VM) UnexposeForward(f vm.Forward) error {
+	if v.running.network == nil {
+		return fmt.Errorf("unexpose forward: the machine has no vmnet port: %w", errors.ErrUnsupported)
+	}
+	return v.running.network.unexpose(f)
 }
 
 // HotplugDevice lowers a vm.Device onto the manifest's hotplug defaults,

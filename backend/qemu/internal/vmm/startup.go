@@ -66,6 +66,9 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (result 
 		}
 		return consoleHub.Close()
 	}
+	// The network port outlives QEMU by design (a suspended machine keeps
+	// its lease until the port closes), so it is released with the runtime.
+	var attached *networkAttachment
 	cleanupRuntime := func() error {
 		err := runtimeLock.Cleanup()
 		if plan.Options.RemoveStateDir {
@@ -73,7 +76,7 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (result 
 			// nothing else keeps sockets, locks, or saved state in it.
 			err = errors.Join(err, os.RemoveAll(plan.Manifest.ResolvedPersistenceStateDir()))
 		}
-		return errors.Join(err, closeConsole())
+		return errors.Join(err, closeConsole(), attached.Close())
 	}
 	defer func() {
 		if err == nil {
@@ -119,7 +122,13 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (result 
 		}
 		consoleHub = hub
 	}
-	qemuCmd, err := buildQEMUCommand(plan.Manifest, cid, plan.ResumeState != nil, m.consoleOutput, hub)
+	// The NIC attaches before the command is built: the network decides the
+	// MAC QEMU is given, and the guest's address is known before it boots.
+	if attached, err = m.attachNetwork(launchCtx, plan); err != nil {
+		return nil, &launch.StageError{Stage: "preflight", Err: err}
+	}
+	m.attachedNet = attached
+	qemuCmd, err := buildQEMUCommand(plan.Manifest, cid, plan.ResumeState != nil, m.consoleOutput, hub, attached)
 	if err != nil {
 		return nil, &launch.StageError{Stage: "preflight", Err: err}
 	}
@@ -143,6 +152,10 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (result 
 
 	stats.Timer(launch.TimerBootStarted, time.Now())
 	qemu, err := m.startQEMU(plan.QEMUCommand)
+	if attached != nil {
+		// QEMU holds its own descriptor now, or never will.
+		attached.releaseGuestEnd()
+	}
 	if err != nil {
 		return nil, launch.WrapStage("vm startup", err)
 	}
@@ -233,6 +246,7 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (result 
 		WriteBackTimeout: defaultWriteBackTimeout,
 		Logger:           m.logger,
 		SavedSuspendExit: launch.IsSavedSuspendExit,
+		Networks:         networkStatuses(plan.Manifest, attached),
 	}
 	if plan.Options.RemoveStateDir {
 		// Saved state would be removed with the ephemeral state directory, so
@@ -250,6 +264,7 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (result 
 		suspendHandler: suspendHandler,
 		processes:      processes,
 		console:        hub,
+		network:        attached,
 	}
 	runtime.SetReady()
 	handlers := controlpkg.Handlers{Hotplug: m.hotplugFeature(runtime.QMP())}

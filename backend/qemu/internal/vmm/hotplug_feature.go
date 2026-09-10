@@ -16,9 +16,24 @@ import (
 type managerHotplugFeature struct {
 	runner   hotplug.Runner
 	resolver *manifest.Manifest
+	network  *networkAttachment // forwards go here instead of a hotplugged NIC when set
 }
 
 func (f managerHotplugFeature) Hotplug(ctx context.Context, req controlpkg.HotplugRequest) (controlpkg.HotplugResponse, error) {
+	if req.Device != nil && req.Device.Forward != nil && f.network != nil {
+		forward := *req.Device.Forward
+		id := deviceID("fwd", forwardIdentity(forward))
+		if req.Detach {
+			if err := f.network.unexpose(forward); err != nil {
+				return controlpkg.HotplugResponse{}, err
+			}
+			return controlpkg.HotplugResponse{ID: id, Detach: true}, nil
+		}
+		if err := f.network.expose(ctx, forward); err != nil {
+			return controlpkg.HotplugResponse{}, err
+		}
+		return controlpkg.HotplugResponse{ID: id}, nil
+	}
 	if req.Device != nil {
 		device, err := controlHotplugDevice(f.resolver, *req.Device)
 		if err != nil {
@@ -81,16 +96,12 @@ func hotplugDeviceFor(resolver hotplugResolver, dev vm.Device) (manifest.Hotplug
 			Image:      manifest.ImageInput{Format: d.Format, Serial: &id},
 		})
 	case vm.Forward:
-		proto := d.Proto
-		if proto == "" {
-			proto = vm.TCP
-		}
-		identity := string(proto) + "\x00" + d.HostAddr + "\x00" + d.GuestAddr
+		identity := forwardIdentity(d)
 		return resolver.ResolveHotplugNetwork(manifest.NetworkInput{
 			ID:  deviceID("fwd", identity),
 			MAC: deviceMAC(identity),
 			Forward: []manifest.ForwardPort{{
-				Proto: string(proto),
+				Proto: string(forwardProto(d)),
 				From:  "host",
 				Host:  d.HostAddr,
 				Guest: d.GuestAddr,
@@ -99,6 +110,19 @@ func hotplugDeviceFor(resolver hotplugResolver, dev vm.Device) (manifest.Hotplug
 	default:
 		return manifest.HotplugDevice{}, fmt.Errorf("unsupported device type %T", dev)
 	}
+}
+
+func forwardProto(d vm.Forward) vm.Proto {
+	if d.Proto == "" {
+		return vm.TCP
+	}
+	return d.Proto
+}
+
+// forwardIdentity names a forward for device IDs, independent of how it is
+// realized.
+func forwardIdentity(d vm.Forward) string {
+	return string(forwardProto(d)) + "\x00" + d.HostAddr + "\x00" + d.GuestAddr
 }
 
 func controlHotplugDevice(resolver hotplugResolver, req controlpkg.DeviceRequest) (manifest.HotplugDevice, error) {
@@ -127,7 +151,7 @@ func deviceMAC(identity string) string {
 }
 
 func (m *manager) hotplugFeature(client qmpclient.Client) managerHotplugFeature {
-	return managerHotplugFeature{runner: m.hotplugRunner(client), resolver: m.launchManifest}
+	return managerHotplugFeature{runner: m.hotplugRunner(client), resolver: m.launchManifest, network: m.attachedNet}
 }
 
 func (m *manager) hotplugRunner(client qmpclient.Client) hotplug.Runner {

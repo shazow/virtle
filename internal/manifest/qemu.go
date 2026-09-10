@@ -173,6 +173,12 @@ type QEMUNetDevice struct {
 	DisableROM    bool     `json:"disableROM,omitempty"`
 	NetdevOptions []string `json:"netdevOptions,omitempty"`
 	MQVectors     int      `json:"mqVectors,omitempty"`
+	// Managed marks a NIC on a virtle network: the backend attaches it to
+	// the network at launch, the port decides the MAC (MacAddress is then
+	// the manifest's request, or empty), and Forward lists the host->guest
+	// forwards the port exposes.
+	Managed bool             `json:"managed,omitempty"`
+	Forward []HotplugForward `json:"forward,omitempty"`
 }
 
 type QEMUVSOCKDevice struct {

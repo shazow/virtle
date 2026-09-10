@@ -45,14 +45,15 @@ type Document struct {
 	Notifications NotificationsInput `json:"notifications,omitempty" toml:"notifications" jsonschema:"Host command hooks invoked for selected runtime notification states."`
 	Run           []RunInput         `json:"run,omitempty" toml:"run" jsonschema:"Host-side processes started before QEMU and stopped during teardown."`
 	Hotplug       HotplugInput       `json:"hotplug,omitempty" toml:"hotplug" jsonschema:"Devices that may be attached or detached after launch."`
-	Egress        *EgressInput       `json:"egress,omitempty" toml:"egress" jsonschema:"What the guest may reach through a network of type virtle, and the secrets it uses without holding them."`
+	Egress        *EgressInput       `json:"egress,omitempty" toml:"egress" jsonschema:"What the guest may reach through a network of type virtle, and the secrets it uses without holding them. Without this section such a network reaches the internet and nothing on the host or its networks."`
 }
 
 // EgressInput is the [egress] section: the policy of a network of type
 // virtle. Its allow and deny entries become both the network's rules and
-// the guest's own vm.Egress.
+// the guest's own vm.Egress; reach says what lies beyond them.
 type EgressInput struct {
-	Allow   []EgressRuleInput   `json:"allow,omitempty" toml:"allow" jsonschema:"Destinations the guest may reach; everything else is refused."`
+	Reach   string              `json:"reach,omitempty" toml:"reach" jsonschema:"What the guest may reach besides the allow entries: rules is only those entries, internet is any public destination and nothing on the host or its networks, all is anything the host can reach. Default internet; required when there are allow entries."`
+	Allow   []EgressRuleInput   `json:"allow,omitempty" toml:"allow" jsonschema:"Destinations the guest may reach, on the host's networks too, and which of them to inspect; reach must say whether they are the whole reach (rules) or exceptions on top of it (internet, all)."`
 	Deny    []EgressReachInput  `json:"deny,omitempty" toml:"deny" jsonschema:"Destinations refused even when an allow entry matches."`
 	Secrets []EgressSecretInput `json:"secrets,omitempty" toml:"secrets" jsonschema:"Secrets the guest uses through a token that inspected requests replace with the real value."`
 	CADir   string              `json:"ca_dir,omitempty" toml:"ca_dir" jsonschema:"Directory of the certificate authority that signs inspected connections; default <state_dir>/egress-ca."`

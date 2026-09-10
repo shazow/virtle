@@ -197,7 +197,10 @@ func (p *Policy) inspect(ctx context.Context, f vmnet.Flow, rule string) (net.Co
 		return nil, fmt.Errorf("egress: inspecting %s needs a CA: %w", f.Host, vmnet.ErrDenied)
 	}
 	guest, server := net.Pipe()
-	go p.serveInspected(ctx, server, f, rule)
+	// The dial's context ends when DialFlow returns (a network bounds the
+	// dial, not the flow); the connection serves for as long as the guest
+	// keeps it, and each request's own context comes from the server.
+	go p.serveInspected(context.WithoutCancel(ctx), server, f, rule)
 	return guest, nil
 }
 

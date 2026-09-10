@@ -44,7 +44,7 @@ if [ -e /sys/class/net/eth0 ]; then
   port=$(sed -n 's/.*virtle\.inject=\([0-9]*\).*/\1/p' /proc/cmdline)
   if [ -n "$port" ]; then
     seen=$(wget -q -T 5 -O - --header 'X-Random: $VIRTLE_RANDOM$' \
-      "http://inject.test:$port/echo?r="'$VIRTLE_RANDOM$' 2>/dev/null || true)
+      "http://inject.test:$port/echo?r="'$VIRTLE_RANDOM$' 2>&1 || true)
     echo "VIRTLE_INJECT:$seen"
   fi
 fi

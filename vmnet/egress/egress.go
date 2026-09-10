@@ -1,7 +1,11 @@
 // Package egress is the standard vmnet.Egress: an allowlist of destinations
 // by name pattern or address range, a deny list of address ranges checked
 // on what names resolve to, per-guest narrowing from vm.Egress, and a
-// record of every decision.
+// record of every decision. A rule can also inspect: the flow's TLS and
+// HTTP are terminated with a certificate minted from the Policy's CA, each
+// request is recorded, and secret tokens the guest holds are replaced by
+// the real values on the way out, so a guest uses a credential it never
+// sees.
 //
 // Name rules need a network that tells the Egress which name a guest
 // resolved (userspace.DNSFakeIP); on a network that resolves names itself
@@ -10,6 +14,7 @@ package egress
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -17,6 +22,7 @@ import (
 	"net/netip"
 	"path"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/shazow/virtle/vm"
@@ -32,6 +38,11 @@ type Rule struct {
 	Hosts []string
 	// Ports the rule applies to; empty means any.
 	Ports []int
+	// Inspect terminates the flow's TLS (with a certificate minted from the
+	// Policy's CA, which the guest must trust) and HTTP, records each
+	// request, and replaces secret tokens on the way out. Without it the
+	// flow is spliced to the destination untouched.
+	Inspect bool
 }
 
 // Decision is what a Policy did with a flow.
@@ -53,7 +64,13 @@ type Event struct {
 	Rule     string         // the pattern that allowed the flow
 	Reason   string         // why the flow was denied
 	Upstream netip.AddrPort // where an allowed flow was dialed
-	Err      error          // why an allowed flow's dial failed
+	Err      error          // why an allowed flow's dial or request failed
+
+	// Inspected flows also record one Event per HTTP request.
+	Method  string
+	Path    string
+	Status  int      // the upstream's status, or 502 when it could not be reached
+	Secrets []string // names of the secrets whose tokens the request carried
 }
 
 // Recorder receives every Event.
@@ -105,6 +122,19 @@ type Policy struct {
 	// Resolver resolves the names of allowed flows; nil means
 	// net.DefaultResolver.
 	Resolver Resolver
+
+	// Secrets are what inspected requests may carry in place of a token.
+	Secrets []Secret
+	// CA signs the certificates inspected flows present to guests; see
+	// LoadOrCreateCA. Required by any Rule with Inspect.
+	CA tls.Certificate
+	// UpstreamTLS configures TLS from an inspected flow to its real
+	// destination; nil verifies against the system roots.
+	UpstreamTLS *tls.Config
+
+	mu     sync.Mutex
+	leaves map[string]*tls.Certificate // minted per host
+	tokens map[string]string           // generated per Secret.Name
 }
 
 // DialFlow implements vmnet.Egress. A denied flow fails with an error
@@ -115,11 +145,24 @@ func (p *Policy) DialFlow(ctx context.Context, f vmnet.Flow) (net.Conn, error) {
 	if ev.Proto == "" {
 		ev.Proto = vm.TCP
 	}
-	rule, reason := p.decide(f)
+	matched, rule, reason := p.decide(f)
 	if reason != "" {
 		ev.Decision, ev.Reason = Denied, reason
 		p.record(ev)
 		return nil, fmt.Errorf("egress: %s: %w", reason, vmnet.ErrDenied)
+	}
+	if matched.Inspect && f.Network() == "tcp" {
+		// The dial happens per request, inside the proxy; the flow itself
+		// is recorded as allowed now and each request as it is made.
+		conn, err := p.inspect(ctx, f, rule)
+		ev.Rule = rule
+		if err != nil {
+			ev.Decision, ev.Reason = Denied, err.Error()
+		} else {
+			ev.Decision = Allowed
+		}
+		p.record(ev)
+		return conn, err
 	}
 	conn, upstream, err := p.dial(ctx, f)
 	ev.Rule, ev.Upstream = rule, upstream
@@ -136,13 +179,13 @@ func (p *Policy) DialFlow(ctx context.Context, f vmnet.Flow) (net.Conn, error) {
 }
 
 // decide applies the guest's own policy, the deny ranges for a flow dialed
-// by address, and the Rules. It returns the allowing pattern, or the reason
-// for a denial.
-func (p *Policy) decide(f vmnet.Flow) (rule, reason string) {
+// by address, and the Rules. It returns the allowing rule and pattern, or
+// the reason for a denial.
+func (p *Policy) decide(f vmnet.Flow) (matched Rule, pattern, reason string) {
 	if f.Egress != nil {
 		for _, r := range f.Egress.Deny {
 			if matchPattern(r.Host, r.Ports, f) {
-				return "", "denied by the guest's policy"
+				return Rule{}, "", "denied by the guest's policy"
 			}
 		}
 		allowed := false
@@ -153,20 +196,20 @@ func (p *Policy) decide(f vmnet.Flow) (rule, reason string) {
 			}
 		}
 		if !allowed {
-			return "", "outside the guest's allow list"
+			return Rule{}, "", "outside the guest's allow list"
 		}
 	}
 	if f.Host == "" && p.denied(f.Dst.Addr()) {
-		return "", fmt.Sprintf("%s is in a denied range", f.Dst.Addr())
+		return Rule{}, "", fmt.Sprintf("%s is in a denied range", f.Dst.Addr())
 	}
 	for _, r := range p.Rules {
 		for _, h := range r.Hosts {
 			if matchPattern(h, r.Ports, f) {
-				return h, ""
+				return r, h, ""
 			}
 		}
 	}
-	return "", "no rule allows it"
+	return Rule{}, "", "no rule allows it"
 }
 
 // dial connects an allowed flow: by address when that is all the guest
@@ -250,6 +293,12 @@ func (p *Policy) record(ev Event) {
 	}
 	if ev.Upstream.IsValid() {
 		attrs = append(attrs, "upstream", ev.Upstream)
+	}
+	if ev.Method != "" {
+		attrs = append(attrs, "method", ev.Method, "path", ev.Path, "status", ev.Status)
+	}
+	if len(ev.Secrets) != 0 {
+		attrs = append(attrs, "secrets", ev.Secrets)
 	}
 	if ev.Err != nil {
 		attrs = append(attrs, "err", ev.Err)

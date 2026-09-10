@@ -6,6 +6,7 @@
 package session
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -251,7 +252,7 @@ func (s *Session) foreground(ctx context.Context) error {
 		if err != nil {
 			s.logger.Warn("ssh command hint template failed", "err", err)
 		} else if hint != "" {
-			if _, err := fmt.Fprintf(optionWriter(s.Options.Stdout, os.Stdout), "connect with ssh: %s\n", hint); err != nil {
+			if _, err := fmt.Fprintf(cmp.Or[io.Writer](s.Options.Stdout, os.Stdout), "connect with ssh: %s\n", hint); err != nil {
 				return shutdownAfter(ctx, m, fmt.Errorf("write ssh command hint: %w", err))
 			}
 		}
@@ -382,13 +383,6 @@ func (s *Session) logStatus(ctx context.Context) {
 			s.logger.Info("machine status", "state", status.State, "cid", status.CID, "pid", status.PID)
 		}
 	}
-}
-
-func optionWriter(configured io.Writer, fallback io.Writer) io.Writer {
-	if configured != nil {
-		return configured
-	}
-	return fallback
 }
 
 // ExitCode maps session errors onto CLI exit codes: a foreground process

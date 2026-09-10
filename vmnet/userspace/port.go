@@ -1,6 +1,7 @@
 package userspace
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"io"
@@ -151,10 +152,7 @@ func (p *port) exposableLocked(key forwardKey) error {
 }
 
 func (p *port) forwardKey(f vm.Forward) (forwardKey, error) {
-	proto := f.Proto
-	if proto == "" {
-		proto = vm.TCP
-	}
+	proto := cmp.Or(f.Proto, vm.TCP)
 	if proto != vm.TCP && proto != vm.UDP {
 		return forwardKey{}, fmt.Errorf("userspace: forward protocol %q: %w", proto, net.UnknownNetworkError(string(proto)))
 	}

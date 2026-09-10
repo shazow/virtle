@@ -1,6 +1,7 @@
 package qemu
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"io"
@@ -334,11 +335,7 @@ func overlaySpecPorts(doc *imanifest.Document, ports []vm.Forward) error {
 }
 
 func specForward(forward vm.Forward) imanifest.ForwardPort {
-	proto := forward.Proto
-	if proto == "" {
-		proto = vm.TCP
-	}
-	return imanifest.ForwardPort{Proto: string(proto), From: "host", Host: forward.HostAddr, Guest: forward.GuestAddr}
+	return imanifest.ForwardPort{Proto: string(cmp.Or(forward.Proto, vm.TCP)), From: "host", Host: forward.HostAddr, Guest: forward.GuestAddr}
 }
 
 func overlaySpecFiles(inputs []imanifest.WriteFileInput, files []vm.File) ([]imanifest.WriteFileInput, error) {

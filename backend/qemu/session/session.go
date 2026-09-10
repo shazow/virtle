@@ -4,6 +4,7 @@
 package session
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -128,8 +129,8 @@ func runSSH(ctx context.Context, s *shared.Session) error {
 		Runner:                 &executor.Runner{Logger: logger},
 		Logger:                 logger,
 		Stdin:                  optionReader(opts.Stdin, os.Stdin),
-		Stdout:                 optionWriter(opts.Stdout, os.Stdout),
-		Stderr:                 optionWriter(opts.Stderr, os.Stderr),
+		Stdout:                 cmp.Or[io.Writer](opts.Stdout, os.Stdout),
+		Stderr:                 cmp.Or[io.Writer](opts.Stderr, os.Stderr),
 		RetryOutputRevealDelay: sshRetryOutputDelay,
 		Wait: func(ctx context.Context, process *executor.Process, _ executor.Group) error {
 			return s.WaitProcess(ctx, process)
@@ -215,13 +216,6 @@ func sshAutoprovisionError(err error) error {
 }
 
 func optionReader(configured io.Reader, fallback io.Reader) io.Reader {
-	if configured != nil {
-		return configured
-	}
-	return fallback
-}
-
-func optionWriter(configured io.Writer, fallback io.Writer) io.Writer {
 	if configured != nil {
 		return configured
 	}

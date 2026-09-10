@@ -44,7 +44,7 @@ func Create(img Image) error {
 		return fmt.Errorf("create disk image %q: %w", img.Path, err)
 	}
 	if img.Owner != "" {
-		uid, gid, err := lookupOwner(img.Owner)
+		uid, gid, err := LookupOwner(img.Owner)
 		if err != nil {
 			_ = file.Close()
 			return err
@@ -109,10 +109,12 @@ func Ensure(img Image) (bool, error) {
 	return true, nil
 }
 
-func lookupOwner(name string) (int, int, error) {
+// LookupOwner resolves a host account to the uid and gid files made on its
+// behalf are assigned to, for a VMM that drops privileges to it.
+func LookupOwner(name string) (int, int, error) {
 	account, err := user.Lookup(name)
 	if err != nil {
-		return 0, 0, fmt.Errorf("look up disk image owner %q: %w", name, err)
+		return 0, 0, fmt.Errorf("look up user %q: %w", name, err)
 	}
 	uid, err := strconv.Atoi(account.Uid)
 	if err != nil {

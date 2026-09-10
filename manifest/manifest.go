@@ -85,7 +85,7 @@ func LoadDocument(doc imanifest.Document) (*vm.Spec, backend.Backend, error) {
 	// The backend is built after the network, so the network's logger looks
 	// the backend up when it logs rather than capturing it here.
 	var loaded *qemu.Backend
-	if declaresVirtleNetwork(withDefaults.Networks) {
+	if slices.ContainsFunc(mf.QEMU.Devices.Network, func(d imanifest.QEMUNetDevice) bool { return d.Managed }) {
 		logger := slog.New(delegatingHandler{get: func() slog.Handler {
 			if loaded != nil && loaded.Logger != nil {
 				return loaded.Logger.Handler()
@@ -184,17 +184,6 @@ func guestSecretsFile(policy *egress.Policy, e *vm.Egress) []vm.File {
 		b.WriteString("export " + kv + "\n")
 	}
 	return []vm.File{{GuestPath: GuestSecretsPath, Content: strings.NewReader(b.String()), Mode: 0o644}}
-}
-
-// declaresVirtleNetwork reports whether a NIC attaches to a network virtle
-// runs, which the loader must build.
-func declaresVirtleNetwork(networks []imanifest.NetworkInput) bool {
-	for _, network := range networks {
-		if network.Type == imanifest.NetworkTypeVirtle {
-			return true
-		}
-	}
-	return false
 }
 
 // delegatingHandler resolves the handler it forwards to on every record,

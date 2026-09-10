@@ -13,6 +13,7 @@
 package egress
 
 import (
+	"cmp"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -21,6 +22,7 @@ import (
 	"net"
 	"net/netip"
 	"path"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -144,17 +146,14 @@ type Policy struct {
 
 	mu     sync.Mutex
 	leaves map[string]*tls.Certificate // minted per host
-	tokens map[string]string           // generated per Secret.Name
+	tokens map[string]string           // generated per Injection.Name
 }
 
 // DialFlow implements vmnet.Egress. A denied flow fails with an error
 // wrapping vmnet.ErrDenied, so the network refuses it before the guest sees
 // it accepted; a name that resolves only to denied ranges counts as denied.
 func (p *Policy) DialFlow(ctx context.Context, f vmnet.Flow) (net.Conn, error) {
-	ev := Event{Time: time.Now(), Guest: f.Guest, Proto: f.Proto, Src: f.Src, Dst: f.Dst, Host: f.Host}
-	if ev.Proto == "" {
-		ev.Proto = vm.TCP
-	}
+	ev := Event{Time: time.Now(), Guest: f.Guest, Proto: cmp.Or(f.Proto, vm.TCP), Src: f.Src, Dst: f.Dst, Host: f.Host}
 	matched, rule, reason := p.decide(f)
 	if reason == "" && matched.Inspect && f.Network() != "tcp" {
 		// Inspection terminates TCP; a datagram flow to the same host
@@ -325,7 +324,7 @@ func (p *Policy) record(ev Event) {
 // the flow: an address or CIDR against a flow dialed by address, a name
 // pattern against the name the guest resolved.
 func matchPattern(pattern string, ports []int, f vmnet.Flow) bool {
-	if len(ports) != 0 && !containsPort(ports, int(f.Dst.Port())) {
+	if len(ports) != 0 && !slices.Contains(ports, int(f.Dst.Port())) {
 		return false
 	}
 	if prefix, err := netip.ParsePrefix(pattern); err == nil {
@@ -339,15 +338,6 @@ func matchPattern(pattern string, ports []int, f vmnet.Flow) bool {
 	}
 	ok, err := path.Match(normalizeName(pattern), normalizeName(f.Host))
 	return err == nil && ok
-}
-
-func containsPort(ports []int, port int) bool {
-	for _, p := range ports {
-		if p == port {
-			return true
-		}
-	}
-	return false
 }
 
 func normalizeName(name string) string {

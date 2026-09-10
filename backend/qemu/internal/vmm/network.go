@@ -1,6 +1,7 @@
 package vmm
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -41,11 +42,7 @@ type forwardKey struct {
 }
 
 func keyFor(f vm.Forward) forwardKey {
-	proto := f.Proto
-	if proto == "" {
-		proto = vm.TCP
-	}
-	return forwardKey{proto: proto, host: f.HostAddr, guest: f.GuestAddr}
+	return forwardKey{proto: cmp.Or(f.Proto, vm.TCP), host: f.HostAddr, guest: f.GuestAddr}
 }
 
 // managedNetdev is what the attached NIC contributes to QEMU's arguments:

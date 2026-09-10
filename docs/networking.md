@@ -97,7 +97,7 @@ list is intersected with the rules, its `Deny` list wins, and only the
 `Secrets` it names are issued to it. One network can therefore serve several
 sandboxes with different rules.
 
-### Inspection and secrets
+### Inspection, injections, and secrets
 
 A rule with `Inspect` terminates the flow's TLS with a certificate minted
 from the policy's CA (`egress.LoadOrCreateCA`) and reverse-proxies the HTTP
@@ -112,6 +112,23 @@ and an inspected request to one of those hosts has the token replaced in its
 headers, query, path, or body on the way out. The token is inert anywhere
 else, and the recorded path is the one the guest sent, so a value never
 reaches a log.
+
+A secret is one case of an `Injection`: a token the guest writes and a
+function that computes its replacement as the request passes, with the same
+host, method, path, and placement scoping. The value is computed only when a
+request carries the token, once per request, and can come from anywhere the
+host can reach at that moment; an error leaves the token as it was.
+
+```go
+policy.Injections = []egress.Injection{
+	{Token: "$VIRTLE_RANDOM$", Value: egress.Random(16)}, // a nonce per request
+	{Token: "$BUILD_ID$", Value: func(ctx context.Context, r egress.Request) (string, error) {
+		return lookupBuild(ctx, r.Flow.Guest) // the guest's name, method, URL, and headers are in r
+	}},
+}
+```
+
+Injections have no manifest form yet; secrets do.
 
 ```toml
 [[networks]]

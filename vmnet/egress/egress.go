@@ -71,6 +71,8 @@ type Event struct {
 	Path    string
 	Status  int      // the upstream's status, or 502 when it could not be reached
 	Secrets []string // names of the secrets whose tokens the request carried
+	// Injections are the tokens of the Injections the request carried.
+	Injections []string
 }
 
 // Recorder receives every Event.
@@ -125,6 +127,9 @@ type Policy struct {
 
 	// Secrets are what inspected requests may carry in place of a token.
 	Secrets []Secret
+	// Injections are tokens inspected requests carry in place of a value
+	// computed as they pass; a Secret is one with a generated token.
+	Injections []Injection
 	// CA signs the certificates inspected flows present to guests; see
 	// LoadOrCreateCA. Required by any Rule with Inspect.
 	CA tls.Certificate
@@ -299,6 +304,9 @@ func (p *Policy) record(ev Event) {
 	}
 	if len(ev.Secrets) != 0 {
 		attrs = append(attrs, "secrets", ev.Secrets)
+	}
+	if len(ev.Injections) != 0 {
+		attrs = append(attrs, "injections", ev.Injections)
 	}
 	if ev.Err != nil {
 		attrs = append(attrs, "err", ev.Err)

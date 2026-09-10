@@ -64,8 +64,10 @@ doubles it, writes and reads back `/tmp/result`, verifies `42`, and prints the
 complete line `VIRTLE_READY:42`. When the guest has a NIC (the Go API network
 scenarios attach one; the CLI manifests attach none), it first takes a DHCP
 lease with `udhcpc`, prints `VIRTLE_NET:<address>`, serves a TCP echo on port
-7, and with `virtle.egress=PORT` on the command line connects to
-`allowed.test` and `blocked.test` on that port and prints the outcome. There
+7, with `virtle.egress=PORT` on the command line connects to `allowed.test`
+and `blocked.test` on that port and prints the outcome, and with
+`virtle.inject=PORT` fetches `http://inject.test:PORT/echo` with
+`$VIRTLE_RANDOM$` in a header and the query and prints what came back. There
 is no modprobe, NixOS activation, service manager, SSH, or guest agent. No disk
 is attached in the CLI benchmark; the Firecracker recipe covers raw disk I/O and
 clean unmounting. The archive normalizes owner, timestamps, ordering, inode

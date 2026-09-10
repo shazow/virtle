@@ -17,13 +17,14 @@ import (
 	"path"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/shazow/virtle/vm"
 	"github.com/shazow/virtle/vmnet"
 )
 
-// Placement is where in an HTTP request a secret's token is replaced.
+// Placement is where in an HTTP request a token is replaced.
 type Placement string
 
 const (
@@ -33,12 +34,14 @@ const (
 	InBody   Placement = "body"   // the request body
 )
 
-// Placements are every Placement, the default for a Secret without In.
+// Placements are every Placement, the default for a Secret or Injection
+// without In.
 var Placements = []Placement{InHeader, InQuery, InPath, InBody}
 
 // Secret is a value a guest uses without holding: the guest gets Token,
 // and an inspected request to a matching host has the token replaced by
-// Value on its way out. Anywhere else the token is inert.
+// Value on its way out. Anywhere else the token is inert. It is an
+// Injection whose token is generated and issued per guest.
 type Secret struct {
 	// Name is the environment variable GuestEnv sets to the token, and the
 	// name a vm.Egress.Secrets entry refers to.
@@ -46,8 +49,9 @@ type Secret struct {
 	// Token is the placeholder the guest holds; one is generated when it is
 	// empty. It must be a string that survives HTTP unencoded.
 	Token string
-	// Value returns the real value when a request needs it, so it is never
-	// held longer than the request and can come from a vault.
+	// Value returns the real value when a request carries the token, so it
+	// is never held longer than the request and can come from a vault. An
+	// error or an empty value leaves the token as the guest sent it.
 	Value func() (string, error)
 	// Hosts are name patterns (as for Rule.Hosts) of the destinations the
 	// secret may be sent to; it is never sent anywhere else.
@@ -121,8 +125,8 @@ func (p *Policy) tokenOf(s *Secret) string {
 }
 
 // Validate reports a Policy that cannot work: malformed patterns, a rule
-// that inspects with no CA to mint certificates from, or a Secret without
-// a name, a value, or hosts.
+// that inspects with no CA to mint certificates from, a Secret without a
+// name, a value, or hosts, or an Injection without a token or a value.
 func (p *Policy) Validate() error {
 	inspects := false
 	for i, r := range p.Rules {
@@ -163,13 +167,31 @@ func (p *Policy) Validate() error {
 			}
 		}
 	}
+	for i, inj := range p.Injections {
+		switch {
+		case inj.Token == "":
+			return fmt.Errorf("egress: injection %d has no token", i)
+		case inj.Value == nil:
+			return fmt.Errorf("egress: injection %q has no value", inj.Token)
+		}
+		for _, h := range inj.Hosts {
+			if err := ValidPattern(h); err != nil {
+				return fmt.Errorf("egress: injection %q: %w", inj.Token, err)
+			}
+		}
+		for _, in := range inj.In {
+			if !containsPlacement(Placements, in) {
+				return fmt.Errorf("egress: injection %q: unknown placement %q", inj.Token, in)
+			}
+		}
+	}
 	return nil
 }
 
 // inspect serves an inspected flow: the guest gets one end of a pipe, and
 // the other end is terminated (TLS with a minted certificate when the guest
 // starts a handshake, plain HTTP otherwise) and reverse-proxied to the
-// real destination with the guest's secret tokens replaced.
+// real destination with the guest's tokens replaced.
 func (p *Policy) inspect(ctx context.Context, f vmnet.Flow, rule string) (net.Conn, error) {
 	if len(p.CA.Certificate) == 0 {
 		return nil, fmt.Errorf("egress: inspecting %s needs a CA: %w", f.Host, vmnet.ErrDenied)
@@ -209,7 +231,7 @@ func (p *Policy) serveInspected(ctx context.Context, conn net.Conn, f vmnet.Flow
 			// The record keeps the path as the guest sent it: after
 			// substitution it could carry a secret.
 			info := &requestInfo{path: pr.In.URL.Path}
-			info.secrets = p.substitute(pr.Out, f)
+			info.secrets, info.injections = p.substitute(pr.Out.Context(), pr.Out, pr.In, f)
 			pr.Out = pr.Out.WithContext(context.WithValue(pr.Out.Context(), requestInfoKey{}, info))
 		},
 		Transport: p.upstreamTransport(f),
@@ -255,8 +277,26 @@ type requestInfoKey struct{}
 
 // requestInfo is what an inspected request records besides its outcome.
 type requestInfo struct {
-	path    string
-	secrets []string
+	path                string
+	secrets, injections []*applied
+}
+
+// applied is one token's substitution in one request. used is set when the
+// token was found and replaced anywhere, including in a body that streamed
+// out after the headers.
+type applied struct {
+	name string
+	used atomic.Bool
+}
+
+func usedNames(list []*applied) []string {
+	var names []string
+	for _, a := range list {
+		if a.used.Load() {
+			names = append(names, a.name)
+		}
+	}
+	return names
 }
 
 // recordRequest records one inspected request as an Event.
@@ -268,96 +308,98 @@ func (p *Policy) recordRequest(f vmnet.Flow, rule string, r *http.Request, statu
 	if r != nil {
 		ev.Method, ev.Path = r.Method, r.URL.Path
 		if info, ok := r.Context().Value(requestInfoKey{}).(*requestInfo); ok {
-			ev.Path, ev.Secrets = info.path, info.secrets
+			ev.Path = info.path
+			ev.Secrets, ev.Injections = usedNames(info.secrets), usedNames(info.injections)
 		}
 	}
 	p.record(ev)
 }
 
-// substitute replaces the tokens of the secrets the request may carry and
-// returns the names of those it replaced.
-func (p *Policy) substitute(r *http.Request, f vmnet.Flow) []string {
-	var used []string
+// substitute replaces, in the outgoing request out, the tokens of the
+// secrets and injections that apply to it; in is the request as the guest
+// sent it. A value is read only once its token is found.
+func (p *Policy) substitute(ctx context.Context, out, in *http.Request, f vmnet.Flow) (secrets, injections []*applied) {
 	for _, s := range p.secretsFor(f.Egress) {
-		if !secretApplies(s, f, r) {
+		if s.Value == nil || !scopeApplies(s.Hosts, s.Methods, s.Paths, false, f, out) {
 			continue
 		}
-		value, err := s.Value()
-		if err != nil {
-			continue
-		}
-		token := p.tokenOf(s)
-		if token == "" || value == "" {
-			continue
-		}
-		if replaceRequest(r, token, value, s.In) {
-			used = append(used, s.Name)
-		}
+		a := &applied{name: s.Name}
+		replaceRequest(out, p.tokenOf(s), sync.OnceValues(s.Value), s.In, a)
+		secrets = append(secrets, a)
 	}
-	return used
+	for i := range p.Injections {
+		inj := &p.Injections[i]
+		if inj.Token == "" || inj.Value == nil || !scopeApplies(inj.Hosts, inj.Methods, inj.Paths, true, f, out) {
+			continue
+		}
+		req := Request{Flow: f, Method: in.Method, URL: in.URL, Header: in.Header}
+		a := &applied{name: inj.Token}
+		replaceRequest(out, inj.Token, sync.OnceValues(func() (string, error) { return inj.Value(ctx, req) }), inj.In, a)
+		injections = append(injections, a)
+	}
+	return secrets, injections
 }
 
-func secretApplies(s *Secret, f vmnet.Flow, r *http.Request) bool {
-	matched := false
-	for _, h := range s.Hosts {
-		if matchPattern(h, nil, f) {
-			matched = true
-			break
+func matchesPath(patterns []string, p string) bool {
+	for _, pattern := range patterns {
+		if ok, err := path.Match(pattern, p); err == nil && ok {
+			return true
 		}
 	}
-	if !matched {
-		return false
-	}
-	if len(s.Methods) != 0 && !containsFold(s.Methods, r.Method) {
-		return false
-	}
-	if len(s.Paths) != 0 {
-		matched = false
-		for _, pattern := range s.Paths {
-			if ok, err := path.Match(pattern, r.URL.Path); err == nil && ok {
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			return false
-		}
-	}
-	return true
+	return false
 }
 
 // bufferedBodyLimit is the largest body rewritten in memory; larger bodies
 // are rewritten as they stream, which sends them chunked.
 const bufferedBodyLimit = 1 << 20
 
-// replaceRequest replaces token with value in the chosen parts of the
-// request and reports whether it found it anywhere.
-func replaceRequest(r *http.Request, token, value string, in []Placement) bool {
+// replaceRequest replaces token in the chosen parts of the request with
+// the value resolve returns, reading it only once a token is found; an
+// error or an empty value leaves every occurrence as it is. It marks a as
+// used when it replaced anything, including later, as a streamed body
+// passes.
+func replaceRequest(r *http.Request, token string, resolve func() (string, error), in []Placement, a *applied) {
 	if len(in) == 0 {
 		in = Placements
 	}
-	found := false
+	value := func() (string, bool) {
+		v, err := resolve()
+		return v, err == nil && v != ""
+	}
 	for _, place := range in {
 		switch place {
 		case InHeader:
 			for name, values := range r.Header {
 				for i, v := range values {
-					if strings.Contains(v, token) {
-						r.Header[name][i] = strings.ReplaceAll(v, token, value)
-						found = true
+					if !strings.Contains(v, token) {
+						continue
 					}
+					val, ok := value()
+					if !ok {
+						return
+					}
+					r.Header[name][i] = strings.ReplaceAll(v, token, val)
+					a.used.Store(true)
 				}
 			}
 		case InQuery:
 			if strings.Contains(r.URL.RawQuery, token) {
-				r.URL.RawQuery = strings.ReplaceAll(r.URL.RawQuery, token, value)
-				found = true
+				val, ok := value()
+				if !ok {
+					return
+				}
+				r.URL.RawQuery = strings.ReplaceAll(r.URL.RawQuery, token, val)
+				a.used.Store(true)
 			}
 		case InPath:
 			if strings.Contains(r.URL.Path, token) {
-				r.URL.Path = strings.ReplaceAll(r.URL.Path, token, value)
+				val, ok := value()
+				if !ok {
+					return
+				}
+				r.URL.Path = strings.ReplaceAll(r.URL.Path, token, val)
 				r.URL.RawPath = ""
-				found = true
+				a.used.Store(true)
 			}
 		case InBody:
 			if r.Body == nil || r.Body == http.NoBody {
@@ -366,57 +408,85 @@ func replaceRequest(r *http.Request, token, value string, in []Placement) bool {
 			if r.ContentLength >= 0 && r.ContentLength <= bufferedBodyLimit {
 				data, err := io.ReadAll(io.LimitReader(r.Body, bufferedBodyLimit+1))
 				_ = r.Body.Close()
-				if err != nil {
-					r.Body = io.NopCloser(bytes.NewReader(data))
+				r.Body = io.NopCloser(bytes.NewReader(data))
+				if err != nil || !bytes.Contains(data, []byte(token)) {
 					continue
 				}
-				if bytes.Contains(data, []byte(token)) {
-					data = bytes.ReplaceAll(data, []byte(token), []byte(value))
-					found = true
+				val, ok := value()
+				if !ok {
+					return
 				}
+				data = bytes.ReplaceAll(data, []byte(token), []byte(val))
 				r.Body = io.NopCloser(bytes.NewReader(data))
 				r.ContentLength = int64(len(data))
 				r.Header.Set("Content-Length", fmt.Sprint(len(data)))
+				a.used.Store(true)
 				continue
 			}
 			// Unknown or large length: rewrite as it streams. The length
 			// may change, so the upstream gets it chunked.
-			r.Body = &replacingReader{src: r.Body, token: []byte(token), value: []byte(value)}
+			r.Body = &replacingReader{src: r.Body, token: []byte(token), value: value, applied: a}
 			r.ContentLength = -1
 			r.Header.Del("Content-Length")
-			found = true // assumed: the body is not read here
 		}
 	}
-	return found
 }
 
-// replacingReader replaces token with value in a stream, holding back the
-// tail that might begin a token split across reads.
+// replacingReader replaces token in a stream with the value resolved on
+// the first match, holding back the tail that might begin a token split
+// across reads. When the value cannot be resolved the stream passes
+// unchanged from then on.
 type replacingReader struct {
-	src          io.ReadCloser
-	token, value []byte
-	buf          []byte
-	eof          bool
+	src     io.ReadCloser
+	token   []byte
+	value   func() (string, bool)
+	applied *applied
+
+	val   []byte
+	state int // 0: unresolved, 1: replacing, 2: passing through
+	buf   []byte
+	skip  int // leading bytes of buf already scanned or written, not to scan again
+	eof   bool
+}
+
+func (r *replacingReader) replacement() ([]byte, bool) {
+	if r.state == 0 {
+		if v, ok := r.value(); ok {
+			r.val, r.state = []byte(v), 1
+		} else {
+			r.state = 2
+		}
+	}
+	return r.val, r.state == 1
 }
 
 func (r *replacingReader) Read(p []byte) (int, error) {
 	for {
 		// Emit what is safe: everything but a possible token prefix at the
-		// end, unless the source is done.
-		var safe int
-		if !r.eof {
-			safe = max(0, len(r.buf)-len(r.token)+1)
-			if i := bytes.Index(r.buf, r.token); i >= 0 {
-				r.buf = append(append(r.buf[:i:i], r.value...), r.buf[i+len(r.token):]...)
+		// end, unless the source is done or nothing is replaced anymore.
+		safe := len(r.buf)
+		if r.state != 2 && !r.eof {
+			safe = max(r.skip, len(r.buf)-len(r.token)+1)
+			if i := bytes.Index(r.buf[r.skip:], r.token); i >= 0 {
+				if val, ok := r.replacement(); ok {
+					j := r.skip + i
+					r.buf = append(append(r.buf[:j:j], val...), r.buf[j+len(r.token):]...)
+					r.applied.used.Store(true)
+					r.skip = j + len(val)
+				}
 				continue
 			}
-		} else {
-			r.buf = bytes.ReplaceAll(r.buf, r.token, r.value)
+		} else if r.state != 2 && bytes.Contains(r.buf[r.skip:], r.token) {
+			if val, ok := r.replacement(); ok {
+				r.buf = append(r.buf[:r.skip:r.skip], bytes.ReplaceAll(r.buf[r.skip:], r.token, val)...)
+				r.applied.used.Store(true)
+			}
 			safe = len(r.buf)
 		}
 		if safe > 0 {
 			n := copy(p, r.buf[:safe])
 			r.buf = r.buf[n:]
+			r.skip = max(0, r.skip-n)
 			return n, nil
 		}
 		if r.eof {

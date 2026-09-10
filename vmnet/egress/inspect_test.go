@@ -5,6 +5,8 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -15,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/iotest"
 
@@ -250,9 +253,10 @@ func TestReplacingReaderFindsSplitTokens(t *testing.T) {
 		"whole":              strings.NewReader(input),
 		"half":               iotest.HalfReader(strings.NewReader(input)),
 	} {
-		r := &replacingReader{src: io.NopCloser(src), token: []byte("TOKEN"), value: []byte("v")}
+		a := &applied{}
+		r := &replacingReader{src: io.NopCloser(src), token: []byte("TOKEN"), value: func() (string, bool) { return "v", true }, applied: a}
 		got, err := io.ReadAll(iotest.OneByteReader(r))
-		if err != nil || string(got) != want {
+		if err != nil || string(got) != want || !a.used.Load() {
 			t.Errorf("%s: %v\n got %q\nwant %q", name, err, got, want)
 		}
 	}
@@ -291,14 +295,17 @@ func TestValidate(t *testing.T) {
 		policy *Policy
 		want   string
 	}{
-		"inspect without CA":   {&Policy{Rules: []Rule{{Hosts: []string{"a.test"}, Inspect: true}}}, "no CA"},
-		"rule without hosts":   {&Policy{Rules: []Rule{{}}}, "no hosts"},
-		"bad pattern":          {&Policy{Rules: []Rule{{Hosts: []string{"["}}}}, "pattern"},
-		"secret without name":  {&Policy{Secrets: []Secret{{Value: value, Hosts: []string{"a"}}}}, "no name"},
-		"secret without value": {&Policy{Secrets: []Secret{{Name: "A", Hosts: []string{"a"}}}}, "no value"},
-		"secret without hosts": {&Policy{Secrets: []Secret{{Name: "A", Value: value}}}, "no hosts"},
-		"duplicate secret":     {&Policy{Secrets: []Secret{{Name: "A", Value: value, Hosts: []string{"a"}}, {Name: "A", Value: value, Hosts: []string{"a"}}}}, "twice"},
-		"bad placement":        {&Policy{Secrets: []Secret{{Name: "A", Value: value, Hosts: []string{"a"}, In: []Placement{"cookie"}}}}, "placement"},
+		"inspect without CA":      {&Policy{Rules: []Rule{{Hosts: []string{"a.test"}, Inspect: true}}}, "no CA"},
+		"rule without hosts":      {&Policy{Rules: []Rule{{}}}, "no hosts"},
+		"bad pattern":             {&Policy{Rules: []Rule{{Hosts: []string{"["}}}}, "pattern"},
+		"secret without name":     {&Policy{Secrets: []Secret{{Value: value, Hosts: []string{"a"}}}}, "no name"},
+		"secret without value":    {&Policy{Secrets: []Secret{{Name: "A", Hosts: []string{"a"}}}}, "no value"},
+		"secret without hosts":    {&Policy{Secrets: []Secret{{Name: "A", Value: value}}}, "no hosts"},
+		"duplicate secret":        {&Policy{Secrets: []Secret{{Name: "A", Value: value, Hosts: []string{"a"}}, {Name: "A", Value: value, Hosts: []string{"a"}}}}, "twice"},
+		"bad placement":           {&Policy{Secrets: []Secret{{Name: "A", Value: value, Hosts: []string{"a"}, In: []Placement{"cookie"}}}}, "placement"},
+		"injection without token": {&Policy{Injections: []Injection{{Value: Random(4)}}}, "no token"},
+		"injection without value": {&Policy{Injections: []Injection{{Token: "$X$"}}}, "no value"},
+		"injection bad pattern":   {&Policy{Injections: []Injection{{Token: "$X$", Value: Random(4), Hosts: []string{"["}}}}, "pattern"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if err := tc.policy.Validate(); err == nil || !strings.Contains(err.Error(), tc.want) {
@@ -351,3 +358,161 @@ func TestLoadOrCreateCAIsStable(t *testing.T) {
 }
 
 var _ = vmnet.ErrDenied
+
+func TestInspectInjectsValues(t *testing.T) {
+	got := &seen{}
+	upstream := httptest.NewTLSServer(got.handler(t))
+	defer upstream.Close()
+	rec := &events{}
+	p := inspectingPolicy(t, upstream, rec)
+	var calls atomic.Int32
+	const token = "$VIRTLE_RANDOM$"
+	p.Injections = []Injection{
+		{Token: token, Value: func(_ context.Context, r Request) (string, error) {
+			if r.Flow.Host != "api.test" || r.Method != "POST" || !strings.Contains(r.URL.Path, token) || r.Header.Get("Authorization") != "Bearer "+token {
+				t.Errorf("Value saw %s %s %v: not the request as the guest sent it", r.Flow.Host, r.Method, r.URL)
+			}
+			return fmt.Sprintf("v%d", calls.Add(1)), nil
+		}},
+		{Token: "$ELSEWHERE$", Hosts: []string{"other.test"}, Value: func(context.Context, Request) (string, error) { return "never", nil }},
+		{Token: "$FAILS$", Value: func(context.Context, Request) (string, error) { return "", errors.New("unavailable") }},
+	}
+	if err := p.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	port := upstreamPort(upstream)
+	client := guestClient(p, nil, false)
+	send := func() {
+		t.Helper()
+		req, _ := http.NewRequest("POST", "https://api.test:"+port+"/v1/"+token+"/items?key="+token, strings.NewReader("data="+token+"&e=$ELSEWHERE$&f=$FAILS$"))
+		req.Header.Set("Authorization", "Bearer "+token)
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("request through the policy: %v", err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != 200 {
+			t.Fatalf("status %d", resp.StatusCode)
+		}
+	}
+
+	send()
+	got.mu.Lock()
+	if got.auth != "Bearer v1" || got.query != "v1" || got.path != "/v1/v1/items" || got.body != "data=v1&e=$ELSEWHERE$&f=$FAILS$" {
+		t.Errorf("upstream saw auth %q query %q path %q body %q", got.auth, got.query, got.path, got.body)
+	}
+	got.mu.Unlock()
+	if calls.Load() != 1 {
+		t.Errorf("Value called %d times for one request, want once", calls.Load())
+	}
+	rec.mu.Lock()
+	request := rec.list[len(rec.list)-1]
+	rec.mu.Unlock()
+	if request.Method != "POST" || request.Path != "/v1/"+token+"/items" || len(request.Secrets) != 0 || len(request.Injections) != 1 || request.Injections[0] != token {
+		t.Errorf("request event = %+v; want the guest's path and the one token that was replaced", request)
+	}
+
+	// Every request gets its own value.
+	send()
+	got.mu.Lock()
+	if got.auth != "Bearer v2" || got.body != "data=v2&e=$ELSEWHERE$&f=$FAILS$" {
+		t.Errorf("second request saw auth %q body %q", got.auth, got.body)
+	}
+	got.mu.Unlock()
+
+	// A request without the token costs no Value call and records nothing.
+	resp, err := client.Get("https://api.test:" + port + "/plain")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if calls.Load() != 2 {
+		t.Errorf("Value called for a request without the token")
+	}
+	rec.mu.Lock()
+	request = rec.list[len(rec.list)-1]
+	rec.mu.Unlock()
+	if request.Path != "/plain" || len(request.Injections) != 0 {
+		t.Errorf("event for a request without tokens = %+v", request)
+	}
+}
+
+func TestValuesAreReadOnlyWhenTheTokenIsPresent(t *testing.T) {
+	got := &seen{}
+	upstream := httptest.NewServer(got.handler(t))
+	defer upstream.Close()
+	rec := &events{}
+	var secretReads, injectionReads atomic.Int32
+	p := inspectingPolicy(t, upstream, rec, Secret{
+		Name:  "KEY",
+		Token: "fixed-token",
+		Value: func() (string, error) { secretReads.Add(1); return "the-value", nil },
+		Hosts: []string{"plain.test"},
+	})
+	p.Injections = []Injection{{Token: "$NONCE$", Value: func(context.Context, Request) (string, error) {
+		injectionReads.Add(1)
+		return "n", nil
+	}}}
+	port := upstreamPort(upstream)
+	client := guestClient(p, nil, false)
+
+	resp, err := client.Get("http://plain.test:" + port + "/nothing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if secretReads.Load() != 0 || injectionReads.Load() != 0 {
+		t.Fatalf("values read %d and %d times for a request without tokens", secretReads.Load(), injectionReads.Load())
+	}
+
+	// Tokens deep in a streamed body are found and resolved as they pass,
+	// once each, and the request's event names them.
+	filler := bytes.Repeat([]byte("x"), 2<<20)
+	body := append(append(append([]byte("head $NONCE$ "), filler...), []byte(" fixed-token $NONCE$ tail")...), 0)
+	req, _ := http.NewRequest("PUT", "http://plain.test:"+port+"/upload", bytes.NewReader(body))
+	resp, err = client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if secretReads.Load() != 1 || injectionReads.Load() != 1 {
+		t.Errorf("values read %d and %d times, want once each", secretReads.Load(), injectionReads.Load())
+	}
+	got.mu.Lock()
+	if !strings.HasPrefix(got.body, "head n ") || !strings.HasSuffix(got.body, " the-value n tail\x00") || len(got.body) != len(body)-2*len("$NONCE$")+2-len("fixed-token")+len("the-value") {
+		t.Errorf("streamed body: %d bytes, head %q, tail %q", len(got.body), got.body[:8], got.body[len(got.body)-24:])
+	}
+	got.mu.Unlock()
+	rec.mu.Lock()
+	request := rec.list[len(rec.list)-1]
+	rec.mu.Unlock()
+	if len(request.Secrets) != 1 || request.Secrets[0] != "KEY" || len(request.Injections) != 1 || request.Injections[0] != "$NONCE$" {
+		t.Errorf("request event = %+v", request)
+	}
+}
+
+func TestReplacingReaderValueContainingToken(t *testing.T) {
+	// A value that contains the token must not be replaced again.
+	a := &applied{}
+	r := &replacingReader{
+		src:     io.NopCloser(strings.NewReader("a$T$b$T$c")),
+		token:   []byte("$T$"),
+		value:   func() (string, bool) { return "<$T$>", true },
+		applied: a,
+	}
+	out, err := io.ReadAll(r)
+	if err != nil || string(out) != "a<$T$>b<$T$>c" || !a.used.Load() {
+		t.Fatalf("got %q, %v, used=%v", out, err, a.used.Load())
+	}
+	// An unresolvable value passes the stream through untouched.
+	a = &applied{}
+	r = &replacingReader{
+		src:     io.NopCloser(strings.NewReader("a$T$b")),
+		token:   []byte("$T$"),
+		value:   func() (string, bool) { return "", false },
+		applied: a,
+	}
+	if out, err := io.ReadAll(r); err != nil || string(out) != "a$T$b" || a.used.Load() {
+		t.Fatalf("got %q, %v, used=%v", out, err, a.used.Load())
+	}
+}

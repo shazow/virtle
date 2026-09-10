@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"regexp"
 	"strings"
@@ -242,5 +244,75 @@ func TestEgressPolicy(t *testing.T) {
 	}
 	if !network.Subnet().Contains(denied.Src.Addr()) || !userspace.DefaultFakeIPRange.Contains(denied.Dst.Addr()) {
 		t.Fatalf("denied event = %+v; the guest dialed a synthetic address from its own", *denied)
+	}
+}
+
+var injectLine = regexp.MustCompile(`VIRTLE_INJECT:header=([^;\s]*);query=(\S*)`)
+
+// TestEgressInjection has the guest fetch a page through an inspecting
+// policy with $VIRTLE_RANDOM$ in a header and in the query: the server
+// behind the policy sees one fresh random value in both places, the guest
+// sees the server's answer, and the request is on record with the token.
+func TestEgressInjection(t *testing.T) {
+	f := loadFixture(t)
+	var mu sync.Mutex
+	var sawHeader, sawQuery string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		sawHeader, sawQuery = r.Header.Get("X-Random"), r.URL.Query().Get("r")
+		mu.Unlock()
+		fmt.Fprintf(w, "header=%s;query=%s", r.Header.Get("X-Random"), r.URL.Query().Get("r"))
+	}))
+	defer upstream.Close()
+	port := int(netip.MustParseAddrPort(upstream.Listener.Addr().String()).Port())
+	ca, err := egress.LoadOrCreateCA(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := &eventLog{}
+	policy := &egress.Policy{
+		Rules:        []egress.Rule{{Hosts: []string{"inject.test"}, Ports: []int{port}, Inspect: true}},
+		DenyPrefixes: []netip.Prefix{}, // the server is on the loopback
+		Resolver:     hostTable{"inject.test": netip.MustParseAddr("127.0.0.1")},
+		Recorder:     events,
+		CA:           ca,
+		Injections:   []egress.Injection{{Token: "$VIRTLE_RANDOM$", Value: egress.Random(8)}},
+	}
+	if err := policy.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	network, err := userspace.New(userspace.Config{DNS: userspace.DNSFakeIP, Egress: policy})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer network.Close()
+	g := f.networkGuest(t, network)
+	spec := g.spec(t)
+	spec.Kernel.Cmdline = fmt.Sprintf("%s virtle.inject=%d", fixtureCmdline, port)
+	_, log := startReady(t, g, spec)
+
+	m := injectLine.FindStringSubmatch(log.String())
+	if m == nil {
+		t.Fatalf("guest did not report the fetch\n--- console ---\n%s", log.String())
+	}
+	value := m[1]
+	if !regexp.MustCompile(`^[0-9a-f]{16}$`).MatchString(value) || m[2] != value {
+		t.Fatalf("guest saw header=%q query=%q; want one random value in both", m[1], m[2])
+	}
+	mu.Lock()
+	if sawHeader != value || sawQuery != value {
+		t.Errorf("server saw header=%q query=%q, want %q", sawHeader, sawQuery, value)
+	}
+	mu.Unlock()
+	events.mu.Lock()
+	defer events.mu.Unlock()
+	var request *egress.Event
+	for i := range events.list {
+		if e := &events.list[i]; e.Host == "inject.test" && e.Method != "" {
+			request = e
+		}
+	}
+	if request == nil || request.Method != "GET" || request.Path != "/echo" || request.Status != 200 || len(request.Injections) != 1 || request.Injections[0] != "$VIRTLE_RANDOM$" {
+		t.Fatalf("events = %+v, want the request recorded with its token", events.list)
 	}
 }

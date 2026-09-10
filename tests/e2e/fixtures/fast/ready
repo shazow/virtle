@@ -38,5 +38,14 @@ if [ -e /sys/class/net/eth0 ]; then
     fi
     echo "VIRTLE_EGRESS:allowed=$allowed,blocked=$blocked"
   fi
+  # With virtle.inject=PORT, fetch a page through the inspecting policy with
+  # an injection token in a header and in the query, and report what the
+  # server saw. The token is single-quoted: it is the host's to replace.
+  port=$(sed -n 's/.*virtle\.inject=\([0-9]*\).*/\1/p' /proc/cmdline)
+  if [ -n "$port" ]; then
+    seen=$(wget -q -T 5 -O - --header 'X-Random: $VIRTLE_RANDOM$' \
+      "http://inject.test:$port/echo?r="'$VIRTLE_RANDOM$' 2>/dev/null || true)
+    echo "VIRTLE_INJECT:$seen"
+  fi
 fi
 echo "VIRTLE_READY:$result"

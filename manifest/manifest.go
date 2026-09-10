@@ -24,6 +24,7 @@ import (
 	"github.com/shazow/virtle/backend/qemu"
 	imanifest "github.com/shazow/virtle/internal/manifest"
 	"github.com/shazow/virtle/vm"
+	"github.com/shazow/virtle/vmnet/egress"
 	"github.com/shazow/virtle/vmnet/userspace"
 )
 
@@ -44,6 +45,9 @@ import (
 // virtle runs in userspace (vmnet/userspace) and hand it to the backend,
 // which owns it: it logs through the backend's Logger, and closing the
 // backend (it implements io.Closer) releases it once its machines are done.
+// An [egress] section becomes that network's policy (vmnet/egress) and the
+// Spec's Egress; the guest gets the policy's CA certificate and its secret
+// tokens as files (egress.GuestCAPath, GuestSecretsPath).
 func Load(r io.Reader) (*vm.Spec, backend.Backend, error) {
 	data, err := io.ReadAll(r)
 	if err != nil {
@@ -65,7 +69,8 @@ func Load(r io.Reader) (*vm.Spec, backend.Backend, error) {
 // not callable (and not supported) outside the module.
 func LoadDocument(doc imanifest.Document) (*vm.Spec, backend.Backend, error) {
 	// Resolve early so invalid manifests fail at load, not at Start.
-	if _, err := doc.Manifest(); err != nil {
+	mf, err := doc.Manifest()
+	if err != nil {
 		return nil, nil, err
 	}
 	withDefaults := imanifest.DocumentWithDefaults(doc)
@@ -86,8 +91,21 @@ func LoadDocument(doc imanifest.Document) (*vm.Spec, backend.Backend, error) {
 				return loaded.Logger.Handler()
 			}
 			return slog.DiscardHandler
-		}}).With("package", "vmnet")
-		network, err := userspace.New(userspace.Config{Logger: logger})
+		}})
+		netCfg := userspace.Config{Logger: logger.With("package", "vmnet")}
+		if mf.Egress != nil {
+			policy, err := egressPolicy(mf.Egress, logger.With("package", "egress"))
+			if err != nil {
+				return nil, nil, err
+			}
+			// Name rules need names: the network hands out synthetic
+			// addresses so the policy sees what the guest resolved.
+			netCfg.DNS, netCfg.Egress = userspace.DNSFakeIP, policy
+			spec.Egress = specEgress(mf.Egress)
+			spec.Files = append(spec.Files, policy.GuestFiles()...)
+			spec.Files = append(spec.Files, guestSecretsFile(policy, spec.Egress)...)
+		}
+		network, err := userspace.New(netCfg)
 		if err != nil {
 			return nil, nil, fmt.Errorf("create virtle network: %w", err)
 		}
@@ -95,6 +113,70 @@ func LoadDocument(doc imanifest.Document) (*vm.Spec, backend.Backend, error) {
 	}
 	loaded = qemu.NewBackendFromDocument(doc, cfg).(*qemu.Backend)
 	return spec, loaded, nil
+}
+
+// GuestSecretsPath is where a guest finds the tokens of its secrets, as
+// shell export lines.
+const GuestSecretsPath = "/etc/virtle/secrets.env"
+
+// egressPolicy builds the network's policy from the manifest's [egress]
+// section, creating the CA when an entry inspects.
+func egressPolicy(e *imanifest.Egress, logger *slog.Logger) (*egress.Policy, error) {
+	policy := &egress.Policy{Logger: logger}
+	for _, r := range e.Allow {
+		policy.Rules = append(policy.Rules, egress.Rule{Hosts: []string{r.Host}, Ports: r.Ports, Inspect: r.Inspect})
+	}
+	for _, s := range e.Secrets {
+		secret := egress.Secret{Name: s.Name, Value: s.ValueFunc(), Hosts: s.Hosts, Methods: s.Methods, Paths: s.Paths}
+		for _, in := range s.In {
+			secret.In = append(secret.In, egress.Placement(in))
+		}
+		policy.Secrets = append(policy.Secrets, secret)
+	}
+	if e.Inspects {
+		ca, err := egress.LoadOrCreateCA(e.CADir)
+		if err != nil {
+			return nil, err
+		}
+		policy.CA = ca
+	}
+	if err := policy.Validate(); err != nil {
+		return nil, err
+	}
+	return policy, nil
+}
+
+// specEgress is the guest's view of the [egress] section: the same allow
+// and deny entries, and the names of every secret it may hold.
+func specEgress(e *imanifest.Egress) *vm.Egress {
+	reaches := func(rules []imanifest.EgressRule) []vm.Reach {
+		out := make([]vm.Reach, 0, len(rules))
+		for _, r := range rules {
+			out = append(out, vm.Reach{Host: r.Host, Ports: r.Ports})
+		}
+		return out
+	}
+	names := make([]string, 0, len(e.Secrets))
+	for _, s := range e.Secrets {
+		names = append(names, s.Name)
+	}
+	return &vm.Egress{Allow: reaches(e.Allow), Deny: reaches(e.Deny), Secrets: names}
+}
+
+// guestSecretsFile places the guest's tokens at GuestSecretsPath; a token
+// is worthless outside the guest, so the file is readable by any user in
+// it.
+func guestSecretsFile(policy *egress.Policy, e *vm.Egress) []vm.File {
+	env := policy.GuestEnv(e)
+	if len(env) == 0 {
+		return nil
+	}
+	var b strings.Builder
+	b.WriteString("# Tokens virtle replaces with the real secrets in inspected requests.\n")
+	for _, kv := range env {
+		b.WriteString("export " + kv + "\n")
+	}
+	return []vm.File{{GuestPath: GuestSecretsPath, Content: strings.NewReader(b.String()), Mode: 0o644}}
 }
 
 // declaresVirtleNetwork reports whether a NIC attaches to a network virtle

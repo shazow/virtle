@@ -268,6 +268,14 @@ func (n *Network) Subnet() netip.Prefix { return n.subnet }
 // MTU is the segment's MTU.
 func (n *Network) MTU() int { return n.mtu }
 
+// DNS is the gateway's answering mode.
+func (n *Network) DNS() DNSMode {
+	if n.fakeIPs != nil {
+		return DNSFakeIP
+	}
+	return DNSForward
+}
+
 // Attach implements vmnet.Network.
 func (n *Network) Attach(ctx context.Context, link vmnet.Link, opts vmnet.AttachOptions) (vmnet.Port, error) {
 	if link.MTU() < n.mtu {

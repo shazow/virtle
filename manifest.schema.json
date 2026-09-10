@@ -959,6 +959,150 @@
       },
       "description": "Devices that may be attached or detached after launch.",
       "additionalProperties": false
+    },
+    "egress": {
+      "type": [
+        "null",
+        "object"
+      ],
+      "properties": {
+        "allow": {
+          "type": [
+            "null",
+            "array"
+          ],
+          "items": {
+            "type": "object",
+            "properties": {
+              "host": {
+                "type": "string",
+                "description": "Destination: a name pattern such as *.github.com, a CIDR, or an address."
+              },
+              "ports": {
+                "type": [
+                  "null",
+                  "array"
+                ],
+                "items": {
+                  "type": "integer"
+                },
+                "description": "Ports the entry applies to; empty means any."
+              },
+              "inspect": {
+                "type": "boolean",
+                "description": "Terminate TLS and HTTP to record each request and replace secret tokens; the guest must trust the CA."
+              }
+            },
+            "required": [
+              "host"
+            ],
+            "additionalProperties": false
+          },
+          "description": "Destinations the guest may reach; everything else is refused."
+        },
+        "deny": {
+          "type": [
+            "null",
+            "array"
+          ],
+          "items": {
+            "type": "object",
+            "properties": {
+              "host": {
+                "type": "string",
+                "description": "Destination: a name pattern such as *.github.com, a CIDR, or an address."
+              },
+              "ports": {
+                "type": [
+                  "null",
+                  "array"
+                ],
+                "items": {
+                  "type": "integer"
+                },
+                "description": "Ports the entry applies to; empty means any."
+              }
+            },
+            "required": [
+              "host"
+            ],
+            "additionalProperties": false
+          },
+          "description": "Destinations refused even when an allow entry matches."
+        },
+        "secrets": {
+          "type": [
+            "null",
+            "array"
+          ],
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Environment variable the guest receives the token in, and the name the token is derived from."
+              },
+              "from": {
+                "type": "string",
+                "description": "Where the value is read when a request needs it: env:NAME or file:PATH. The value never appears in the manifest."
+              },
+              "hosts": {
+                "type": [
+                  "null",
+                  "array"
+                ],
+                "items": {
+                  "type": "string"
+                },
+                "description": "Name patterns of the inspected destinations that may receive the value."
+              },
+              "methods": {
+                "type": [
+                  "null",
+                  "array"
+                ],
+                "items": {
+                  "type": "string"
+                },
+                "description": "HTTP methods the value may be sent with; empty means any."
+              },
+              "paths": {
+                "type": [
+                  "null",
+                  "array"
+                ],
+                "items": {
+                  "type": "string"
+                },
+                "description": "URL path patterns the value may be sent to; empty means any."
+              },
+              "in": {
+                "type": [
+                  "null",
+                  "array"
+                ],
+                "items": {
+                  "type": "string"
+                },
+                "description": "Where the token is replaced: header, query, path, body; empty means everywhere."
+              }
+            },
+            "required": [
+              "name",
+              "from",
+              "hosts"
+            ],
+            "additionalProperties": false
+          },
+          "description": "Secrets the guest uses through a token that inspected requests replace with the real value."
+        },
+        "ca_dir": {
+          "type": "string",
+          "description": "Directory of the certificate authority that signs inspected connections; default \u003cstate_dir\u003e/egress-ca."
+        }
+      },
+      "description": "What the guest may reach through a network of type virtle, and the secrets it uses without holding them.",
+      "additionalProperties": false
     }
   },
   "$id": "https://shazow.github.io/virtle/manifest.schema.json",

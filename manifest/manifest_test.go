@@ -7,12 +7,15 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/shazow/virtle/backend/qemu"
 	"github.com/shazow/virtle/units"
 	"github.com/shazow/virtle/vmnet"
+	"github.com/shazow/virtle/vmnet/egress"
 	"github.com/shazow/virtle/vmnet/userspace"
 )
 
@@ -203,5 +206,70 @@ func TestLoadOwnsNoNetworkForOtherTypes(t *testing.T) {
 				t.Fatalf("Close: %v", err)
 			}
 		})
+	}
+}
+
+func TestLoadBuildsEgressPolicy(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("GH_TOKEN", "ghp_secret")
+	doc := `working_dir = "` + dir + `"
+
+[kernel]
+path = "vmlinuz"
+
+[[networks]]
+type = "virtle"
+
+[egress]
+[[egress.allow]]
+host = "api.github.com"
+ports = [443]
+inspect = true
+
+[[egress.deny]]
+host = "uploads.github.com"
+
+[[egress.secrets]]
+name = "GITHUB_TOKEN"
+from = "env:GH_TOKEN"
+hosts = ["api.github.com"]
+`
+	spec, b, err := Load(strings.NewReader(doc))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	qb := b.(*qemu.Backend)
+	defer qb.Close()
+	network, ok := qb.Network.(*userspace.Network)
+	if !ok || network.DNS() != userspace.DNSFakeIP {
+		t.Fatalf("network = %T; a policy needs the fake-IP DNS mode", qb.Network)
+	}
+	if spec.Egress == nil || len(spec.Egress.Allow) != 1 || spec.Egress.Allow[0].Host != "api.github.com" || len(spec.Egress.Deny) != 1 || len(spec.Egress.Secrets) != 1 || spec.Egress.Secrets[0] != "GITHUB_TOKEN" {
+		t.Fatalf("Spec.Egress = %+v", spec.Egress)
+	}
+	files := map[string]string{}
+	for _, f := range spec.Files {
+		content, _ := io.ReadAll(f.Content)
+		files[f.GuestPath] = string(content)
+	}
+	if !strings.HasPrefix(files[egress.GuestCAPath], "-----BEGIN CERTIFICATE-----") {
+		t.Errorf("CA file = %q", files[egress.GuestCAPath])
+	}
+	if !strings.Contains(files[GuestSecretsPath], "export GITHUB_TOKEN=virtle_GITHUB_TOKEN_") || strings.Contains(files[GuestSecretsPath], "ghp_secret") {
+		t.Errorf("secrets file = %q", files[GuestSecretsPath])
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".virtle", "egress-ca", "ca.pem")); err != nil {
+		t.Errorf("CA was not created under the state directory: %v", err)
+	}
+
+	// Without inspection there is no CA and nothing to give the guest.
+	plain := strings.Replace(strings.Replace(doc, "inspect = true\n", "", 1), "[[egress.secrets]]\nname = \"GITHUB_TOKEN\"\nfrom = \"env:GH_TOKEN\"\nhosts = [\"api.github.com\"]\n", "", 1)
+	spec, b, err = Load(strings.NewReader(plain))
+	if err != nil {
+		t.Fatalf("Load without inspection: %v", err)
+	}
+	defer b.(io.Closer).Close()
+	if len(spec.Files) != 0 || spec.Egress == nil || len(spec.Egress.Secrets) != 0 {
+		t.Fatalf("Files = %+v, Egress = %+v", spec.Files, spec.Egress)
 	}
 }

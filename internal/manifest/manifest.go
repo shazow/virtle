@@ -33,6 +33,7 @@ type Manifest struct {
 	Notifications Notifications   `json:"notifications,omitempty"`
 	Run           []Run           `json:"run,omitempty"`
 	Hotplug       []HotplugDevice `json:"hotplug,omitempty"`
+	Egress        *Egress         `json:"egress,omitempty"`
 	CleanupFiles  []string        `json:"cleanupFiles,omitempty"`
 }
 

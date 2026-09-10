@@ -1,0 +1,314 @@
+// Package egress is the standard vmnet.Egress: an allowlist of destinations
+// by name pattern or address range, a deny list of address ranges checked
+// on what names resolve to, per-guest narrowing from vm.Egress, and a
+// record of every decision.
+//
+// Name rules need a network that tells the Egress which name a guest
+// resolved (userspace.DNSFakeIP); on a network that resolves names itself
+// only address rules can match.
+package egress
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net"
+	"net/netip"
+	"path"
+	"strings"
+	"time"
+
+	"github.com/shazow/virtle/vm"
+	"github.com/shazow/virtle/vmnet"
+)
+
+// Rule allows flows to a set of destinations.
+type Rule struct {
+	// Hosts are destination patterns: a name pattern in path.Match syntax
+	// ("*.github.com" matches every name under github.com, not github.com
+	// itself), a CIDR, or a single address. Name patterns match a flow's
+	// Host, address patterns a flow dialed by address.
+	Hosts []string
+	// Ports the rule applies to; empty means any.
+	Ports []int
+}
+
+// Decision is what a Policy did with a flow.
+type Decision string
+
+const (
+	Allowed Decision = "allow"
+	Denied  Decision = "deny"
+)
+
+// Event records one decision.
+type Event struct {
+	Time     time.Time
+	Guest    string
+	Proto    vm.Proto
+	Src, Dst netip.AddrPort
+	Host     string         // the name the guest resolved, when known
+	Decision Decision       // Allowed or Denied
+	Rule     string         // the pattern that allowed the flow
+	Reason   string         // why the flow was denied
+	Upstream netip.AddrPort // where an allowed flow was dialed
+	Err      error          // why an allowed flow's dial failed
+}
+
+// Recorder receives every Event.
+type Recorder interface{ Record(Event) }
+
+// RecorderFunc adapts a function to Recorder.
+type RecorderFunc func(Event)
+
+// Record implements Recorder.
+func (f RecorderFunc) Record(e Event) { f(e) }
+
+// Resolver resolves the names of allowed flows; *net.Resolver implements it.
+type Resolver interface {
+	LookupNetIP(ctx context.Context, network, host string) ([]netip.Addr, error)
+}
+
+// DefaultDenyPrefixes are the ranges a Policy with nil DenyPrefixes refuses:
+// the host's own loopback, link-local (cloud metadata services live there),
+// unspecified, multicast, and broadcast addresses.
+var DefaultDenyPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("127.0.0.0/8"),
+	netip.MustParsePrefix("169.254.0.0/16"),
+	netip.MustParsePrefix("224.0.0.0/4"),
+	netip.MustParsePrefix("255.255.255.255/32"),
+	netip.MustParsePrefix("::1/128"),
+	netip.MustParsePrefix("fe80::/10"),
+	netip.MustParsePrefix("ff00::/8"),
+	netip.MustParsePrefix("fd00:ec2::254/128"),
+}
+
+// Policy is a vmnet.Egress that allows what its Rules name, denies
+// everything else, and records each decision. The zero value denies every
+// flow. It is safe for concurrent use once configured.
+type Policy struct {
+	// Rules allow flows; a flow no rule matches is denied.
+	Rules []Rule
+	// DenyPrefixes are address ranges no flow may reach whatever the Rules
+	// say, checked on the addresses a name resolves to as well as on
+	// addresses guests dial directly. Nil means DefaultDenyPrefixes; an
+	// empty, non-nil slice denies no range.
+	DenyPrefixes []netip.Prefix
+	// Recorder receives one Event per decision. Nil records through Logger.
+	Recorder Recorder
+	// Logger is where the default Recorder writes; nil discards.
+	Logger *slog.Logger
+	// Dialer dials allowed flows; nil means a zero Dialer.
+	Dialer *net.Dialer
+	// Resolver resolves the names of allowed flows; nil means
+	// net.DefaultResolver.
+	Resolver Resolver
+}
+
+// DialFlow implements vmnet.Egress. A denied flow fails with an error
+// wrapping vmnet.ErrDenied, so the network refuses it before the guest sees
+// it accepted; a name that resolves only to denied ranges counts as denied.
+func (p *Policy) DialFlow(ctx context.Context, f vmnet.Flow) (net.Conn, error) {
+	ev := Event{Time: time.Now(), Guest: f.Guest, Proto: f.Proto, Src: f.Src, Dst: f.Dst, Host: f.Host}
+	if ev.Proto == "" {
+		ev.Proto = vm.TCP
+	}
+	rule, reason := p.decide(f)
+	if reason != "" {
+		ev.Decision, ev.Reason = Denied, reason
+		p.record(ev)
+		return nil, fmt.Errorf("egress: %s: %w", reason, vmnet.ErrDenied)
+	}
+	conn, upstream, err := p.dial(ctx, f)
+	ev.Rule, ev.Upstream = rule, upstream
+	switch {
+	case errors.Is(err, vmnet.ErrDenied):
+		ev.Decision, ev.Reason = Denied, err.Error()
+	case err != nil:
+		ev.Decision, ev.Err = Allowed, err
+	default:
+		ev.Decision = Allowed
+	}
+	p.record(ev)
+	return conn, err
+}
+
+// decide applies the guest's own policy, the deny ranges for a flow dialed
+// by address, and the Rules. It returns the allowing pattern, or the reason
+// for a denial.
+func (p *Policy) decide(f vmnet.Flow) (rule, reason string) {
+	if f.Egress != nil {
+		for _, r := range f.Egress.Deny {
+			if matchPattern(r.Host, r.Ports, f) {
+				return "", "denied by the guest's policy"
+			}
+		}
+		allowed := false
+		for _, r := range f.Egress.Allow {
+			if matchPattern(r.Host, r.Ports, f) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return "", "outside the guest's allow list"
+		}
+	}
+	if f.Host == "" && p.denied(f.Dst.Addr()) {
+		return "", fmt.Sprintf("%s is in a denied range", f.Dst.Addr())
+	}
+	for _, r := range p.Rules {
+		for _, h := range r.Hosts {
+			if matchPattern(h, r.Ports, f) {
+				return h, ""
+			}
+		}
+	}
+	return "", "no rule allows it"
+}
+
+// dial connects an allowed flow: by address when that is all the guest
+// gave, else by resolving the name and refusing addresses in denied ranges.
+func (p *Policy) dial(ctx context.Context, f vmnet.Flow) (net.Conn, netip.AddrPort, error) {
+	dialer := p.Dialer
+	if dialer == nil {
+		dialer = &net.Dialer{}
+	}
+	if f.Host == "" {
+		conn, err := dialer.DialContext(ctx, f.Network(), f.Dst.String())
+		return conn, f.Dst, err
+	}
+	resolver := p.Resolver
+	if resolver == nil {
+		resolver = net.DefaultResolver
+	}
+	host := normalizeName(f.Host)
+	addrs, err := resolver.LookupNetIP(ctx, "ip", host)
+	if err != nil {
+		return nil, netip.AddrPort{}, fmt.Errorf("resolve %s: %w", host, err)
+	}
+	var firstErr error
+	for _, a := range addrs {
+		a = a.Unmap()
+		if p.denied(a) {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("%s resolves to %s, in a denied range: %w", host, a, vmnet.ErrDenied)
+			}
+			continue
+		}
+		upstream := netip.AddrPortFrom(a, f.Dst.Port())
+		conn, err := dialer.DialContext(ctx, f.Network(), upstream.String())
+		if err == nil {
+			return conn, upstream, nil
+		}
+		if firstErr == nil || errors.Is(firstErr, vmnet.ErrDenied) {
+			firstErr = err
+		}
+	}
+	if firstErr == nil {
+		firstErr = fmt.Errorf("%s resolves to no address", host)
+	}
+	return nil, netip.AddrPort{}, firstErr
+}
+
+func (p *Policy) denied(a netip.Addr) bool {
+	prefixes := p.DenyPrefixes
+	if prefixes == nil {
+		prefixes = DefaultDenyPrefixes
+	}
+	a = a.Unmap()
+	for _, prefix := range prefixes {
+		if prefix.Contains(a) {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *Policy) record(ev Event) {
+	if p.Recorder != nil {
+		p.Recorder.Record(ev)
+		return
+	}
+	if p.Logger == nil {
+		return
+	}
+	attrs := []any{
+		"decision", ev.Decision, "guest", ev.Guest, "proto", ev.Proto,
+		"src", ev.Src, "dst", ev.Dst,
+	}
+	if ev.Host != "" {
+		attrs = append(attrs, "host", ev.Host)
+	}
+	if ev.Rule != "" {
+		attrs = append(attrs, "rule", ev.Rule)
+	}
+	if ev.Reason != "" {
+		attrs = append(attrs, "reason", ev.Reason)
+	}
+	if ev.Upstream.IsValid() {
+		attrs = append(attrs, "upstream", ev.Upstream)
+	}
+	if ev.Err != nil {
+		attrs = append(attrs, "err", ev.Err)
+	}
+	p.Logger.Info("egress flow", attrs...)
+}
+
+// matchPattern reports whether a host pattern with optional ports matches
+// the flow: an address or CIDR against a flow dialed by address, a name
+// pattern against the name the guest resolved.
+func matchPattern(pattern string, ports []int, f vmnet.Flow) bool {
+	if len(ports) != 0 && !containsPort(ports, int(f.Dst.Port())) {
+		return false
+	}
+	if prefix, err := netip.ParsePrefix(pattern); err == nil {
+		return f.Host == "" && prefix.Contains(f.Dst.Addr().Unmap())
+	}
+	if addr, err := netip.ParseAddr(pattern); err == nil {
+		return f.Host == "" && addr.Unmap() == f.Dst.Addr().Unmap()
+	}
+	if f.Host == "" {
+		return false
+	}
+	ok, err := path.Match(normalizeName(pattern), normalizeName(f.Host))
+	return err == nil && ok
+}
+
+func containsPort(ports []int, port int) bool {
+	for _, p := range ports {
+		if p == port {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeName(name string) string {
+	return strings.ToLower(strings.TrimSuffix(name, "."))
+}
+
+// ValidPattern reports whether a Rule or vm.Reach host pattern is
+// well-formed: an address, a CIDR, or a name pattern path.Match accepts.
+func ValidPattern(pattern string) error {
+	if pattern == "" {
+		return errors.New("empty host pattern")
+	}
+	if _, err := netip.ParsePrefix(pattern); err == nil {
+		return nil
+	}
+	if _, err := netip.ParseAddr(pattern); err == nil {
+		return nil
+	}
+	if _, err := path.Match(pattern, ""); err != nil {
+		return fmt.Errorf("host pattern %q: %w", pattern, err)
+	}
+	if strings.ContainsAny(pattern, "/: ") {
+		return fmt.Errorf("host pattern %q is neither a name pattern nor an address", pattern)
+	}
+	return nil
+}
+
+var _ vmnet.Egress = (*Policy)(nil)

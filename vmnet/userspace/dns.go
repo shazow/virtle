@@ -122,6 +122,17 @@ func (s *dnsServer) answer(m *dns.Msg, q dns.Question) {
 	hdr := dns.RR_Header{Name: q.Name, Rrtype: q.Qtype, Class: dns.ClassINET, Ttl: dnsTTL}
 	switch q.Qtype {
 	case dns.TypeA:
+		if s.n.fakeIPs != nil {
+			// The name is not resolved here: the Egress resolves it when the
+			// guest connects, and sees the name rather than an address.
+			a, ok := s.n.fakeIPs.addr(q.Name)
+			if !ok {
+				m.Rcode = dns.RcodeServerFailure
+				return
+			}
+			m.Answer = append(m.Answer, &dns.A{Hdr: hdr, A: a.AsSlice()})
+			return
+		}
 		addrs, err := s.resolver.LookupNetIP(ctx, "ip4", q.Name)
 		if err != nil {
 			s.fail(m, err)
@@ -189,6 +200,14 @@ func (s *dnsServer) answer(m *dns.Msg, q dns.Question) {
 		if s.n.subnet.Contains(addr) {
 			// Guest and gateway addresses have no names to give out.
 			m.Rcode = dns.RcodeNameError
+			return
+		}
+		if s.n.fakeIPs != nil && s.n.fakeIPs.contains(addr) {
+			if name, ok := s.n.fakeIPs.name(addr); ok {
+				m.Answer = append(m.Answer, &dns.PTR{Hdr: hdr, Ptr: dns.Fqdn(name)})
+			} else {
+				m.Rcode = dns.RcodeNameError
+			}
 			return
 		}
 		names, err := s.resolver.LookupAddr(ctx, addr.String())

@@ -30,8 +30,10 @@ func (n *Network) installForwarders() {
 	n.stack.SetTransportProtocolHandler(udp.ProtocolNumber, uf.HandlePacket)
 }
 
-// flowFor describes a forwarder request; the guest is found by its source
-// address, which the switch has already checked belongs to it.
+// flowFor describes a forwarder request: the guest is found by its source
+// address, which the switch has already checked belongs to it, and in
+// DNSFakeIP mode the destination is translated back to the name the guest
+// resolved.
 func (n *Network) flowFor(proto vm.Proto, id stack.TransportEndpointID) vmnet.Flow {
 	f := vmnet.Flow{
 		Proto: proto,
@@ -40,6 +42,12 @@ func (n *Network) flowFor(proto vm.Proto, id stack.TransportEndpointID) vmnet.Fl
 	}
 	if p := n.portByAddr(f.Src.Addr()); p != nil {
 		f.Guest = p.name
+		f.Egress = p.egress
+	}
+	if n.fakeIPs != nil {
+		if name, ok := n.fakeIPs.name(f.Dst.Addr()); ok {
+			f.Host = name
+		}
 	}
 	return f
 }

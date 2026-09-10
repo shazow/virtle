@@ -20,14 +20,15 @@ import (
 
 // port is one attached guest NIC.
 type port struct {
-	n     *Network
-	name  string
-	addr  netip.Addr
-	addr4 tcpip.Address
-	mac   net.HardwareAddr
-	link  vmnet.Link
-	out   chan []byte   // frames for the guest
-	done  chan struct{} // closed with the port
+	n      *Network
+	name   string
+	egress *vm.Egress // the guest's policy data, carried on its flows
+	addr   netip.Addr
+	addr4  tcpip.Address
+	mac    net.HardwareAddr
+	link   vmnet.Link
+	out    chan []byte   // frames for the guest
+	done   chan struct{} // closed with the port
 
 	mu        sync.Mutex
 	closed    bool

@@ -41,7 +41,8 @@ type Rule struct {
 	// Inspect terminates the flow's TLS (with a certificate minted from the
 	// Policy's CA, which the guest must trust) and HTTP, records each
 	// request, and replaces secret tokens on the way out. Without it the
-	// flow is spliced to the destination untouched.
+	// flow is spliced to the destination untouched. Only TCP is inspected;
+	// a UDP flow to a host an inspecting rule matches is refused.
 	Inspect bool
 }
 
@@ -155,12 +156,17 @@ func (p *Policy) DialFlow(ctx context.Context, f vmnet.Flow) (net.Conn, error) {
 		ev.Proto = vm.TCP
 	}
 	matched, rule, reason := p.decide(f)
+	if reason == "" && matched.Inspect && f.Network() != "tcp" {
+		// Inspection terminates TCP; a datagram flow to the same host
+		// would pass unseen, so it is refused and the guest falls back.
+		reason = "only tcp is inspected"
+	}
 	if reason != "" {
 		ev.Decision, ev.Reason = Denied, reason
 		p.record(ev)
 		return nil, fmt.Errorf("egress: %s: %w", reason, vmnet.ErrDenied)
 	}
-	if matched.Inspect && f.Network() == "tcp" {
+	if matched.Inspect {
 		// The dial happens per request, inside the proxy; the flow itself
 		// is recorded as allowed now and each request as it is made.
 		conn, err := p.inspect(ctx, f, rule)

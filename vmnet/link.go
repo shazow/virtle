@@ -15,9 +15,15 @@ const EthernetHeader = 14
 // frameSize is the buffer a link needs for one frame at the given MTU.
 func frameSize(mtu int) int { return mtu + EthernetHeader }
 
+// maxFrame is the longest frame any link accepts from its peer, whatever its
+// MTU: the largest IPv4 datagram behind an Ethernet header. A longer length
+// prefix is not a frame but a stream that has lost its framing.
+const maxFrame = 65535 + EthernetHeader
+
 // QEMUStream wraps one end of the socket behind a QEMU "-netdev stream"
 // device: every frame is prefixed with its length as a 4-byte big-endian
-// integer. Frames larger than mtu+EthernetHeader are dropped on read.
+// integer. A frame that does not fit the read buffer is dropped, so a guest
+// that sends more than the MTU loses those frames and keeps the link.
 func QEMUStream(c net.Conn, mtu int) Link {
 	return &framed{
 		conn: c, mtu: mtu, header: 4,
@@ -60,8 +66,8 @@ func (l *framed) ReadFrame(p []byte) (int, error) {
 		return 0, err
 	}
 	n := l.get(l.hdr[:l.header])
-	if n > frameSize(l.mtu) {
-		return 0, fmt.Errorf("vmnet: frame of %d bytes exceeds the link MTU %d: %w", n, l.mtu, io.ErrUnexpectedEOF)
+	if n > maxFrame {
+		return 0, fmt.Errorf("vmnet: frame length %d is not a frame; the stream has lost its framing: %w", n, io.ErrUnexpectedEOF)
 	}
 	if n > len(p) {
 		// Keep the stream aligned: consume the frame we cannot deliver.

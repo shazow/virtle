@@ -69,6 +69,29 @@ func TestFramedLinkSkipsFramesThatDoNotFit(t *testing.T) {
 	if err != nil || n != 2 || small[0] != 2 {
 		t.Fatalf("next frame = %v %v; the stream fell out of alignment", small[:n], err)
 	}
+
+	// A peer sending beyond the reader's MTU loses those frames, not the
+	// link: the reader's buffer is sized for its MTU.
+	big, other := net.Pipe()
+	lbig, lother := QEMUStream(big, 9000), QEMUStream(other, 1500)
+	defer lbig.Close()
+	defer lother.Close()
+	go func() {
+		_ = lbig.WriteFrame(bytes.Repeat([]byte{3}, 2000))
+		_ = lbig.WriteFrame([]byte{4})
+	}()
+	buf := make([]byte, 1500+EthernetHeader)
+	if _, err := lother.ReadFrame(buf); !errors.Is(err, io.ErrShortBuffer) {
+		t.Fatalf("frame beyond the MTU = %v, want io.ErrShortBuffer", err)
+	}
+	if n, err := lother.ReadFrame(buf); err != nil || n != 1 || buf[0] != 4 {
+		t.Fatalf("frame after the oversized one = %v %v", buf[:n], err)
+	}
+	// A length no frame can have is a broken stream, which ends the link.
+	go func() { _, _ = big.Write([]byte{0x7f, 0xff, 0xff, 0xff}) }()
+	if _, err := lother.ReadFrame(buf); !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("impossible frame length = %v, want a framing error", err)
+	}
 }
 
 func TestDeferredLinkWaitsForItsPeer(t *testing.T) {

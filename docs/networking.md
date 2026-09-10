@@ -103,7 +103,9 @@ A rule with `Inspect` terminates the flow's TLS with a certificate minted
 from the policy's CA (`egress.LoadOrCreateCA`) and reverse-proxies the HTTP
 inside to the real destination, recording each request's method, path, and
 status. The guest must trust the CA certificate (`Policy.CAPEM`,
-`Policy.GuestFiles`).
+`Policy.GuestFiles`). Only TCP is inspected: a UDP flow to a host an
+inspecting rule matches (QUIC, say) is refused, so the guest falls back to
+what the policy can see.
 
 Inspected requests can be decided on and rewritten as they pass. An
 `Injection` is a token the guest writes and a function that computes its

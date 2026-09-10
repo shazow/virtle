@@ -140,11 +140,20 @@ func TestFakeIPTable(t *testing.T) {
 	if name, ok := table.name(a); !ok || name != "one.test" {
 		t.Fatalf("name = %q, %v", name, ok)
 	}
-	if b, ok := table.addr("two.test"); !ok || b != netip.MustParseAddr("198.18.0.2") {
+	b, ok := table.addr("two.test")
+	if !ok || b != netip.MustParseAddr("198.18.0.2") {
 		t.Fatalf("second address = %s, %v", b, ok)
 	}
-	if _, ok := table.addr("three.test"); ok {
-		t.Fatal("a /30 handed out its broadcast address")
+	// A /30 has two addresses; the third name takes the one that has gone
+	// longest without a lookup or a flow, never the broadcast address.
+	if c, ok := table.addr("three.test"); !ok || c != a {
+		t.Fatalf("third name = %s, %v; want one.test's %s, the least recently used", c, ok, a)
+	}
+	if name, ok := table.name(a); !ok || name != "three.test" {
+		t.Fatalf("%s now names %q, %v", a, name, ok)
+	}
+	if d, ok := table.addr("one.test"); !ok || d != b {
+		t.Fatalf("one.test came back as %s, %v; want two.test's %s", d, ok, b)
 	}
 	if _, ok := table.name(netip.MustParseAddr("198.18.0.3")); ok {
 		t.Fatal("an unassigned address has a name")
@@ -165,5 +174,25 @@ func TestFakeIPTable(t *testing.T) {
 	}
 	if _, err := New(Config{DNS: "magic"}); !errors.Is(err, err) || err == nil {
 		t.Fatal("unknown DNS mode accepted")
+	}
+}
+
+func TestUnknownFakeAddressesAreRefused(t *testing.T) {
+	egress := &recordingEgress{dial: vmnet.Passthrough{}.DialFlow}
+	n := newTestNetwork(t, Config{DNS: DNSFakeIP, Egress: egress})
+	g := attachGuest(t, n, "vm1", vmnet.AttachOptions{})
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+	defer cancel()
+	// Nothing resolved to this address: it stands for no name.
+	if c, err := g.dialTCP(ctx, netip.MustParseAddrPort("198.18.7.7:80")); err == nil {
+		c.Close()
+		t.Fatal("a flow to a synthetic address never handed out connected")
+	} else if !strings.Contains(err.Error(), "refused") {
+		t.Fatalf("dial = %v, want a refusal", err)
+	}
+	egress.mu.Lock()
+	defer egress.mu.Unlock()
+	if len(egress.flows) != 0 {
+		t.Errorf("the egress saw %d flows for an address without a name, want none", len(egress.flows))
 	}
 }

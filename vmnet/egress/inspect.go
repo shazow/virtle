@@ -181,9 +181,17 @@ func (p *Policy) serveInspected(ctx context.Context, conn net.Conn, f vmnet.Flow
 		served = tls.Server(served, &tls.Config{
 			NextProtos: []string{"h2", "http/1.1"},
 			GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
-				host := hello.ServerName
+				// The certificate names what the flow is for. The name the
+				// guest resolved is authoritative: a guest that sends
+				// another SNI is misdirecting its request, and answering
+				// it would let a guest mint one certificate per name it
+				// invents.
+				host := f.Host
 				if host == "" {
-					host = f.Host
+					host = hello.ServerName
+				}
+				if host == "" {
+					host = f.Dst.Addr().String()
 				}
 				return p.certFor(host)
 			},
@@ -193,7 +201,7 @@ func (p *Policy) serveInspected(ctx context.Context, conn net.Conn, f vmnet.Flow
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(target)
-			pr.Out.Host = f.Host
+			pr.Out.Host = pr.In.Host // as the guest sent it, port included
 		},
 		Transport: p.upstreamTransport(f),
 		ModifyResponse: func(resp *http.Response) error {
@@ -207,6 +215,7 @@ func (p *Policy) serveInspected(ctx context.Context, conn net.Conn, f vmnet.Flow
 			p.refuse(w, r, f, rule, err)
 		},
 	}
+	listener := &oneConnListener{conn: served, done: make(chan struct{})}
 	server := &http.Server{
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// The request as the guest sent it, kept for Admit, for the
@@ -231,8 +240,15 @@ func (p *Policy) serveInspected(ctx context.Context, conn net.Conn, f vmnet.Flow
 		}),
 		ReadHeaderTimeout: 30 * time.Second,
 		BaseContext:       func(net.Listener) context.Context { return ctx },
+		// The server serves this one connection: once it is closed the
+		// listener ends, and with it Serve and this goroutine.
+		ConnState: func(_ net.Conn, state http.ConnState) {
+			if state == http.StateClosed || state == http.StateHijacked {
+				_ = listener.Close()
+			}
+		},
 	}
-	_ = server.Serve(&oneConnListener{conn: served, done: make(chan struct{})})
+	_ = server.Serve(listener)
 }
 
 // refuse answers a request the policy did not forward: 403 when it was
@@ -418,7 +434,9 @@ func replaceRequest(r *http.Request, token string, resolve func() (string, error
 				if err != nil || !ok {
 					return err
 				}
-				r.URL.RawQuery = strings.ReplaceAll(r.URL.RawQuery, token, val)
+				// The token stands in a query value; the value takes its
+				// place encoded as one.
+				r.URL.RawQuery = strings.ReplaceAll(r.URL.RawQuery, token, url.QueryEscape(val))
 				a.used.Store(true)
 			}
 		case InPath:
@@ -555,8 +573,8 @@ type peekedConn struct {
 
 func (c *peekedConn) Read(p []byte) (int, error) { return c.Reader.Read(p) }
 
-// oneConnListener hands one conn to an http.Server, then blocks until the
-// server closes it.
+// oneConnListener hands one conn to an http.Server, then blocks until it is
+// closed, which the server's ConnState hook does once the conn is done.
 type oneConnListener struct {
 	conn net.Conn
 	once sync.Once

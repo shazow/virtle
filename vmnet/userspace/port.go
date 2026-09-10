@@ -107,27 +107,47 @@ func (p *port) Expose(ctx context.Context, f vm.Forward) (io.Closer, error) {
 	if err != nil {
 		return nil, err
 	}
-	e := &exposure{p: p, key: key}
+	// Checked before binding for the clearer error, and again when
+	// publishing, which is what counts.
 	p.mu.Lock()
-	if p.closed {
-		p.mu.Unlock()
-		return nil, net.ErrClosed
-	}
-	if _, dup := p.exposures[key]; dup {
-		p.mu.Unlock()
-		return nil, fmt.Errorf("userspace: forward %s %s -> %d is already exposed", key.proto, key.host, key.guest)
-	}
-	p.exposures[key] = e
-	p.n.wg.Add(1) // for the serving goroutine listen starts
+	err = p.exposableLocked(key)
 	p.mu.Unlock()
-	if err := e.listen(ctx); err != nil {
-		p.mu.Lock()
-		delete(p.exposures, key)
-		p.mu.Unlock()
-		p.n.wg.Done()
+	if err != nil {
 		return nil, err
 	}
+	e := &exposure{p: p, key: key}
+	serve, err := e.bind(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// Published only once bound, so a Close that finds the exposure has a
+	// listener to close; a port closed meanwhile takes the listener down.
+	p.mu.Lock()
+	if err := p.exposableLocked(key); err != nil {
+		p.mu.Unlock()
+		_ = e.closer.Close()
+		return nil, err
+	}
+	p.exposures[key] = e
+	p.n.wg.Add(1)
+	p.mu.Unlock()
+	go func() {
+		defer p.n.wg.Done()
+		serve()
+	}()
 	return e, nil
+}
+
+// exposableLocked reports whether a forward can be exposed now: the port is
+// open and nothing else holds the key.
+func (p *port) exposableLocked(key forwardKey) error {
+	if p.closed {
+		return net.ErrClosed
+	}
+	if _, dup := p.exposures[key]; dup {
+		return fmt.Errorf("userspace: forward %s %s -> %d is already exposed", key.proto, key.host, key.guest)
+	}
+	return nil
 }
 
 func (p *port) forwardKey(f vm.Forward) (forwardKey, error) {
@@ -174,36 +194,31 @@ type exposure struct {
 	once   sync.Once
 }
 
-func (e *exposure) listen(ctx context.Context) error {
+// bind takes the host address and returns the function that serves it,
+// which runs until the exposure is closed.
+func (e *exposure) bind(ctx context.Context) (serve func(), err error) {
 	guest := tcpip.FullAddress{NIC: nicID, Addr: e.p.addr4, Port: e.key.guest}
 	var lc net.ListenConfig
 	switch e.key.proto {
 	case vm.UDP:
 		pc, err := lc.ListenPacket(ctx, "udp", e.key.host)
 		if err != nil {
-			return fmt.Errorf("userspace: forward: %w", err)
+			return nil, fmt.Errorf("userspace: forward: %w", err)
 		}
 		e.proxy = newUDPProxy(pc, func() (net.Conn, error) {
 			return gonet.DialUDP(e.p.n.stack, nil, &guest, ipv4.ProtocolNumber)
 		})
 		e.closer = e.proxy
-		go func() {
-			defer e.p.n.wg.Done()
-			e.proxy.run()
-		}()
+		return e.proxy.run, nil
 	default:
 		ln, err := lc.Listen(ctx, "tcp", e.key.host)
 		if err != nil {
-			return fmt.Errorf("userspace: forward: %w", err)
+			return nil, fmt.Errorf("userspace: forward: %w", err)
 		}
 		e.closer = ln
 		e.conns = make(map[net.Conn]bool)
-		go func() {
-			defer e.p.n.wg.Done()
-			e.serveTCP(ln, guest)
-		}()
+		return func() { e.serveTCP(ln, guest) }, nil
 	}
-	return nil
 }
 
 func (e *exposure) serveTCP(ln net.Listener, guest tcpip.FullAddress) {

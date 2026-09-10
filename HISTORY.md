@@ -7,6 +7,50 @@ Keep entries terse. When a day includes both CLI and library changes, group
 them by type, CLI first. For compatibility-breaking usage migrations, include
 compact before/after examples.
 
+## 2026-09-10
+
+- `[[networks]] type = "virtle"` puts the guest on a network virtle runs in
+  userspace (no privilege, no host network changes): a fixed address and MAC
+  with a DHCP lease, DNS, `virtle status` reporting the address, and
+  `[[networks.forward]]` entries served by virtle rather than QEMU's slirp.
+  `type = "tap"` with `tap = "tap0"` hands a host TAP device to the VMM on
+  QEMU and Firecracker. `type = "user"` stays the default. See
+  [docs/networking.md](docs/networking.md).
+- New `[egress]` section for virtle networks: `[[egress.allow]]` and
+  `[[egress.deny]]` entries by name pattern, CIDR, or address with optional
+  `ports`; everything else is refused before it connects, and loopback,
+  link-local, and metadata ranges are always refused. `inspect = true` on an
+  allow entry terminates TLS and HTTP to record each request; the guest gets
+  the CA certificate at `/etc/virtle/ca.pem`. `[[egress.secrets]]` names a
+  secret, where its value is read (`from = "env:NAME"` or `"file:PATH"`), and
+  the hosts that may receive it; the guest gets a token at
+  `/etc/virtle/secrets.env` that inspected requests replace with the value.
+  See [examples/manifest-sandbox.toml](examples/manifest-sandbox.toml).
+- Firecracker manifests accept `[[networks]] type = "tap"`.
+
+### Library changes
+
+- New `vmnet` package: the networking contracts (`Link`, `Network`, `Port`,
+  `Egress`, `Flow`, `ErrDenied`) and frame adapters, with the in-process
+  gVisor network in `vmnet/userspace` (`userspace.New`, `Network.DialContext`
+  and `Listen`, fake-IP DNS) and the standard policy in `vmnet/egress`
+  (`Policy` with rules, deny ranges, a `Recorder`, inspection, and `Secret`
+  injection; `LoadOrCreateCA`, `GuestEnv`, `GuestFiles`).
+- `qemu.Backend` gains `Network vmnet.Network` and `Link` (`qemu.User`,
+  `qemu.TAP`, `qemu.Stream`); `firecracker.Backend` gains `Link`
+  (`firecracker.TAP`). A pair that cannot work fails `Start` with an error
+  wrapping `errors.ErrUnsupported`. With a `Network`, `Spec.Ports` and
+  `Attach(vm.Forward)` are exposed on the network port instead of slirp
+  forwards and hotplugged NICs, `Detach` removes them, and a suspended
+  machine resumes with its address and MAC.
+- `backend.Status` gains `Networks []backend.NetworkStatus` (ID, MAC,
+  whether the NIC is attached to a virtle network, and its address there).
+- `vm.Spec` gains `Egress *vm.Egress` (`Allow`, `Deny []vm.Reach`,
+  `Secrets []string`): the guest's own policy, which only narrows the
+  network's.
+- `manifest.Load` builds the network and policy a manifest declares; the
+  returned `*qemu.Backend` owns them and implements `io.Closer`.
+
 ## 2026-09-09
 
 - `backend = "firecracker"` launches a Firecracker microVM instead of QEMU:

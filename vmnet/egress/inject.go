@@ -2,31 +2,42 @@ package egress
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"net/http"
 	"net/url"
 
 	"github.com/shazow/virtle/vmnet"
 )
 
-// Injection replaces a token in inspected requests with a value computed as
-// the request passes. It is the general form of a Secret: anything the
-// guest should not hold, cannot know at boot, or must not be able to
-// predict (a credential, a nonce, an identity, a value fetched from the
-// host when the request is made) is written as the token and filled in on
-// the way out.
+// Injection replaces a token in inspected requests with a value computed
+// as the request passes, or refuses the request that carries it. Anything
+// the guest should not hold, cannot know at boot, or must not be able to
+// predict (a credential, a nonce, an identity, a value the host looks up
+// when the request is made) is written as the token and filled in on the
+// way out.
+//
+// A named Injection is one issued to guests, which is what a secret is:
+// its token is generated when none is given and reaches the guest through
+// GuestEnv, a guest's vm.Egress.Secrets names the ones it may use, and it
+// must name the hosts its value may be sent to. An unnamed Injection has a
+// fixed token every guest may write, such as "$VIRTLE_RANDOM$".
 type Injection struct {
-	// Token is the literal the guest writes, such as "$VIRTLE_RANDOM$". It
-	// must be a string the guest's client sends unencoded.
+	// Name identifies the injection to guests (GuestEnv, vm.Egress.Secrets)
+	// and in Events. Empty for a token every guest knows.
+	Name string
+	// Token is the literal the guest writes. Empty means one generated from
+	// Name, once per Policy. It must be a string the guest's client sends
+	// unencoded.
 	Token string
 	// Value computes the replacement. It is called once per request the
 	// token appears in, only then, and every occurrence in that request
-	// gets the same value. An error or an empty value leaves the token as
-	// the guest sent it.
+	// gets the same value. An error wrapping vmnet.ErrDenied refuses the
+	// request (the guest gets 403); any other error, or an empty value,
+	// leaves the token as the guest sent it.
 	Value func(ctx context.Context, req Request) (string, error)
 	// Hosts are name patterns (as for Rule.Hosts) of the destinations the
-	// injection applies to; empty means every inspected destination.
+	// injection applies to. Required for a named Injection, whose value is
+	// never sent anywhere else; empty on an unnamed one means every
+	// inspected destination.
 	Hosts []string
 	// Methods and Paths further limit the requests; empty means any. Paths
 	// are path.Match patterns against the URL path.
@@ -36,9 +47,17 @@ type Injection struct {
 	In []Placement
 }
 
-// Request is the inspected request an Injection computes a value for, as
-// the guest sent it and before any token is replaced. URL and Header are
-// the request's own and must not be modified.
+// label is how Events and errors refer to the injection.
+func (inj *Injection) label() string {
+	if inj.Name != "" {
+		return inj.Name
+	}
+	return inj.Token
+}
+
+// Request is an inspected request as the guest sent it, before any token
+// is replaced: what Policy.Admit decides on and what an Injection.Value
+// computes from. URL and Header are copies.
 type Request struct {
 	Flow   vmnet.Flow
 	Method string
@@ -46,23 +65,10 @@ type Request struct {
 	Header http.Header
 }
 
-// Random returns an Injection.Value of n random bytes as hex, drawn for
-// each request: Injection{Token: "$VIRTLE_RANDOM$", Value: Random(16)} gives
-// a guest a nonce it can neither predict nor reuse.
-func Random(n int) func(context.Context, Request) (string, error) {
-	return func(context.Context, Request) (string, error) {
-		b := make([]byte, n)
-		if _, err := rand.Read(b); err != nil {
-			return "", err
-		}
-		return hex.EncodeToString(b), nil
-	}
-}
-
 // scopeApplies reports whether a flow and request fall within a host,
 // method, and path scope. Empty hosts match every host when anyHost is
 // set and none otherwise.
-func scopeApplies(hosts, methods, paths []string, anyHost bool, f vmnet.Flow, r *http.Request) bool {
+func scopeApplies(hosts, methods, paths []string, anyHost bool, f vmnet.Flow, method, urlPath string) bool {
 	if len(hosts) == 0 {
 		if !anyHost {
 			return false
@@ -70,10 +76,10 @@ func scopeApplies(hosts, methods, paths []string, anyHost bool, f vmnet.Flow, r 
 	} else if !matchesAny(hosts, f) {
 		return false
 	}
-	if len(methods) != 0 && !containsFold(methods, r.Method) {
+	if len(methods) != 0 && !containsFold(methods, method) {
 		return false
 	}
-	if len(paths) != 0 && !matchesPath(paths, r.URL.Path) {
+	if len(paths) != 0 && !matchesPath(paths, urlPath) {
 		return false
 	}
 	return true

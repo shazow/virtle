@@ -67,11 +67,11 @@ type Event struct {
 	Err      error          // why an allowed flow's dial or request failed
 
 	// Inspected flows also record one Event per HTTP request.
-	Method  string
-	Path    string
-	Status  int      // the upstream's status, or 502 when it could not be reached
-	Secrets []string // names of the secrets whose tokens the request carried
-	// Injections are the tokens of the Injections the request carried.
+	Method string
+	Path   string
+	Status int // the upstream's status; 403 when refused, 502 when the upstream could not be reached
+	// Injections are the Injections whose tokens the request carried, by
+	// name, or by token when unnamed.
 	Injections []string
 }
 
@@ -125,11 +125,15 @@ type Policy struct {
 	// net.DefaultResolver.
 	Resolver Resolver
 
-	// Secrets are what inspected requests may carry in place of a token.
-	Secrets []Secret
 	// Injections are tokens inspected requests carry in place of a value
-	// computed as they pass; a Secret is one with a generated token.
+	// computed as they pass, or that refuse them; named ones are secrets
+	// issued to guests. See Injection.
 	Injections []Injection
+	// Admit is consulted for every inspected request before any token is
+	// replaced, with the request as the guest sent it. An error wrapping
+	// vmnet.ErrDenied refuses the request (the guest gets 403), any other
+	// error fails it (502); either is on record. Nil admits every request.
+	Admit func(ctx context.Context, req Request) error
 	// CA signs the certificates inspected flows present to guests; see
 	// LoadOrCreateCA. Required by any Rule with Inspect.
 	CA tls.Certificate
@@ -301,9 +305,6 @@ func (p *Policy) record(ev Event) {
 	}
 	if ev.Method != "" {
 		attrs = append(attrs, "method", ev.Method, "path", ev.Path, "status", ev.Status)
-	}
-	if len(ev.Secrets) != 0 {
-		attrs = append(attrs, "secrets", ev.Secrets)
 	}
 	if len(ev.Injections) != 0 {
 		attrs = append(attrs, "injections", ev.Injections)

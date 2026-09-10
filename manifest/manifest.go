@@ -127,11 +127,18 @@ func egressPolicy(e *imanifest.Egress, logger *slog.Logger) (*egress.Policy, err
 		policy.Rules = append(policy.Rules, egress.Rule{Hosts: []string{r.Host}, Ports: r.Ports, Inspect: r.Inspect})
 	}
 	for _, s := range e.Secrets {
-		secret := egress.Secret{Name: s.Name, Value: s.ValueFunc(), Hosts: s.Hosts, Methods: s.Methods, Paths: s.Paths}
-		for _, in := range s.In {
-			secret.In = append(secret.In, egress.Placement(in))
+		// A secret is a named injection: the guest gets a generated token
+		// and the value is read when a request carries it.
+		value := s.ValueFunc()
+		inj := egress.Injection{
+			Name:  s.Name,
+			Value: func(context.Context, egress.Request) (string, error) { return value() },
+			Hosts: s.Hosts, Methods: s.Methods, Paths: s.Paths,
 		}
-		policy.Secrets = append(policy.Secrets, secret)
+		for _, in := range s.In {
+			inj.In = append(inj.In, egress.Placement(in))
+		}
+		policy.Injections = append(policy.Injections, inj)
 	}
 	if e.Inspects {
 		ca, err := egress.LoadOrCreateCA(e.CADir)

@@ -11,7 +11,9 @@
 //
 // There is no guest-control transport yet, so Machine.RemoteControl reports
 // errors.ErrUnsupported and vm.Spec features that need one (Files, Shares,
-// Ports) fail Start with an error wrapping errors.ErrUnsupported.
+// Ports) fail Start with an error wrapping errors.ErrUnsupported. The guest
+// NIC, when Backend.Link asks for one, is a host TAP device the host kernel
+// networks.
 package firecracker
 
 import (
@@ -51,6 +53,13 @@ type Backend struct {
 	ShutdownTimeout time.Duration // bound on graceful Shutdown before the VMM is killed; default: 10s
 	Console         Console       // serial console wiring; the zero value keeps the manifest's kernel.serial (default ConsoleOff)
 	HostName        string        // VM name; also names the state lock shared with QEMU; default: "virtle"
+
+	// Link gives the guest a NIC: TAP hands a host TAP device to Firecracker
+	// for the host kernel to network. Nil means no NIC, as does a manifest
+	// without [[networks]]; a manifest.Load backend follows its manifest's
+	// [[networks]] type = "tap" entries instead. Status reports the NIC
+	// with its MAC; the host owns its addressing.
+	Link Link
 
 	// Logger receives lifecycle logs. The default discards logs.
 	Logger *slog.Logger

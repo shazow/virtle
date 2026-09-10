@@ -3,7 +3,9 @@ package firecracker
 import (
 	"errors"
 	"fmt"
+	"slices"
 
+	"github.com/shazow/virtle/backend"
 	imanifest "github.com/shazow/virtle/internal/manifest"
 	"github.com/shazow/virtle/units"
 	"github.com/shazow/virtle/vm"
@@ -114,9 +116,52 @@ func (b *Backend) resolveSpec(spec *vm.Spec, stateDir string) (*imanifest.Manife
 	if b.Console != "" {
 		doc.Kernel.Serial = string(b.Console)
 	}
+	if err := applySpecLink(&doc, b.Link); err != nil {
+		return nil, err
+	}
 	mf, err := doc.Manifest()
 	if err != nil {
 		return nil, fmt.Errorf("resolve vm spec: %w", err)
 	}
 	return mf, nil
+}
+
+// applySpecLink lowers Backend.Link onto the document's NICs: a TAP makes
+// every declared network (or one default entry) a tap network on that
+// device. A nil Link leaves the manifest's own entries in place.
+func applySpecLink(doc *imanifest.Document, link Link) error {
+	if link == nil {
+		return nil
+	}
+	tap, ok := link.(TAP)
+	if !ok {
+		return fmt.Errorf("firecracker: Link %T: %w", link, errors.ErrUnsupported)
+	}
+	if tap.Name == "" {
+		return fmt.Errorf("firecracker: Link TAP requires the device Name")
+	}
+	// The overlay writes into the network entries, so detach them from the
+	// backend's stored document.
+	doc.Networks = slices.Clone(doc.Networks)
+	if len(doc.Networks) == 0 {
+		doc.Networks = []imanifest.NetworkInput{{}}
+	}
+	for i := range doc.Networks {
+		doc.Networks[i].Type = imanifest.NetworkTypeTAP
+		doc.Networks[i].Tap = tap.Name
+	}
+	return nil
+}
+
+// networkStatuses lists the TAP NICs for Status. The host kernel networks
+// them, so none is attached to a network virtle runs and no address is known.
+func networkStatuses(cfg *imanifest.Firecracker) []backend.NetworkStatus {
+	if len(cfg.Networks) == 0 {
+		return nil
+	}
+	statuses := make([]backend.NetworkStatus, 0, len(cfg.Networks))
+	for _, network := range cfg.Networks {
+		statuses = append(statuses, backend.NetworkStatus{ID: network.ID, MAC: network.MAC})
+	}
+	return statuses
 }

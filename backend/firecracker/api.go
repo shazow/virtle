@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 
 	imanifest "github.com/shazow/virtle/internal/manifest"
 )
@@ -51,6 +52,16 @@ func (c *apiClient) configure(ctx context.Context, cfg *imanifest.Firecracker) e
 			ReadOnly bool   `json:"is_read_only"`
 		}{fmt.Sprintf("disk%d", i), disk.Path, false, disk.ReadOnly}
 		if err := c.put(ctx, "/drives/"+drive.ID, drive); err != nil {
+			return err
+		}
+	}
+	for _, network := range cfg.Networks {
+		iface := struct {
+			ID  string `json:"iface_id"`
+			Tap string `json:"host_dev_name"`
+			MAC string `json:"guest_mac"`
+		}{network.ID, network.Tap, network.MAC}
+		if err := c.put(ctx, "/network-interfaces/"+url.PathEscape(iface.ID), iface); err != nil {
 			return err
 		}
 	}

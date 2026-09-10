@@ -229,6 +229,7 @@ path = "vmlinuz"
 type = "virtle"
 
 [egress]
+reach = "rules"
 [[egress.allow]]
 host = "api.github.com"
 ports = [443]
@@ -310,5 +311,10 @@ func TestLoadVirtleNetworkReachesTheInternetByDefault(t *testing.T) {
 	}
 	if _, _, err := Load(strings.NewReader(virtleNetworkManifest + "\n[egress]\nreach = \"lan\"\n")); err == nil || !strings.Contains(err.Error(), "reach") {
 		t.Fatalf("unknown reach loaded: %v", err)
+	}
+	// Allow entries read as an allowlist and may or may not be one: the
+	// manifest has to say.
+	if _, _, err := Load(strings.NewReader(virtleNetworkManifest + "\n[egress]\n[[egress.allow]]\nhost = \"api.github.com\"\n")); err == nil || !strings.Contains(err.Error(), "reach is required") {
+		t.Fatalf("allow entries without a reach loaded: %v", err)
 	}
 }

@@ -968,7 +968,7 @@
       "properties": {
         "reach": {
           "type": "string",
-          "description": "What the guest may reach besides the allow entries: rules is only those entries, internet is any public destination and nothing on the host or its networks, all is anything the host can reach. Default: rules with allow entries, internet without."
+          "description": "What the guest may reach besides the allow entries: rules is only those entries, internet is any public destination and nothing on the host or its networks, all is anything the host can reach. Default internet; required when there are allow entries."
         },
         "allow": {
           "type": [
@@ -1002,7 +1002,7 @@
             ],
             "additionalProperties": false
           },
-          "description": "Destinations the guest may reach, on the host's networks too, and which of them to inspect. Without an explicit reach they are all it may reach."
+          "description": "Destinations the guest may reach, on the host's networks too, and which of them to inspect; reach must say whether they are the whole reach (rules) or exceptions on top of it (internet, all)."
         },
         "deny": {
           "type": [

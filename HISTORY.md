@@ -20,9 +20,9 @@ compact before/after examples.
   [docs/networking.md](docs/networking.md).
 - A virtle network reaches the internet and nothing on the host or its
   networks unless the manifest says otherwise. `[egress] reach` names what
-  lies beyond the allow entries: `"rules"` (only them, the default when
-  there are any), `"internet"` (the default without them), or `"all"`
-  (anything the host can reach).
+  lies beyond the allow entries: `"rules"` (only them), `"internet"` (the
+  default), or `"all"` (anything the host can reach); with allow entries it
+  is required.
 - New `[egress]` section for virtle networks: `[[egress.allow]]` and
   `[[egress.deny]]` entries by name pattern, CIDR, or address with optional
   `ports`; beyond them the guest reaches what `reach` says, and loopback,

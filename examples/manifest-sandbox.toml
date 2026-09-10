@@ -24,8 +24,7 @@ type = "virtle"
 forward = [{ host = "127.0.0.1:2222", guest = ":22" }]
 
 [egress]
-# The allow entries are the whole reach; reach = "internet" would make them
-# exceptions and inspection points on top of everything public.
+reach = "rules"  # only the entries below; "internet" would make them exceptions and inspection points
 [[egress.allow]]
 host = "api.github.com"
 ports = [443]

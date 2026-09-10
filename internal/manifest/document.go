@@ -52,8 +52,8 @@ type Document struct {
 // virtle. Its allow and deny entries become both the network's rules and
 // the guest's own vm.Egress; reach says what lies beyond them.
 type EgressInput struct {
-	Reach   string              `json:"reach,omitempty" toml:"reach" jsonschema:"What the guest may reach besides the allow entries: rules is only those entries, internet is any public destination and nothing on the host or its networks, all is anything the host can reach. Default: rules with allow entries, internet without."`
-	Allow   []EgressRuleInput   `json:"allow,omitempty" toml:"allow" jsonschema:"Destinations the guest may reach, on the host's networks too, and which of them to inspect. Without an explicit reach they are all it may reach."`
+	Reach   string              `json:"reach,omitempty" toml:"reach" jsonschema:"What the guest may reach besides the allow entries: rules is only those entries, internet is any public destination and nothing on the host or its networks, all is anything the host can reach. Default internet; required when there are allow entries."`
+	Allow   []EgressRuleInput   `json:"allow,omitempty" toml:"allow" jsonschema:"Destinations the guest may reach, on the host's networks too, and which of them to inspect; reach must say whether they are the whole reach (rules) or exceptions on top of it (internet, all)."`
 	Deny    []EgressReachInput  `json:"deny,omitempty" toml:"deny" jsonschema:"Destinations refused even when an allow entry matches."`
 	Secrets []EgressSecretInput `json:"secrets,omitempty" toml:"secrets" jsonschema:"Secrets the guest uses through a token that inspected requests replace with the real value."`
 	CADir   string              `json:"ca_dir,omitempty" toml:"ca_dir" jsonschema:"Directory of the certificate authority that signs inspected connections; default <state_dir>/egress-ca."`

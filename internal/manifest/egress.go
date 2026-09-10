@@ -96,10 +96,9 @@ var envNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // resolveEgress validates the [egress] section against a document whose
 // defaults are applied and resolves its paths. Values are never read here.
-// Without a reach, allow entries are the whole reach, an allowlist, and
-// without those the guest reaches the internet and nothing on the host or
-// its networks, which is also what a virtle network without a section
-// gets.
+// The reach defaults to the internet, which is also what a virtle network
+// without a section gets; with allow entries it must be written, since
+// they read as an allowlist and may or may not be one.
 func (m *Manifest) resolveEgress(d Document) (*Egress, error) {
 	virtle := declaresNetworkType(d.Networks, NetworkTypeVirtle)
 	in := d.Egress
@@ -113,12 +112,10 @@ func (m *Manifest) resolveEgress(d Document) (*Egress, error) {
 	}
 	e := &Egress{CADir: in.CADir, Reach: in.Reach}
 	if e.Reach == "" {
-		// Entries that read like an allowlist are one; saying otherwise
-		// takes an explicit reach, so forgetting fails closed.
-		e.Reach = string(egress.ReachInternet)
 		if len(in.Allow) != 0 {
-			e.Reach = string(egress.ReachRules)
+			return nil, fmt.Errorf("manifest.egress.reach is required with allow entries: %q makes them the only destinations the guest reaches, %q makes them inspection points and exceptions on top of every public destination", egress.ReachRules, egress.ReachInternet)
 		}
+		e.Reach = string(egress.ReachInternet)
 	}
 	switch egress.Reach(e.Reach) {
 	case egress.ReachRules, egress.ReachInternet, egress.ReachAll:

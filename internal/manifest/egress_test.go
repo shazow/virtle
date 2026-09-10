@@ -29,6 +29,7 @@ func decodeEgress(t *testing.T, body string) *Manifest {
 func TestResolveEgress(t *testing.T) {
 	m := decodeEgress(t, egressBase+`
 [egress]
+reach = "rules"
 [[egress.allow]]
 host = "api.github.com"
 ports = [443]
@@ -62,7 +63,7 @@ hosts = ["*.npmjs.org"]
 		t.Fatalf("rules = %+v / %+v (inspects %v)", e.Allow, e.Deny, e.Inspects)
 	}
 	if e.Reach != "rules" {
-		t.Fatalf("reach = %q; allow entries are an allowlist unless the manifest says otherwise", e.Reach)
+		t.Fatalf("reach = %q", e.Reach)
 	}
 	if len(e.Secrets) != 2 || e.Secrets[0].From != "{{.Env.GH_TOKEN}}" || e.Secrets[0].Methods[1] != "POST" || e.Secrets[0].In[0] != "header" {
 		t.Fatalf("secrets = %+v", e.Secrets)
@@ -102,7 +103,7 @@ hosts = ["*.npmjs.org"]
 	if custom.Egress.CADir != filepath.Join(custom.Paths.WorkingDir, "ca") || custom.Egress.Inspects || custom.Egress.Reach != "internet" {
 		t.Fatalf("egress = %+v", custom.Egress)
 	}
-	// Deny entries alone subtract from the internet.
+	// Deny entries alone subtract from the default, the internet.
 	if denyOnly := decodeEgress(t, egressBase+"[egress]\n[[egress.deny]]\nhost = 'tracker.test'\n"); denyOnly.Egress.Reach != "internet" || len(denyOnly.Egress.Deny) != 1 {
 		t.Fatalf("deny-only egress = %+v, want the internet minus the entry", denyOnly.Egress)
 	}
@@ -121,12 +122,13 @@ hosts = ["*.npmjs.org"]
 }
 
 func TestResolveEgressRejects(t *testing.T) {
-	const inspecting = "[egress]\n[[egress.allow]]\nhost = 'api.test'\ninspect = true\n"
+	const inspecting = "[egress]\nreach = 'rules'\n[[egress.allow]]\nhost = 'api.test'\ninspect = true\n"
 	for name, tc := range map[string]struct{ body, want string }{
 		"without virtle network": {"[kernel]\npath = 'k'\ninitrd_path = 'i'\n[egress]\n[[egress.allow]]\nhost = 'a.test'\n", "network of type virtle"},
-		"bad pattern":            {egressBase + "[egress]\n[[egress.allow]]\nhost = '['\n", "allow[0].host"},
+		"bad pattern":            {egressBase + "[egress]\nreach = 'rules'\n[[egress.allow]]\nhost = '['\n", "allow[0].host"},
 		"bad reach":              {egressBase + "[egress]\nreach = 'lan'\n", "reach"},
-		"bad port":               {egressBase + "[egress]\n[[egress.allow]]\nhost = 'a.test'\nports = [70000]\n", "not a port"},
+		"allow without reach":    {egressBase + "[egress]\n[[egress.allow]]\nhost = 'a.test'\n", "reach is required"},
+		"bad port":               {egressBase + "[egress]\nreach = 'rules'\n[[egress.allow]]\nhost = 'a.test'\nports = [70000]\n", "not a port"},
 		"bad deny":               {egressBase + "[egress]\n[[egress.deny]]\nhost = 'a b'\n", "deny[0].host"},
 		"secret name":            {egressBase + inspecting + "[[egress.secrets]]\nname = '1x'\nfrom = '{{.Env.A}}'\nhosts = ['api.test']\n", "environment variable name"},
 		"secret literal":         {egressBase + inspecting + "[[egress.secrets]]\nname = 'A'\nfrom = 'ghp_value'\nhosts = ['api.test']\n", "does not belong in a manifest"},
@@ -135,7 +137,7 @@ func TestResolveEgressRejects(t *testing.T) {
 		"secret empty":           {egressBase + inspecting + "[[egress.secrets]]\nname = 'A'\nfrom = ''\nhosts = ['api.test']\n", "is required"},
 		"secret hosts":           {egressBase + inspecting + "[[egress.secrets]]\nname = 'A'\nfrom = '{{.Env.A}}'\n", "hosts is required"},
 		"secret placement":       {egressBase + inspecting + "[[egress.secrets]]\nname = 'A'\nfrom = '{{.Env.A}}'\nhosts = ['api.test']\nin = ['cookie']\n", "must be one of"},
-		"secret without inspect": {egressBase + "[egress]\n[[egress.allow]]\nhost = 'api.test'\n[[egress.secrets]]\nname = 'A'\nfrom = '{{.Env.A}}'\nhosts = ['api.test']\n", "inspect = true"},
+		"secret without inspect": {egressBase + "[egress]\nreach = 'rules'\n[[egress.allow]]\nhost = 'api.test'\n[[egress.secrets]]\nname = 'A'\nfrom = '{{.Env.A}}'\nhosts = ['api.test']\n", "inspect = true"},
 		"duplicate secret":       {egressBase + inspecting + "[[egress.secrets]]\nname = 'A'\nfrom = '{{.Env.A}}'\nhosts = ['api.test']\n[[egress.secrets]]\nname = 'A'\nfrom = '{{.Env.B}}'\nhosts = ['api.test']\n", "twice"},
 		"firecracker":            {"backend = 'firecracker'\n[kernel]\npath = 'k'\n[egress]\n[[egress.allow]]\nhost = 'a.test'\n", "firecracker"},
 	} {

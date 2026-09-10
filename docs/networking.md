@@ -151,19 +151,18 @@ program using it brings them, as the e2e scenario in `tests/e2e` does.
 
 A virtle network with no `[egress]` section reaches the internet and nothing
 on the host or its networks. In the section, `reach` says what lies beyond
-its entries: `rules` (only the allow entries, an allowlist), `internet`, or
-`all` (anything the host can reach). Without it, allow entries are the whole
-reach, and a section with none, deny entries only, say, reaches the
-internet: entries that read like an allowlist are one unless the manifest
-says `reach = "internet"`, so forgetting to fails closed. Deny entries
-always apply, and allow entries can reach the host's networks under any
-reach.
+its entries: `rules` (only the allow entries, an allowlist), `internet` (the
+default), or `all` (anything the host can reach). Allow entries read as an
+allowlist and may or may not be one, so with any of them `reach` is required
+and its absence is an error. Deny entries always apply, and allow entries
+can reach the host's networks under any reach.
 
 ```toml
 [[networks]]
 type = "virtle"
 
 [egress]
+reach = "rules"   # only the entries below; "internet" would make them exceptions and inspection points
 [[egress.allow]]
 host = "api.github.com"
 ports = [443]

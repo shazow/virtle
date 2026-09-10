@@ -2,11 +2,13 @@ package manifest
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"text/template"
+	"text/template/parse"
 
+	"github.com/shazow/virtle/internal/executor"
 	"github.com/shazow/virtle/vmnet/egress"
 )
 
@@ -31,8 +33,11 @@ type EgressRule struct {
 	Inspect bool   `json:"inspect,omitempty"`
 }
 
-// EgressSecret is one resolved secret; From is "env:NAME" or "file:PATH"
-// with the path already resolved.
+// EgressSecret is one resolved secret. From is the Go text/template that
+// renders its value, with the host environment as .Env and the template
+// functions of executor.TemplateFuncs (fromFile reads a file relative to the
+// manifest's working directory). It is rendered when a request carries the
+// token, never at load.
 type EgressSecret struct {
 	Name    string   `json:"name"`
 	From    string   `json:"from"`
@@ -40,31 +45,47 @@ type EgressSecret struct {
 	Methods []string `json:"methods,omitempty"`
 	Paths   []string `json:"paths,omitempty"`
 	In      []string `json:"in,omitempty"`
+
+	dir string // the manifest's working directory, for fromFile
 }
 
-// ValueFunc reads the secret's value from its source when called, so the
-// value is held only while a request needs it.
+// ValueFunc renders the secret's value when called, against the process
+// environment of that moment, so the value is held only while a request
+// needs it.
 func (s EgressSecret) ValueFunc() func() (string, error) {
-	scheme, ref, _ := strings.Cut(s.From, ":")
-	switch scheme {
-	case "env":
-		return func() (string, error) {
-			value, ok := os.LookupEnv(ref)
-			if !ok {
-				return "", fmt.Errorf("secret %s: environment variable %s is not set", s.Name, ref)
-			}
-			return value, nil
+	return func() (string, error) {
+		renderer, err := executor.New(nil)
+		if err != nil {
+			return "", fmt.Errorf("secret %s: %w", s.Name, err)
 		}
-	case "file":
-		return func() (string, error) {
-			data, err := os.ReadFile(ref)
-			if err != nil {
-				return "", fmt.Errorf("secret %s: %w", s.Name, err)
-			}
-			return strings.TrimRight(string(data), "\r\n"), nil
+		renderer.Dir = s.dir
+		value, err := renderer.RenderString(s.From)
+		if err != nil {
+			return "", fmt.Errorf("secret %s: %w", s.Name, err)
+		}
+		if value == "" {
+			return "", fmt.Errorf("secret %s: %s rendered empty", s.Name, s.From)
+		}
+		return value, nil
+	}
+}
+
+// validateSecretTemplate checks that from is a template that reads the value
+// rather than the value itself.
+func validateSecretTemplate(from string) error {
+	if from == "" {
+		return fmt.Errorf("is required: a template such as {{.Env.NAME}} or {{fromFile \"path\"}}")
+	}
+	tmpl, err := template.New("from").Funcs(executor.TemplateFuncs()).Parse(from)
+	if err != nil {
+		return err
+	}
+	for _, node := range tmpl.Tree.Root.Nodes {
+		if _, text := node.(*parse.TextNode); !text {
+			return nil
 		}
 	}
-	return func() (string, error) { return "", fmt.Errorf("secret %s: unknown source %q", s.Name, s.From) }
+	return fmt.Errorf("must read the value with a template such as {{.Env.NAME}} or {{fromFile \"path\"}}; a value does not belong in a manifest")
 }
 
 var envNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -113,18 +134,8 @@ func (m *Manifest) resolveEgress(d Document) (*Egress, error) {
 			return nil, fmt.Errorf("%s: secrets are injected into inspected requests, and no allow entry sets inspect = true", field)
 		}
 		names[s.Name] = true
-		scheme, ref, ok := strings.Cut(s.From, ":")
-		switch {
-		case !ok || ref == "":
-			return nil, fmt.Errorf("%s.from must be env:NAME or file:PATH", field)
-		case scheme == "env":
-			if !envNamePattern.MatchString(ref) {
-				return nil, fmt.Errorf("%s.from: %q is not an environment variable name", field, ref)
-			}
-		case scheme == "file":
-			ref = m.resolvePath(ref)
-		default:
-			return nil, fmt.Errorf("%s.from: unknown source %q; use env:NAME or file:PATH", field, scheme)
+		if err := validateSecretTemplate(s.From); err != nil {
+			return nil, fmt.Errorf("%s.from %w", field, err)
 		}
 		for _, h := range s.Hosts {
 			if err := egress.ValidPattern(h); err != nil {
@@ -137,7 +148,8 @@ func (m *Manifest) resolveEgress(d Document) (*Egress, error) {
 			}
 		}
 		e.Secrets = append(e.Secrets, EgressSecret{
-			Name: s.Name, From: scheme + ":" + ref, Hosts: s.Hosts, Methods: s.Methods, Paths: s.Paths, In: s.In,
+			Name: s.Name, From: s.From, Hosts: s.Hosts, Methods: s.Methods, Paths: s.Paths, In: s.In,
+			dir: m.Paths.WorkingDir,
 		})
 	}
 	if e.CADir == "" {

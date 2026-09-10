@@ -40,6 +40,6 @@ host = "uploads.github.com"
 
 [[egress.secrets]]
 name = "GITHUB_TOKEN"
-from = "env:GITHUB_TOKEN"  # read from the host environment when a request needs it
+from = "{{.Env.GITHUB_TOKEN}}"  # a template rendered when a request needs it; fromFile "path" reads a file
 hosts = ["api.github.com"]
 in = ["header"]

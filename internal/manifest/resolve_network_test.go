@@ -11,7 +11,7 @@ func TestResolveNetworkTypes(t *testing.T) {
 	forward := []ForwardPort{{Host: "127.0.0.1:8080", Guest: ":80"}}
 	resolve := func(t *testing.T, inputs ...NetworkInput) []QEMUNetDevice {
 		t.Helper()
-		devices, err := resolveNetwork(inputs, nil, host, "mmio", CPUCount{})
+		devices, err := resolveNetwork("", inputs, nil, host, "mmio", CPUCount{})
 		if err != nil {
 			t.Fatalf("resolveNetwork: %v", err)
 		}
@@ -71,7 +71,7 @@ func TestResolveNetworkTypes(t *testing.T) {
 			"from guest is not supported on a virtle network"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, err := resolveNetwork(tc.inputs, nil, host, "mmio", CPUCount{})
+			_, err := resolveNetwork("", tc.inputs, nil, host, "mmio", CPUCount{})
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("error = %v, want %q", err, tc.want)
 			}

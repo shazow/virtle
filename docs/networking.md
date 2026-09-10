@@ -155,7 +155,7 @@ host = "uploads.github.com"
 
 [[egress.secrets]]
 name = "GITHUB_TOKEN"
-from = "env:GITHUB_TOKEN"   # or file:/path; the value never appears in the manifest
+from = "{{.Env.GITHUB_TOKEN}}"   # a template; {{fromFile "path"}} reads a file. The value never appears in the manifest.
 hosts = ["api.github.com"]
 in = ["header"]
 ```

@@ -42,7 +42,7 @@ host = "evil.github.com"
 
 [[egress.secrets]]
 name = "GITHUB_TOKEN"
-from = "env:GH_TOKEN"
+from = "{{.Env.GH_TOKEN}}"
 hosts = ["api.github.com"]
 methods = ["GET", "POST"]
 paths = ["/repos/*"]
@@ -50,7 +50,7 @@ in = ["header"]
 
 [[egress.secrets]]
 name = "NPM_TOKEN"
-from = "file:npm.token"
+from = '{{ fromFile "npm.token" }}'
 hosts = ["*.npmjs.org"]
 `)
 	e := m.Egress
@@ -61,11 +61,11 @@ hosts = ["*.npmjs.org"]
 	if !reflect.DeepEqual(e.Allow, wantAllow) || !reflect.DeepEqual(e.Deny, []EgressRule{{Host: "evil.github.com"}}) || !e.Inspects {
 		t.Fatalf("rules = %+v / %+v (inspects %v)", e.Allow, e.Deny, e.Inspects)
 	}
-	if len(e.Secrets) != 2 || e.Secrets[0].From != "env:GH_TOKEN" || e.Secrets[0].Methods[1] != "POST" || e.Secrets[0].In[0] != "header" {
+	if len(e.Secrets) != 2 || e.Secrets[0].From != "{{.Env.GH_TOKEN}}" || e.Secrets[0].Methods[1] != "POST" || e.Secrets[0].In[0] != "header" {
 		t.Fatalf("secrets = %+v", e.Secrets)
 	}
-	if want := "file:" + filepath.Join(m.Paths.WorkingDir, "npm.token"); e.Secrets[1].From != want {
-		t.Fatalf("file source = %q, want %q", e.Secrets[1].From, want)
+	if e.Secrets[1].From != `{{ fromFile "npm.token" }}` || e.Secrets[1].dir != m.Paths.WorkingDir {
+		t.Fatalf("file source = %+v, want the template with the manifest's directory", e.Secrets[1])
 	}
 	if want := filepath.Join(m.ResolvedPersistenceStateDir(), "egress-ca"); e.CADir != want {
 		t.Fatalf("CADir = %q, want %q", e.CADir, want)
@@ -83,9 +83,16 @@ hosts = ["*.npmjs.org"]
 	if err := os.WriteFile(filepath.Join(dir, "npm.token"), []byte("npm_secret\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	file := EgressSecret{Name: "NPM_TOKEN", From: "file:" + filepath.Join(dir, "npm.token")}
+	file := EgressSecret{Name: "NPM_TOKEN", From: `{{ fromFile "npm.token" }}`, dir: dir}
 	if v, err := file.ValueFunc()(); err != nil || v != "npm_secret" {
 		t.Fatalf("file value = %q, %v", v, err)
+	}
+	if _, err := (EgressSecret{Name: "NPM_TOKEN", From: `{{ fromFile "missing" }}`, dir: dir}).ValueFunc()(); err == nil {
+		t.Fatal("a missing file read as a value")
+	}
+	t.Setenv("EMPTY", "")
+	if _, err := (EgressSecret{Name: "E", From: "{{.Env.EMPTY}}"}).ValueFunc()(); err == nil {
+		t.Fatal("an empty value passed")
 	}
 
 	custom := decodeEgress(t, egressBase+"[egress]\nca_dir = 'ca'\n[[egress.allow]]\nhost = '*.test'\n")
@@ -104,14 +111,15 @@ func TestResolveEgressRejects(t *testing.T) {
 		"bad pattern":            {egressBase + "[egress]\n[[egress.allow]]\nhost = '['\n", "allow[0].host"},
 		"bad port":               {egressBase + "[egress]\n[[egress.allow]]\nhost = 'a.test'\nports = [70000]\n", "not a port"},
 		"bad deny":               {egressBase + "[egress]\n[[egress.deny]]\nhost = 'a b'\n", "deny[0].host"},
-		"secret name":            {egressBase + inspecting + "[[egress.secrets]]\nname = '1x'\nfrom = 'env:A'\nhosts = ['api.test']\n", "environment variable name"},
-		"secret source":          {egressBase + inspecting + "[[egress.secrets]]\nname = 'A'\nfrom = 'vault:A'\nhosts = ['api.test']\n", "unknown source"},
-		"secret source shape":    {egressBase + inspecting + "[[egress.secrets]]\nname = 'A'\nfrom = 'A'\nhosts = ['api.test']\n", "env:NAME or file:PATH"},
-		"secret env name":        {egressBase + inspecting + "[[egress.secrets]]\nname = 'A'\nfrom = 'env:a-b'\nhosts = ['api.test']\n", "not an environment variable name"},
-		"secret hosts":           {egressBase + inspecting + "[[egress.secrets]]\nname = 'A'\nfrom = 'env:A'\n", "hosts is required"},
-		"secret placement":       {egressBase + inspecting + "[[egress.secrets]]\nname = 'A'\nfrom = 'env:A'\nhosts = ['api.test']\nin = ['cookie']\n", "must be one of"},
-		"secret without inspect": {egressBase + "[egress]\n[[egress.allow]]\nhost = 'api.test'\n[[egress.secrets]]\nname = 'A'\nfrom = 'env:A'\nhosts = ['api.test']\n", "inspect = true"},
-		"duplicate secret":       {egressBase + inspecting + "[[egress.secrets]]\nname = 'A'\nfrom = 'env:A'\nhosts = ['api.test']\n[[egress.secrets]]\nname = 'A'\nfrom = 'env:B'\nhosts = ['api.test']\n", "twice"},
+		"secret name":            {egressBase + inspecting + "[[egress.secrets]]\nname = '1x'\nfrom = '{{.Env.A}}'\nhosts = ['api.test']\n", "environment variable name"},
+		"secret literal":         {egressBase + inspecting + "[[egress.secrets]]\nname = 'A'\nfrom = 'ghp_value'\nhosts = ['api.test']\n", "does not belong in a manifest"},
+		"secret bad template":    {egressBase + inspecting + "[[egress.secrets]]\nname = 'A'\nfrom = '{{.Env.A'\nhosts = ['api.test']\n", "secrets[0].from"},
+		"secret unknown func":    {egressBase + inspecting + "[[egress.secrets]]\nname = 'A'\nfrom = '{{vault \"A\"}}'\nhosts = ['api.test']\n", "not defined"},
+		"secret empty":           {egressBase + inspecting + "[[egress.secrets]]\nname = 'A'\nfrom = ''\nhosts = ['api.test']\n", "is required"},
+		"secret hosts":           {egressBase + inspecting + "[[egress.secrets]]\nname = 'A'\nfrom = '{{.Env.A}}'\n", "hosts is required"},
+		"secret placement":       {egressBase + inspecting + "[[egress.secrets]]\nname = 'A'\nfrom = '{{.Env.A}}'\nhosts = ['api.test']\nin = ['cookie']\n", "must be one of"},
+		"secret without inspect": {egressBase + "[egress]\n[[egress.allow]]\nhost = 'api.test'\n[[egress.secrets]]\nname = 'A'\nfrom = '{{.Env.A}}'\nhosts = ['api.test']\n", "inspect = true"},
+		"duplicate secret":       {egressBase + inspecting + "[[egress.secrets]]\nname = 'A'\nfrom = '{{.Env.A}}'\nhosts = ['api.test']\n[[egress.secrets]]\nname = 'A'\nfrom = '{{.Env.B}}'\nhosts = ['api.test']\n", "twice"},
 		"firecracker":            {"backend = 'firecracker'\n[kernel]\npath = 'k'\n[egress]\n[[egress.allow]]\nhost = 'a.test'\n", "firecracker"},
 	} {
 		t.Run(name, func(t *testing.T) {

@@ -150,7 +150,7 @@ func (d Document) resolveQEMU(host HostInput, hotplugCount int, rootParams []str
 	if d.Machine.KVM != nil {
 		enableKVM = *d.Machine.KVM
 	}
-	qemuRenderer, err := NewTemplateRenderer(QEMUTemplateProvider{
+	qemuRenderer, err := NewTemplateRendererIn(d.WorkingDir, QEMUTemplateProvider{
 		HostName:   d.HostName,
 		WorkingDir: d.WorkingDir,
 		StateDir:   d.StateDir,
@@ -179,7 +179,7 @@ func (d Document) resolveQEMU(host HostInput, hotplugCount int, rootParams []str
 	sshReadySocket := d.SSH.ReadySocket
 	noGraphic := graphics.IsZero()
 	cpus := resolveCPUCount(d.Machine.VCPU)
-	networks, err := resolveNetwork(d.Networks, d.QEMU.FwdTunnelExec, host, transport, cpus)
+	networks, err := resolveNetwork(d.WorkingDir, d.Networks, d.QEMU.FwdTunnelExec, host, transport, cpus)
 	if err != nil {
 		return QEMU{}, err
 	}
@@ -697,7 +697,7 @@ func (m *Manifest) resolveImageHotplug(entry ImageMountInput) (HotplugDevice, er
 		return HotplugDevice{}, fmt.Errorf("id is required")
 	}
 	format := resolveImageFormat(entry.Image.Format)
-	renderer, err := NewTemplateRenderer(StaticTemplateContext(executor.Context{
+	renderer, err := NewTemplateRendererIn(m.Paths.WorkingDir, StaticTemplateContext(executor.Context{
 		"Serial": serial,
 		"Source": entry.SourcePath,
 		"Format": format,
@@ -739,7 +739,7 @@ func (m *Manifest) resolveVirtioFSHotplug(mount VirtioFSMountInput) (HotplugDevi
 	if len(args) == 0 {
 		args = DefaultVirtioFSArgs(socketPath, source, id)
 	} else {
-		renderedArgs, err := renderVirtioFSArgv(args, socketPath, source, id)
+		renderedArgs, err := renderVirtioFSArgv(m.Paths.WorkingDir, args, socketPath, source, id)
 		if err != nil {
 			return HotplugDevice{}, err
 		}
@@ -846,7 +846,7 @@ func (m *Manifest) addCleanupFile(path string) {
 	m.CleanupFiles = append(m.CleanupFiles, path)
 }
 
-func resolveNetwork(networks []NetworkInput, fwdTunnelExec []string, host HostInput, transport string, cpus CPUCount) ([]QEMUNetDevice, error) {
+func resolveNetwork(dir string, networks []NetworkInput, fwdTunnelExec []string, host HostInput, transport string, cpus CPUCount) ([]QEMUNetDevice, error) {
 	devices := make([]QEMUNetDevice, 0, len(networks))
 	managed := 0
 	for i, network := range networks {
@@ -883,7 +883,7 @@ func resolveNetwork(networks []NetworkInput, fwdTunnelExec []string, host HostIn
 		switch netType {
 		case NetworkTypeUser:
 			device.Backend = "user"
-			forwardOptions, err := resolveForwardPorts(network.Forward, fwdTunnelExec, i)
+			forwardOptions, err := resolveForwardPorts(dir, network.Forward, fwdTunnelExec, i)
 			if err != nil {
 				return nil, err
 			}
@@ -1026,7 +1026,7 @@ func formatPortEndpoint(endpoint PortEndpoint) string {
 	return net.JoinHostPort(endpoint.Address, strconv.Itoa(endpoint.Port))
 }
 
-func resolveForwardPorts(ports []ForwardPort, fwdTunnelExec []string, networkIndex int) ([]string, error) {
+func resolveForwardPorts(dir string, ports []ForwardPort, fwdTunnelExec []string, networkIndex int) ([]string, error) {
 	options := make([]string, 0, len(ports))
 	if len(fwdTunnelExec) == 0 {
 		fwdTunnelExec = []string{"nc", "{{.Host}}", "{{.Port}}"}
@@ -1042,7 +1042,7 @@ func resolveForwardPorts(ports []ForwardPort, fwdTunnelExec []string, networkInd
 			if err := rejectLegacyFwdTunnelExecEnv(fwdTunnelExec); err != nil {
 				return nil, fmt.Errorf("manifest.qemu.fwd_tunnel_exec (manifest.networks[%d].forward[%d]): %w", networkIndex, i, err)
 			}
-			command, err := renderFwdTunnelExec(fwdTunnelExec, normalized.Host)
+			command, err := renderFwdTunnelExec(dir, fwdTunnelExec, normalized.Host)
 			if err != nil {
 				return nil, fmt.Errorf("manifest.qemu.fwd_tunnel_exec (manifest.networks[%d].forward[%d]): %w", networkIndex, i, err)
 			}
@@ -1064,8 +1064,8 @@ func rejectLegacyFwdTunnelExecEnv(exec []string) error {
 	return nil
 }
 
-func renderFwdTunnelExec(exec []string, hostEndpoint PortEndpoint) ([]string, error) {
-	renderer, err := NewTemplateRenderer(ForwardTemplateProvider{
+func renderFwdTunnelExec(dir string, exec []string, hostEndpoint PortEndpoint) ([]string, error) {
+	renderer, err := NewTemplateRendererIn(dir, ForwardTemplateProvider{
 		Host: hostEndpoint.Address,
 		Port: hostEndpoint.Port,
 	})
@@ -1138,8 +1138,8 @@ func resolveImageFormat(format string) string {
 	return format
 }
 
-func renderVirtioFSArgv(argv []string, socketPath string, source string, tag string) ([]string, error) {
-	renderer, err := NewTemplateRenderer(VirtioFSTemplateProvider{
+func renderVirtioFSArgv(dir string, argv []string, socketPath string, source string, tag string) ([]string, error) {
+	renderer, err := NewTemplateRendererIn(dir, VirtioFSTemplateProvider{
 		SocketPath: socketPath,
 		SourcePath: source,
 		Tag:        tag,

@@ -88,7 +88,9 @@ There are some handy sub-commands for working with manifest files:
 - `virtle manifest schema`
 
 Manifest exec arrays render each argv element as a Go `text/template`. The host
-process environment is available as `.Env` on every surface.
+process environment is available as `.Env` on every surface, and
+`{{fromFile "path"}}` reads a file (relative to the manifest's directory)
+without its trailing newline.
 
 | Surface | Template values | Injected environment |
 | --- | --- | --- |
@@ -98,6 +100,7 @@ process environment is available as `.Env` on every surface.
 | `mounts[type=virtiofs].virtiofs` | `Socket`, `MountSource`, `MountTag`, `CID`, `StateDir`, `.Env` | `SOCKET`, `MOUNT_SOURCE`, `MOUNT_TAG`, `CID`, `STATE_DIR`, `VIRTIOFSD_SOCKET` |
 | `run[].exec` | `CID`, `StateDir`, `Workspace.GuestPath`, `Workspace.HostPath`, user vars, `.Env` | scalar top-level values only |
 | `notifications.exec` | `State`, `Message`, notification context values, `.Env` | `STATE`, `MESSAGE`, normalized context values, `VIRTLE_NOTIFY_STATE`, `VIRTLE_NOTIFY_MESSAGE`, `VIRTLE_NOTIFY_CONTEXT_<KEY>` |
+| `egress.secrets[].from` | `.Env`, `fromFile`; rendered when a request carries the token | none |
 
 ## Library
 

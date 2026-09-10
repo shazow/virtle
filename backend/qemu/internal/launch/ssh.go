@@ -9,7 +9,7 @@ import (
 )
 
 func buildSSHCommandWithArgv(launchManifest *manifest.Manifest, cid int, remoteCommand []string, argv []string) (*exec.Cmd, error) {
-	renderer, err := manifest.NewTemplateRenderer(manifest.SSHTemplateProvider{
+	renderer, err := manifest.NewTemplateRendererIn(launchManifest.Paths.WorkingDir, manifest.SSHTemplateProvider{
 		CID:         cid,
 		User:        launchManifest.SSH.User,
 		Destination: sshtools.VSockDestination(launchManifest.SSH.User, cid),
@@ -33,7 +33,7 @@ func buildSSHCommandWithArgv(launchManifest *manifest.Manifest, cid int, remoteC
 // BuildSSHCommandHint renders the copy-pasteable SSH command hint shown after
 // launch.
 func BuildSSHCommandHint(launchManifest *manifest.Manifest, cid int) (string, error) {
-	renderer, err := manifest.NewTemplateRenderer(manifest.SSHTemplateProvider{
+	renderer, err := manifest.NewTemplateRendererIn(launchManifest.Paths.WorkingDir, manifest.SSHTemplateProvider{
 		CID:         cid,
 		User:        launchManifest.SSH.User,
 		Destination: sshtools.VSockDestination(launchManifest.SSH.User, cid),

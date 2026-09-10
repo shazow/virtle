@@ -9,6 +9,8 @@ compact before/after examples.
 
 ## 2026-09-10
 
+- Manifest templates gain `fromFile "path"`, the file's contents without a
+  trailing newline, on every surface; relative paths are the manifest's.
 - `[[networks]] type = "virtle"` puts the guest on a network virtle runs in
   userspace (no privilege, no host network changes): a fixed address and MAC
   with a DHCP lease, DNS, `virtle status` reporting the address, and
@@ -22,8 +24,9 @@ compact before/after examples.
   link-local, and metadata ranges are always refused. `inspect = true` on an
   allow entry terminates TLS and HTTP to record each request; the guest gets
   the CA certificate at `/etc/virtle/ca.pem`. `[[egress.secrets]]` names a
-  secret, where its value is read (`from = "env:NAME"` or `"file:PATH"`), and
-  the hosts that may receive it; the guest gets a token at
+  secret, a template that renders its value when a request needs it
+  (`from = "{{.Env.NAME}}"` or `'{{fromFile "path"}}'`), and the hosts that
+  may receive it; the guest gets a token at
   `/etc/virtle/secrets.env` that inspected requests replace with the value.
   See [examples/manifest-sandbox.toml](examples/manifest-sandbox.toml).
 - Firecracker manifests accept `[[networks]] type = "tap"`.

@@ -94,7 +94,7 @@ func (n *commandNotifier) Notify(ctx context.Context, state string, message stri
 	if n == nil || !n.enabled(state) {
 		return
 	}
-	renderer, err := manifest.NewTemplateRenderer(manifest.NotificationTemplateProvider{
+	renderer, err := manifest.NewTemplateRendererIn(n.dir, manifest.NotificationTemplateProvider{
 		State:   state,
 		Message: message,
 		Values:  values,

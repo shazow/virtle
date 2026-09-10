@@ -194,6 +194,8 @@ func (d Document) firecrackerManifest() (*Manifest, error) {
 		return nil, unsupported("firecracker requires KVM; manifest.machine.kvm cannot be false")
 	case len(d.Mounts) != len(d.Mounts.Image()):
 		return nil, unsupported("only image mounts are supported")
+	case d.Egress != nil:
+		return nil, unsupported("manifest.egress needs a network of type virtle, which firecracker reaches only through the guest daemon")
 	}
 	networks, err := firecrackerNetworks(d.Networks, defaults.Networks)
 	if err != nil {

@@ -112,6 +112,9 @@ func (d Document) ManifestWithOptions(options ResolveOptions) (*Manifest, error)
 	}
 	m.Hotplug = hotplug
 	m.WriteFiles = resolveWriteFiles(d.WriteFiles)
+	if m.Egress, err = m.resolveEgress(d); err != nil {
+		return nil, err
+	}
 
 	if err := m.Validate(); err != nil {
 		return nil, err

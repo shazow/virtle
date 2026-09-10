@@ -34,35 +34,8 @@ const (
 	InBody   Placement = "body"   // the request body
 )
 
-// Placements are every Placement, the default for a Secret or Injection
-// without In.
+// Placements are every Placement, the default for an Injection without In.
 var Placements = []Placement{InHeader, InQuery, InPath, InBody}
-
-// Secret is a value a guest uses without holding: the guest gets Token,
-// and an inspected request to a matching host has the token replaced by
-// Value on its way out. Anywhere else the token is inert. It is an
-// Injection whose token is generated and issued per guest.
-type Secret struct {
-	// Name is the environment variable GuestEnv sets to the token, and the
-	// name a vm.Egress.Secrets entry refers to.
-	Name string
-	// Token is the placeholder the guest holds; one is generated when it is
-	// empty. It must be a string that survives HTTP unencoded.
-	Token string
-	// Value returns the real value when a request carries the token, so it
-	// is never held longer than the request and can come from a vault. An
-	// error or an empty value leaves the token as the guest sent it.
-	Value func() (string, error)
-	// Hosts are name patterns (as for Rule.Hosts) of the destinations the
-	// secret may be sent to; it is never sent anywhere else.
-	Hosts []string
-	// Methods and Paths further limit the requests; empty means any. Paths
-	// are path.Match patterns against the URL path.
-	Methods []string
-	Paths   []string
-	// In limits where the token is replaced; empty means everywhere.
-	In []Placement
-}
 
 // GuestCAPath is where GuestFiles places the CA certificate.
 const GuestCAPath = "/etc/virtle/ca.pem"
@@ -80,53 +53,58 @@ func (p *Policy) GuestFiles() []vm.File {
 }
 
 // GuestEnv is the environment a guest with policy e receives: NAME=token
-// for each Secret it may hold, which is every Secret when e is nil and
-// those e.Secrets names otherwise.
+// for each named Injection it may hold, which is every named one when e is
+// nil and those e.Secrets names otherwise.
 func (p *Policy) GuestEnv(e *vm.Egress) []string {
-	env := make([]string, 0, len(p.Secrets))
-	for _, s := range p.secretsFor(e) {
-		env = append(env, s.Name+"="+p.tokenOf(s))
+	var env []string
+	for _, inj := range p.injectionsFor(e) {
+		if inj.Name != "" {
+			env = append(env, inj.Name+"="+p.tokenOf(inj))
+		}
 	}
 	return env
 }
 
-// secretsFor lists the Secrets a guest with policy e may use.
-func (p *Policy) secretsFor(e *vm.Egress) []*Secret {
-	var secrets []*Secret
-	for i := range p.Secrets {
-		s := &p.Secrets[i]
-		if e == nil || containsString(e.Secrets, s.Name) {
-			secrets = append(secrets, s)
+// injectionsFor lists the Injections a guest with policy e may use: every
+// unnamed one, and the named ones e allows (all of them when e is nil).
+func (p *Policy) injectionsFor(e *vm.Egress) []*Injection {
+	var list []*Injection
+	for i := range p.Injections {
+		inj := &p.Injections[i]
+		if inj.Name == "" || e == nil || containsString(e.Secrets, inj.Name) {
+			list = append(list, inj)
 		}
 	}
-	return secrets
+	return list
 }
 
-// tokenOf is the Secret's token, generating one on first use.
-func (p *Policy) tokenOf(s *Secret) string {
-	if s.Token != "" {
-		return s.Token
+// tokenOf is the injection's token, generated from its name on first use
+// when it has none.
+func (p *Policy) tokenOf(inj *Injection) string {
+	if inj.Token != "" || inj.Name == "" {
+		return inj.Token
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if token, ok := p.tokens[s.Name]; ok {
+	if token, ok := p.tokens[inj.Name]; ok {
 		return token
 	}
 	var random [16]byte
 	if _, err := rand.Read(random[:]); err != nil {
 		panic("egress: random source failed: " + err.Error())
 	}
-	token := "virtle_" + strings.ToUpper(s.Name) + "_" + hex.EncodeToString(random[:])
+	token := "virtle_" + strings.ToUpper(inj.Name) + "_" + hex.EncodeToString(random[:])
 	if p.tokens == nil {
 		p.tokens = make(map[string]string)
 	}
-	p.tokens[s.Name] = token
+	p.tokens[inj.Name] = token
 	return token
 }
 
 // Validate reports a Policy that cannot work: malformed patterns, a rule
-// that inspects with no CA to mint certificates from, a Secret without a
-// name, a value, or hosts, or an Injection without a token or a value.
+// that inspects with no CA to mint certificates from, or an Injection with
+// neither a name nor a token, without a value, named twice, or named but
+// without the hosts its value may go to.
 func (p *Policy) Validate() error {
 	inspects := false
 	for i, r := range p.Rules {
@@ -143,45 +121,30 @@ func (p *Policy) Validate() error {
 	if inspects && len(p.CA.Certificate) == 0 {
 		return errors.New("egress: a rule inspects but the policy has no CA (see LoadOrCreateCA)")
 	}
-	names := make(map[string]bool, len(p.Secrets))
-	for i, s := range p.Secrets {
+	names := make(map[string]bool, len(p.Injections))
+	for i := range p.Injections {
+		inj := &p.Injections[i]
 		switch {
-		case s.Name == "":
-			return fmt.Errorf("egress: secret %d has no name", i)
-		case names[s.Name]:
-			return fmt.Errorf("egress: secret %q is defined twice", s.Name)
-		case s.Value == nil:
-			return fmt.Errorf("egress: secret %q has no value", s.Name)
-		case len(s.Hosts) == 0:
-			return fmt.Errorf("egress: secret %q names no hosts it may be sent to", s.Name)
-		}
-		names[s.Name] = true
-		for _, h := range s.Hosts {
-			if err := ValidPattern(h); err != nil {
-				return fmt.Errorf("egress: secret %q: %w", s.Name, err)
-			}
-		}
-		for _, in := range s.In {
-			if !containsPlacement(Placements, in) {
-				return fmt.Errorf("egress: secret %q: unknown placement %q", s.Name, in)
-			}
-		}
-	}
-	for i, inj := range p.Injections {
-		switch {
-		case inj.Token == "":
-			return fmt.Errorf("egress: injection %d has no token", i)
+		case inj.Name == "" && inj.Token == "":
+			return fmt.Errorf("egress: injection %d has neither a name nor a token", i)
+		case inj.Name != "" && names[inj.Name]:
+			return fmt.Errorf("egress: injection %q is defined twice", inj.Name)
 		case inj.Value == nil:
-			return fmt.Errorf("egress: injection %q has no value", inj.Token)
+			return fmt.Errorf("egress: injection %q has no value", inj.label())
+		case inj.Name != "" && len(inj.Hosts) == 0:
+			return fmt.Errorf("egress: injection %q is issued to guests but names no hosts it may be sent to", inj.Name)
+		}
+		if inj.Name != "" {
+			names[inj.Name] = true
 		}
 		for _, h := range inj.Hosts {
 			if err := ValidPattern(h); err != nil {
-				return fmt.Errorf("egress: injection %q: %w", inj.Token, err)
+				return fmt.Errorf("egress: injection %q: %w", inj.label(), err)
 			}
 		}
 		for _, in := range inj.In {
 			if !containsPlacement(Placements, in) {
-				return fmt.Errorf("egress: injection %q: unknown placement %q", inj.Token, in)
+				return fmt.Errorf("egress: injection %q: unknown placement %q", inj.label(), in)
 			}
 		}
 	}
@@ -191,7 +154,7 @@ func (p *Policy) Validate() error {
 // inspect serves an inspected flow: the guest gets one end of a pipe, and
 // the other end is terminated (TLS with a minted certificate when the guest
 // starts a handshake, plain HTTP otherwise) and reverse-proxied to the
-// real destination with the guest's tokens replaced.
+// real destination, each request admitted and its tokens replaced.
 func (p *Policy) inspect(ctx context.Context, f vmnet.Flow, rule string) (net.Conn, error) {
 	if len(p.CA.Certificate) == 0 {
 		return nil, fmt.Errorf("egress: inspecting %s needs a CA: %w", f.Host, vmnet.ErrDenied)
@@ -231,11 +194,6 @@ func (p *Policy) serveInspected(ctx context.Context, conn net.Conn, f vmnet.Flow
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(target)
 			pr.Out.Host = f.Host
-			// The record keeps the path as the guest sent it: after
-			// substitution it could carry a secret.
-			info := &requestInfo{path: pr.In.URL.Path}
-			info.secrets, info.injections = p.substitute(pr.Out.Context(), pr.Out, pr.In, f)
-			pr.Out = pr.Out.WithContext(context.WithValue(pr.Out.Context(), requestInfoKey{}, info))
 		},
 		Transport: p.upstreamTransport(f),
 		ModifyResponse: func(resp *http.Response) error {
@@ -243,16 +201,68 @@ func (p *Policy) serveInspected(ctx context.Context, conn net.Conn, f vmnet.Flow
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-			p.recordRequest(f, rule, r, http.StatusBadGateway, err)
-			w.WriteHeader(http.StatusBadGateway)
+			// A token refused as the body streamed aborts the upstream
+			// request; the record says it was refused, not that the
+			// upstream failed.
+			p.refuse(w, r, f, rule, err)
 		},
 	}
 	server := &http.Server{
-		Handler:           proxy,
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// The request as the guest sent it, kept for Admit, for the
+			// values, and for the record: after substitution it could
+			// carry a value.
+			seen := Request{Flow: f, Method: r.Method, URL: cloneURL(r.URL), Header: r.Header.Clone()}
+			info := &requestInfo{path: seen.URL.Path}
+			r = r.WithContext(context.WithValue(r.Context(), requestInfoKey{}, info))
+			if p.Admit != nil {
+				if err := p.Admit(r.Context(), seen); err != nil {
+					p.refuse(w, r, f, rule, err)
+					return
+				}
+			}
+			applied, err := p.substitute(r.Context(), r, seen, f)
+			info.applied = applied
+			if err != nil {
+				p.refuse(w, r, f, rule, err)
+				return
+			}
+			proxy.ServeHTTP(w, r)
+		}),
 		ReadHeaderTimeout: 30 * time.Second,
 		BaseContext:       func(net.Listener) context.Context { return ctx },
 	}
 	_ = server.Serve(&oneConnListener{conn: served, done: make(chan struct{})})
+}
+
+// refuse answers a request the policy did not forward: 403 when it was
+// denied, 502 when deciding on it or reaching the upstream failed, either
+// way on record.
+func (p *Policy) refuse(w http.ResponseWriter, r *http.Request, f vmnet.Flow, rule string, err error) {
+	status := http.StatusBadGateway
+	if _, denied := deniedReason(r, err); denied {
+		status = http.StatusForbidden
+	}
+	p.recordRequest(f, rule, r, status, err)
+	w.WriteHeader(status)
+}
+
+// deniedReason reports whether a request was refused, by err or by a token
+// found as its body streamed, and why.
+func deniedReason(r *http.Request, err error) (string, bool) {
+	if errors.Is(err, vmnet.ErrDenied) {
+		return err.Error(), true
+	}
+	if r != nil {
+		if info, ok := r.Context().Value(requestInfoKey{}).(*requestInfo); ok {
+			for _, a := range info.applied {
+				if reason := a.denied.Load(); reason != nil {
+					return *reason, true
+				}
+			}
+		}
+	}
+	return "", false
 }
 
 // upstreamTransport dials the real destination the way dial does, so
@@ -280,16 +290,18 @@ type requestInfoKey struct{}
 
 // requestInfo is what an inspected request records besides its outcome.
 type requestInfo struct {
-	path                string
-	secrets, injections []*applied
+	path    string
+	applied []*applied
 }
 
 // applied is one token's substitution in one request. used is set when the
 // token was found and replaced anywhere, including in a body that streamed
-// out after the headers.
+// out after the headers; denied carries the reason when finding the token
+// refused the request instead.
 type applied struct {
-	name string
-	used atomic.Bool
+	name   string
+	used   atomic.Bool
+	denied atomic.Pointer[string]
 }
 
 func usedNames(list []*applied) []string {
@@ -308,39 +320,40 @@ func (p *Policy) recordRequest(f vmnet.Flow, rule string, r *http.Request, statu
 		Time: time.Now(), Guest: f.Guest, Proto: vm.TCP, Src: f.Src, Dst: f.Dst, Host: f.Host,
 		Decision: Allowed, Rule: rule, Status: status, Err: err,
 	}
+	if reason, denied := deniedReason(r, err); denied {
+		ev.Decision, ev.Reason, ev.Err = Denied, reason, nil
+	}
 	if r != nil {
 		ev.Method, ev.Path = r.Method, r.URL.Path
 		if info, ok := r.Context().Value(requestInfoKey{}).(*requestInfo); ok {
-			ev.Path = info.path
-			ev.Secrets, ev.Injections = usedNames(info.secrets), usedNames(info.injections)
+			ev.Path, ev.Injections = info.path, usedNames(info.applied)
 		}
 	}
 	p.record(ev)
 }
 
-// substitute replaces, in the outgoing request out, the tokens of the
-// secrets and injections that apply to it; in is the request as the guest
-// sent it. A value is read only once its token is found.
-func (p *Policy) substitute(ctx context.Context, out, in *http.Request, f vmnet.Flow) (secrets, injections []*applied) {
-	for _, s := range p.secretsFor(f.Egress) {
-		if s.Value == nil || !scopeApplies(s.Hosts, s.Methods, s.Paths, false, f, out) {
+// substitute replaces, in r, the tokens of the injections that apply to
+// it; seen is the request as the guest sent it. A value is read only once
+// its token is found. An injection that refuses the request ends the pass
+// with an error wrapping vmnet.ErrDenied.
+func (p *Policy) substitute(ctx context.Context, r *http.Request, seen Request, f vmnet.Flow) ([]*applied, error) {
+	var list []*applied
+	for _, inj := range p.injectionsFor(f.Egress) {
+		if inj.Value == nil || !scopeApplies(inj.Hosts, inj.Methods, inj.Paths, inj.Name == "", f, seen.Method, seen.URL.Path) {
 			continue
 		}
-		a := &applied{name: s.Name}
-		replaceRequest(out, p.tokenOf(s), sync.OnceValues(s.Value), s.In, a)
-		secrets = append(secrets, a)
-	}
-	for i := range p.Injections {
-		inj := &p.Injections[i]
-		if inj.Token == "" || inj.Value == nil || !scopeApplies(inj.Hosts, inj.Methods, inj.Paths, true, f, out) {
+		token := p.tokenOf(inj)
+		if token == "" {
 			continue
 		}
-		req := Request{Flow: f, Method: in.Method, URL: in.URL, Header: in.Header}
-		a := &applied{name: inj.Token}
-		replaceRequest(out, inj.Token, sync.OnceValues(func() (string, error) { return inj.Value(ctx, req) }), inj.In, a)
-		injections = append(injections, a)
+		a := &applied{name: inj.label()}
+		list = append(list, a)
+		value := sync.OnceValues(func() (string, error) { return inj.Value(ctx, seen) })
+		if err := replaceRequest(r, token, value, inj.In, a); err != nil {
+			return list, err
+		}
 	}
-	return secrets, injections
+	return list, nil
 }
 
 func matchesPath(patterns []string, p string) bool {
@@ -352,22 +365,36 @@ func matchesPath(patterns []string, p string) bool {
 	return false
 }
 
+func cloneURL(u *url.URL) *url.URL {
+	c := *u
+	return &c
+}
+
 // bufferedBodyLimit is the largest body rewritten in memory; larger bodies
 // are rewritten as they stream, which sends them chunked.
 const bufferedBodyLimit = 1 << 20
 
 // replaceRequest replaces token in the chosen parts of the request with
-// the value resolve returns, reading it only once a token is found; an
-// error or an empty value leaves every occurrence as it is. It marks a as
-// used when it replaced anything, including later, as a streamed body
-// passes.
-func replaceRequest(r *http.Request, token string, resolve func() (string, error), in []Placement, a *applied) {
+// the value resolve returns, reading it only once a token is found. An
+// error wrapping vmnet.ErrDenied from resolve refuses the request and is
+// returned; any other error, or an empty value, leaves every occurrence as
+// it is. a is marked used when anything was replaced, including later, as
+// a streamed body passes, and denied when a token there refused it.
+func replaceRequest(r *http.Request, token string, resolve func() (string, error), in []Placement, a *applied) error {
 	if len(in) == 0 {
 		in = Placements
 	}
-	value := func() (string, bool) {
+	// value resolves once: the replacement and whether to use it, or the
+	// refusal.
+	value := func() (string, bool, error) {
 		v, err := resolve()
-		return v, err == nil && v != ""
+		switch {
+		case errors.Is(err, vmnet.ErrDenied):
+			return "", false, fmt.Errorf("%s: %w", a.name, err)
+		case err != nil || v == "":
+			return "", false, nil
+		}
+		return v, true, nil
 	}
 	for _, place := range in {
 		switch place {
@@ -377,9 +404,9 @@ func replaceRequest(r *http.Request, token string, resolve func() (string, error
 					if !strings.Contains(v, token) {
 						continue
 					}
-					val, ok := value()
-					if !ok {
-						return
+					val, ok, err := value()
+					if err != nil || !ok {
+						return err
 					}
 					r.Header[name][i] = strings.ReplaceAll(v, token, val)
 					a.used.Store(true)
@@ -387,18 +414,18 @@ func replaceRequest(r *http.Request, token string, resolve func() (string, error
 			}
 		case InQuery:
 			if strings.Contains(r.URL.RawQuery, token) {
-				val, ok := value()
-				if !ok {
-					return
+				val, ok, err := value()
+				if err != nil || !ok {
+					return err
 				}
 				r.URL.RawQuery = strings.ReplaceAll(r.URL.RawQuery, token, val)
 				a.used.Store(true)
 			}
 		case InPath:
 			if strings.Contains(r.URL.Path, token) {
-				val, ok := value()
-				if !ok {
-					return
+				val, ok, err := value()
+				if err != nil || !ok {
+					return err
 				}
 				r.URL.Path = strings.ReplaceAll(r.URL.Path, token, val)
 				r.URL.RawPath = ""
@@ -415,9 +442,9 @@ func replaceRequest(r *http.Request, token string, resolve func() (string, error
 				if err != nil || !bytes.Contains(data, []byte(token)) {
 					continue
 				}
-				val, ok := value()
-				if !ok {
-					return
+				val, ok, err := value()
+				if err != nil || !ok {
+					return err
 				}
 				data = bytes.ReplaceAll(data, []byte(token), []byte(val))
 				r.Body = io.NopCloser(bytes.NewReader(data))
@@ -433,20 +460,23 @@ func replaceRequest(r *http.Request, token string, resolve func() (string, error
 			r.Header.Del("Content-Length")
 		}
 	}
+	return nil
 }
 
 // replacingReader replaces token in a stream with the value resolved on
 // the first match, holding back the tail that might begin a token split
 // across reads. When the value cannot be resolved the stream passes
-// unchanged from then on.
+// unchanged from then on; when the token refuses the request the read
+// fails, which aborts it.
 type replacingReader struct {
 	src     io.ReadCloser
 	token   []byte
-	value   func() (string, bool)
+	value   func() (string, bool, error)
 	applied *applied
 
 	val   []byte
 	state int // 0: unresolved, 1: replacing, 2: passing through
+	err   error
 	buf   []byte
 	skip  int // leading bytes of buf already scanned or written, not to scan again
 	eof   bool
@@ -454,9 +484,14 @@ type replacingReader struct {
 
 func (r *replacingReader) replacement() ([]byte, bool) {
 	if r.state == 0 {
-		if v, ok := r.value(); ok {
+		switch v, ok, err := r.value(); {
+		case err != nil:
+			reason := err.Error()
+			r.applied.denied.Store(&reason)
+			r.err, r.state = err, 2
+		case ok:
 			r.val, r.state = []byte(v), 1
-		} else {
+		default:
 			r.state = 2
 		}
 	}
@@ -465,6 +500,9 @@ func (r *replacingReader) replacement() ([]byte, bool) {
 
 func (r *replacingReader) Read(p []byte) (int, error) {
 	for {
+		if r.err != nil {
+			return 0, r.err
+		}
 		// Emit what is safe: everything but a possible token prefix at the
 		// end, unless the source is done or nothing is replaced anymore.
 		safe := len(r.buf)
@@ -484,7 +522,8 @@ func (r *replacingReader) Read(p []byte) (int, error) {
 				r.buf = append(r.buf[:r.skip:r.skip], bytes.ReplaceAll(r.buf[r.skip:], r.token, val)...)
 				r.applied.used.Store(true)
 			}
-			safe = len(r.buf)
+			r.skip = len(r.buf) // everything is written; a value holding the token is not scanned again
+			continue
 		}
 		if safe > 0 {
 			n := copy(p, r.buf[:safe])

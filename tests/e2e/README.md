@@ -67,7 +67,8 @@ lease with `udhcpc`, prints `VIRTLE_NET:<address>`, serves a TCP echo on port
 7, with `virtle.egress=PORT` on the command line connects to `allowed.test`
 and `blocked.test` on that port and prints the outcome, and with
 `virtle.inject=PORT` fetches `http://inject.test:PORT/echo` with
-`$VIRTLE_RANDOM$` in a header and the query and prints what came back. There
+`$VIRTLE_RANDOM$` in a header and the query, then with `$VIRTLE_REJECT$`, then
+`/forbidden`, and prints what came back each time. There
 is no modprobe, NixOS activation, service manager, SSH, or guest agent. No disk
 is attached in the CLI benchmark; the Firecracker recipe covers raw disk I/O and
 clean unmounting. The archive normalizes owner, timestamps, ordering, inode

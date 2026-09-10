@@ -48,9 +48,14 @@ func (s *seen) handler(t *testing.T) http.HandlerFunc {
 	}
 }
 
+// constValue is an Injection.Value that always returns v.
+func constValue(v string) func(context.Context, Request) (string, error) {
+	return func(context.Context, Request) (string, error) { return v, nil }
+}
+
 // inspectingPolicy inspects every named host and resolves them all to the
-// upstream; secrets are the caller's.
-func inspectingPolicy(t *testing.T, upstream *httptest.Server, rec Recorder, secrets ...Secret) *Policy {
+// upstream; injections are the caller's.
+func inspectingPolicy(t *testing.T, upstream *httptest.Server, rec Recorder, injections ...Injection) *Policy {
 	t.Helper()
 	ca, err := LoadOrCreateCA(t.TempDir())
 	if err != nil {
@@ -72,7 +77,7 @@ func inspectingPolicy(t *testing.T, upstream *httptest.Server, rec Recorder, sec
 		Recorder:     rec,
 		CA:           ca,
 		UpstreamTLS:  upstreamTLS,
-		Secrets:      secrets,
+		Injections:   injections,
 	}
 }
 
@@ -108,9 +113,9 @@ func TestInspectReplacesSecretTokens(t *testing.T) {
 	upstream := httptest.NewTLSServer(got.handler(t))
 	defer upstream.Close()
 	rec := &events{}
-	p := inspectingPolicy(t, upstream, rec, Secret{
+	p := inspectingPolicy(t, upstream, rec, Injection{
 		Name:  "TOKEN",
-		Value: func() (string, error) { return "real-secret", nil },
+		Value: constValue("real-secret"),
 		Hosts: []string{"api.test"},
 	})
 	if err := p.Validate(); err != nil {
@@ -153,7 +158,7 @@ func TestInspectReplacesSecretTokens(t *testing.T) {
 	if flow.Decision != Allowed || flow.Rule != "*.test" || flow.Method != "" {
 		t.Errorf("flow event = %+v", flow)
 	}
-	if request.Method != "POST" || request.Path != "/v1/"+token+"/items" || request.Status != 200 || len(request.Secrets) != 1 || request.Secrets[0] != "TOKEN" {
+	if request.Method != "POST" || request.Path != "/v1/"+token+"/items" || request.Status != 200 || len(request.Injections) != 1 || request.Injections[0] != "TOKEN" {
 		t.Errorf("request event = %+v; the recorded path must carry the token, never the secret", request)
 	}
 
@@ -171,8 +176,8 @@ func TestInspectReplacesSecretTokens(t *testing.T) {
 		t.Errorf("secret sent to other.test: auth %q query %q", got.auth, got.query)
 	}
 	got.mu.Unlock()
-	if ev := rec.last(t); len(ev.Secrets) != 0 {
-		t.Errorf("event claims secrets were used: %+v", ev)
+	if ev := rec.last(t); len(ev.Injections) != 0 {
+		t.Errorf("event claims the secret was used: %+v", ev)
 	}
 
 	// A guest whose policy names no secrets keeps the token as is.
@@ -211,10 +216,10 @@ func TestInspectPlainHTTPAndStreamedBodies(t *testing.T) {
 	got := &seen{}
 	upstream := httptest.NewServer(got.handler(t))
 	defer upstream.Close()
-	p := inspectingPolicy(t, upstream, &events{}, Secret{
+	p := inspectingPolicy(t, upstream, &events{}, Injection{
 		Name:  "KEY",
 		Token: "fixed-token",
-		Value: func() (string, error) { return "the-value", nil },
+		Value: constValue("the-value"),
 		Hosts: []string{"plain.test"},
 		In:    []Placement{InBody},
 	})
@@ -254,7 +259,7 @@ func TestReplacingReaderFindsSplitTokens(t *testing.T) {
 		"half":               iotest.HalfReader(strings.NewReader(input)),
 	} {
 		a := &applied{}
-		r := &replacingReader{src: io.NopCloser(src), token: []byte("TOKEN"), value: func() (string, bool) { return "v", true }, applied: a}
+		r := &replacingReader{src: io.NopCloser(src), token: []byte("TOKEN"), value: func() (string, bool, error) { return "v", true, nil }, applied: a}
 		got, err := io.ReadAll(iotest.OneByteReader(r))
 		if err != nil || string(got) != want || !a.used.Load() {
 			t.Errorf("%s: %v\n got %q\nwant %q", name, err, got, want)
@@ -263,9 +268,10 @@ func TestReplacingReaderFindsSplitTokens(t *testing.T) {
 }
 
 func TestGuestEnvNarrowsAndTokensAreStable(t *testing.T) {
-	p := &Policy{Secrets: []Secret{
-		{Name: "A", Value: func() (string, error) { return "a", nil }, Hosts: []string{"a.test"}},
-		{Name: "B", Token: "b-token", Value: func() (string, error) { return "b", nil }, Hosts: []string{"b.test"}},
+	p := &Policy{Injections: []Injection{
+		{Name: "A", Value: constValue("a"), Hosts: []string{"a.test"}},
+		{Name: "B", Token: "b-token", Value: constValue("b"), Hosts: []string{"b.test"}},
+		{Token: "$NONCE$", Value: constValue("n")}, // unnamed: every guest knows it, nothing to issue
 	}}
 	all := p.GuestEnv(nil)
 	if len(all) != 2 || !strings.HasPrefix(all[0], "A=virtle_A_") || all[1] != "B=b-token" {
@@ -290,22 +296,21 @@ func TestValidate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	value := func() (string, error) { return "v", nil }
+	value := constValue("v")
 	for name, tc := range map[string]struct {
 		policy *Policy
 		want   string
 	}{
-		"inspect without CA":      {&Policy{Rules: []Rule{{Hosts: []string{"a.test"}, Inspect: true}}}, "no CA"},
-		"rule without hosts":      {&Policy{Rules: []Rule{{}}}, "no hosts"},
-		"bad pattern":             {&Policy{Rules: []Rule{{Hosts: []string{"["}}}}, "pattern"},
-		"secret without name":     {&Policy{Secrets: []Secret{{Value: value, Hosts: []string{"a"}}}}, "no name"},
-		"secret without value":    {&Policy{Secrets: []Secret{{Name: "A", Hosts: []string{"a"}}}}, "no value"},
-		"secret without hosts":    {&Policy{Secrets: []Secret{{Name: "A", Value: value}}}, "no hosts"},
-		"duplicate secret":        {&Policy{Secrets: []Secret{{Name: "A", Value: value, Hosts: []string{"a"}}, {Name: "A", Value: value, Hosts: []string{"a"}}}}, "twice"},
-		"bad placement":           {&Policy{Secrets: []Secret{{Name: "A", Value: value, Hosts: []string{"a"}, In: []Placement{"cookie"}}}}, "placement"},
-		"injection without token": {&Policy{Injections: []Injection{{Value: Random(4)}}}, "no token"},
-		"injection without value": {&Policy{Injections: []Injection{{Token: "$X$"}}}, "no value"},
-		"injection bad pattern":   {&Policy{Injections: []Injection{{Token: "$X$", Value: Random(4), Hosts: []string{"["}}}}, "pattern"},
+		"inspect without CA":              {&Policy{Rules: []Rule{{Hosts: []string{"a.test"}, Inspect: true}}}, "no CA"},
+		"rule without hosts":              {&Policy{Rules: []Rule{{}}}, "no hosts"},
+		"bad pattern":                     {&Policy{Rules: []Rule{{Hosts: []string{"["}}}}, "pattern"},
+		"injection without name or token": {&Policy{Injections: []Injection{{Value: value, Hosts: []string{"a"}}}}, "neither a name nor a token"},
+		"injection without value":         {&Policy{Injections: []Injection{{Name: "A", Hosts: []string{"a"}}}}, "no value"},
+		"named injection without hosts":   {&Policy{Injections: []Injection{{Name: "A", Value: value}}}, "no hosts"},
+		"duplicate name":                  {&Policy{Injections: []Injection{{Name: "A", Value: value, Hosts: []string{"a"}}, {Name: "A", Value: value, Hosts: []string{"a"}}}}, "twice"},
+		"bad placement":                   {&Policy{Injections: []Injection{{Name: "A", Value: value, Hosts: []string{"a"}, In: []Placement{"cookie"}}}}, "placement"},
+		"unnamed without value":           {&Policy{Injections: []Injection{{Token: "$X$"}}}, "no value"},
+		"injection bad pattern":           {&Policy{Injections: []Injection{{Token: "$X$", Value: value, Hosts: []string{"["}}}}, "pattern"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if err := tc.policy.Validate(); err == nil || !strings.Contains(err.Error(), tc.want) {
@@ -313,7 +318,7 @@ func TestValidate(t *testing.T) {
 			}
 		})
 	}
-	ok := Policy{Rules: []Rule{{Hosts: []string{"*.test"}, Inspect: true}}, CA: ca, Secrets: []Secret{{Name: "A", Value: value, Hosts: []string{"a.test"}, In: []Placement{InHeader}}}}
+	ok := Policy{Rules: []Rule{{Hosts: []string{"*.test"}, Inspect: true}}, CA: ca, Injections: []Injection{{Name: "A", Value: value, Hosts: []string{"a.test"}, In: []Placement{InHeader}}}}
 	if err := ok.Validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -408,7 +413,7 @@ func TestInspectInjectsValues(t *testing.T) {
 	rec.mu.Lock()
 	request := rec.list[len(rec.list)-1]
 	rec.mu.Unlock()
-	if request.Method != "POST" || request.Path != "/v1/"+token+"/items" || len(request.Secrets) != 0 || len(request.Injections) != 1 || request.Injections[0] != token {
+	if request.Method != "POST" || request.Path != "/v1/"+token+"/items" || len(request.Injections) != 1 || request.Injections[0] != token {
 		t.Errorf("request event = %+v; want the guest's path and the one token that was replaced", request)
 	}
 
@@ -443,16 +448,16 @@ func TestValuesAreReadOnlyWhenTheTokenIsPresent(t *testing.T) {
 	defer upstream.Close()
 	rec := &events{}
 	var secretReads, injectionReads atomic.Int32
-	p := inspectingPolicy(t, upstream, rec, Secret{
+	p := inspectingPolicy(t, upstream, rec, Injection{
 		Name:  "KEY",
 		Token: "fixed-token",
-		Value: func() (string, error) { secretReads.Add(1); return "the-value", nil },
+		Value: func(context.Context, Request) (string, error) { secretReads.Add(1); return "the-value", nil },
 		Hosts: []string{"plain.test"},
 	})
-	p.Injections = []Injection{{Token: "$NONCE$", Value: func(context.Context, Request) (string, error) {
+	p.Injections = append(p.Injections, Injection{Token: "$NONCE$", Value: func(context.Context, Request) (string, error) {
 		injectionReads.Add(1)
 		return "n", nil
-	}}}
+	}})
 	port := upstreamPort(upstream)
 	client := guestClient(p, nil, false)
 
@@ -486,7 +491,7 @@ func TestValuesAreReadOnlyWhenTheTokenIsPresent(t *testing.T) {
 	rec.mu.Lock()
 	request := rec.list[len(rec.list)-1]
 	rec.mu.Unlock()
-	if len(request.Secrets) != 1 || request.Secrets[0] != "KEY" || len(request.Injections) != 1 || request.Injections[0] != "$NONCE$" {
+	if len(request.Injections) != 2 || request.Injections[0] != "KEY" || request.Injections[1] != "$NONCE$" {
 		t.Errorf("request event = %+v", request)
 	}
 }
@@ -497,19 +502,30 @@ func TestReplacingReaderValueContainingToken(t *testing.T) {
 	r := &replacingReader{
 		src:     io.NopCloser(strings.NewReader("a$T$b$T$c")),
 		token:   []byte("$T$"),
-		value:   func() (string, bool) { return "<$T$>", true },
+		value:   func() (string, bool, error) { return "<$T$>", true, nil },
 		applied: a,
 	}
 	out, err := io.ReadAll(r)
 	if err != nil || string(out) != "a<$T$>b<$T$>c" || !a.used.Load() {
 		t.Fatalf("got %q, %v, used=%v", out, err, a.used.Load())
 	}
+	// The same when the token is only seen once the source is done.
+	a = &applied{}
+	r = &replacingReader{
+		src:     io.NopCloser(iotest.DataErrReader(strings.NewReader("ab$T$"))),
+		token:   []byte("$T$"),
+		value:   func() (string, bool, error) { return "<$T$>", true, nil },
+		applied: a,
+	}
+	if out, err := io.ReadAll(r); err != nil || string(out) != "ab<$T$>" {
+		t.Fatalf("at end of stream: got %q, %v", out, err)
+	}
 	// An unresolvable value passes the stream through untouched.
 	a = &applied{}
 	r = &replacingReader{
 		src:     io.NopCloser(strings.NewReader("a$T$b")),
 		token:   []byte("$T$"),
-		value:   func() (string, bool) { return "", false },
+		value:   func() (string, bool, error) { return "", false, nil },
 		applied: a,
 	}
 	if out, err := io.ReadAll(r); err != nil || string(out) != "a$T$b" || a.used.Load() {
@@ -543,4 +559,126 @@ func TestInspectOutlivesTheDialContext(t *testing.T) {
 	if resp.StatusCode != 200 || string(body) != "ok" {
 		t.Fatalf("response %d %q; the proxy must not inherit the dial's cancellation", resp.StatusCode, body)
 	}
+}
+
+func TestInjectionRefusesTheRequest(t *testing.T) {
+	// The upstream drains what it gets: a request refused as its body
+	// streams is aborted under it, which is the point.
+	var mu sync.Mutex
+	var reached []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		mu.Lock()
+		reached = append(reached, r.URL.Path)
+		mu.Unlock()
+		_, _ = io.WriteString(w, "ok")
+	}))
+	defer upstream.Close()
+	rec := &events{}
+	p := inspectingPolicy(t, upstream, rec, Injection{
+		Token: "$VIRTLE_REJECT$",
+		Value: func(context.Context, Request) (string, error) { return "", vmnet.ErrDenied },
+	})
+	port := upstreamPort(upstream)
+	client := guestClient(p, nil, false)
+
+	// In a header: refused before anything reaches the upstream.
+	req, _ := http.NewRequest("GET", "http://plain.test:"+port+"/tripwire", nil)
+	req.Header.Set("X-Token", "$VIRTLE_REJECT$")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status %d, want 403", resp.StatusCode)
+	}
+	mu.Lock()
+	if len(reached) != 0 {
+		t.Errorf("the refused request reached the upstream: %v", reached)
+	}
+	mu.Unlock()
+	ev := rec.last(t)
+	if ev.Decision != Denied || ev.Status != 403 || ev.Path != "/tripwire" || !strings.Contains(ev.Reason, "$VIRTLE_REJECT$") || len(ev.Injections) != 0 {
+		t.Errorf("event = %+v", ev)
+	}
+
+	// Deep in a streamed body: the request is aborted and still on record
+	// as refused.
+	body := append(append(bytes.Repeat([]byte("x"), 2<<20), []byte("$VIRTLE_REJECT$")...), 0)
+	req, _ = http.NewRequest("PUT", "http://plain.test:"+port+"/upload", bytes.NewReader(body))
+	resp, err = client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("streamed refusal: status %d, want 403", resp.StatusCode)
+	}
+	if ev := rec.last(t); ev.Decision != Denied || ev.Status != 403 || ev.Path != "/upload" || !strings.Contains(ev.Reason, "$VIRTLE_REJECT$") {
+		t.Errorf("streamed refusal event = %+v", ev)
+	}
+
+	// Without the token the same requests pass.
+	resp, err = client.Get("http://plain.test:" + port + "/clear")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 || rec.last(t).Decision != Allowed {
+		t.Errorf("clear request: status %d, event %+v", resp.StatusCode, rec.last(t))
+	}
+}
+
+func TestAdmitDecidesPerRequest(t *testing.T) {
+	got := &seen{}
+	upstream := httptest.NewTLSServer(got.handler(t))
+	defer upstream.Close()
+	rec := &events{}
+	p := inspectingPolicy(t, upstream, rec)
+	var admitted []string
+	p.Admit = func(_ context.Context, r Request) error {
+		admitted = append(admitted, r.Method+" "+r.URL.Path+" "+r.Header.Get("X-Reason"))
+		if r.URL.Path == "/forbidden" {
+			return fmt.Errorf("the policy forbids %s: %w", r.URL.Path, vmnet.ErrDenied)
+		}
+		if r.Header.Get("X-Reason") == "broken" {
+			return errors.New("decider unavailable")
+		}
+		return nil
+	}
+	port := upstreamPort(upstream)
+	client := guestClient(p, nil, false)
+	for _, tc := range []struct {
+		path, reason string
+		status       int
+		decision     Decision
+	}{
+		{"/ok", "", 200, Allowed},
+		{"/forbidden", "", 403, Denied},
+		{"/ok", "broken", 502, Allowed},
+	} {
+		req, _ := http.NewRequest("GET", "https://api.test:"+port+tc.path, nil)
+		req.Header.Set("X-Reason", tc.reason)
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		ev := rec.last(t)
+		if resp.StatusCode != tc.status || ev.Decision != tc.decision || ev.Status != tc.status || ev.Path != tc.path {
+			t.Errorf("%s %q: status %d, event %+v; want %d %s", tc.path, tc.reason, resp.StatusCode, ev, tc.status, tc.decision)
+		}
+		if tc.status == 502 && ev.Err == nil {
+			t.Errorf("a failed decision must record its error: %+v", ev)
+		}
+	}
+	if len(admitted) != 3 || admitted[1] != "GET /forbidden " {
+		t.Errorf("Admit saw %q", admitted)
+	}
+	got.mu.Lock()
+	if got.path == "/forbidden" {
+		t.Error("the forbidden request reached the upstream")
+	}
+	got.mu.Unlock()
 }

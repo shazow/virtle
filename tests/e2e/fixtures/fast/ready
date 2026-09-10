@@ -46,6 +46,12 @@ if [ -e /sys/class/net/eth0 ]; then
     seen=$(wget -q -T 5 -O - --header 'X-Random: $VIRTLE_RANDOM$' \
       "http://inject.test:$port/echo?r="'$VIRTLE_RANDOM$' 2>&1 || true)
     echo "VIRTLE_INJECT:$seen"
+    # A token that refuses the request, and a path the policy refuses on
+    # its own; wget reports the 403 either way.
+    rejected=$(wget -q -T 5 -O - --header 'X-Token: $VIRTLE_REJECT$' "http://inject.test:$port/echo" 2>&1 || true)
+    echo "VIRTLE_REJECT:$rejected"
+    forbidden=$(wget -q -T 5 -O - "http://inject.test:$port/forbidden" 2>&1 || true)
+    echo "VIRTLE_ADMIT:$forbidden"
   fi
 fi
 echo "VIRTLE_READY:$result"

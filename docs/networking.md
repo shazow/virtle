@@ -105,30 +105,37 @@ inside to the real destination, recording each request's method, path, and
 status. The guest must trust the CA certificate (`Policy.CAPEM`,
 `Policy.GuestFiles`).
 
-Secrets let a guest use a credential it never holds. A `Secret` pairs a name
-with a function that reads the value when a request needs it and the hosts
-that may receive it; the guest gets a generated token (`Policy.GuestEnv`),
-and an inspected request to one of those hosts has the token replaced in its
-headers, query, path, or body on the way out. The token is inert anywhere
-else, and the recorded path is the one the guest sent, so a value never
-reaches a log.
-
-A secret is one case of an `Injection`: a token the guest writes and a
-function that computes its replacement as the request passes, with the same
-host, method, path, and placement scoping. The value is computed only when a
-request carries the token, once per request, and can come from anywhere the
-host can reach at that moment; an error leaves the token as it was.
+Inspected requests can be decided on and rewritten as they pass. An
+`Injection` is a token the guest writes and a function that computes its
+replacement when a request carries it, scoped by host, method, path, and
+placement (header, query, path, body, including bodies that stream). The
+value is computed once per request, only when the token is present, and can
+come from anywhere the host can reach at that moment; an error leaves the
+token as it was, and an error wrapping `vmnet.ErrDenied` refuses the request
+with 403. `Policy.Admit` decides on every inspected request before any token
+is replaced, with the same refusal. Both decisions are on record.
 
 ```go
 policy.Injections = []egress.Injection{
-	{Token: "$VIRTLE_RANDOM$", Value: egress.Random(16)}, // a nonce per request
-	{Token: "$BUILD_ID$", Value: func(ctx context.Context, r egress.Request) (string, error) {
-		return lookupBuild(ctx, r.Flow.Guest) // the guest's name, method, URL, and headers are in r
+	{Token: "$VIRTLE_RANDOM$", Value: func(context.Context, egress.Request) (string, error) {
+		return newNonce(), nil // a fresh value per request
 	}},
+	{Token: "$VIRTLE_REJECT$", Value: func(context.Context, egress.Request) (string, error) {
+		return "", vmnet.ErrDenied // a request carrying it is refused
+	}},
+}
+policy.Admit = func(ctx context.Context, r egress.Request) error {
+	return decide(ctx, r.Flow.Guest, r.Method, r.URL, r.Header) // nil, or an error wrapping vmnet.ErrDenied
 }
 ```
 
-Injections have no manifest form yet; secrets do.
+Secrets are named injections: a guest never holds the credential, only a
+token generated per name (`Policy.GuestEnv`), and an inspected request to
+one of the hosts the injection names has the token replaced on the way
+out. The token is inert anywhere else, a guest's `vm.Egress.Secrets` lists
+the names it may use, and the recorded path is the one the guest sent, so a
+value never reaches a log. The library ships no values of its own; a
+program using it brings them, as the e2e scenario in `tests/e2e` does.
 
 ```toml
 [[networks]]
@@ -159,6 +166,7 @@ gives the guest the CA certificate at `/etc/virtle/ca.pem` and its tokens at
 to `Spec.Egress`. Add the CA to the guest's trust store
 (`update-ca-certificates`, `SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`, ...) and
 source the tokens into the workload's environment.
+Injections other than secrets, and `Admit`, have no manifest form yet.
 
 ## Kernel TAP
 

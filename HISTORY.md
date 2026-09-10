@@ -37,11 +37,13 @@ compact before/after examples.
   (`Policy` with rules, deny ranges, a `Recorder`, inspection, and `Secret`
   injection; `LoadOrCreateCA`, `GuestEnv`, `GuestFiles`).
 - `egress.Policy.Injections` replaces a token the guest writes with a value
-  computed as each inspected request passes (`egress.Injection`, with
-  `egress.Random` for a per-request nonce such as `$VIRTLE_RANDOM$`); a
-  `Secret` is the same mechanism with a generated, per-guest token. Values,
-  secrets included, are read only when a request carries the token, and
-  `egress.Event` records the tokens replaced in `Injections`.
+  computed as each inspected request passes, or refuses the request that
+  carries it (`egress.Injection`; a `Value` returning an error wrapping
+  `vmnet.ErrDenied` refuses). A secret is a named injection: its token is
+  generated and issued per guest. `egress.Policy.Admit` decides on every
+  inspected request before any token is replaced. Values are read only when
+  a request carries the token, and `egress.Event` records refusals and the
+  injections applied.
 - `qemu.Backend` gains `Network vmnet.Network` and `Link` (`qemu.User`,
   `qemu.TAP`, `qemu.Stream`); `firecracker.Backend` gains `Link`
   (`firecracker.TAP`). A pair that cannot work fails `Start` with an error

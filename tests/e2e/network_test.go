@@ -5,6 +5,8 @@ package e2e
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net"
@@ -258,12 +260,30 @@ func TestEgressPolicy(t *testing.T) {
 	}
 }
 
-var injectLine = regexp.MustCompile(`VIRTLE_INJECT:header=([^;\s]*);query=(\S*)`)
+var (
+	injectLine = regexp.MustCompile(`VIRTLE_INJECT:header=([^;\s]*);query=(\S*)`)
+	rejectLine = regexp.MustCompile(`VIRTLE_REJECT:(.*)`)
+	admitLine  = regexp.MustCompile(`VIRTLE_ADMIT:(.*)`)
+)
 
-// TestEgressInjection has the guest fetch a page through an inspecting
-// policy with $VIRTLE_RANDOM$ in a header and in the query: the server
-// behind the policy sees one fresh random value in both places, the guest
-// sees the server's answer, and the request is on record with the token.
+// randomHex is the kind of Injection.Value a program using virtle brings:
+// the library ships no values of its own.
+func randomHex(n int) func(context.Context, egress.Request) (string, error) {
+	return func(context.Context, egress.Request) (string, error) {
+		b := make([]byte, n)
+		if _, err := rand.Read(b); err != nil {
+			return "", err
+		}
+		return hex.EncodeToString(b), nil
+	}
+}
+
+// TestEgressInjection puts the guest behind an inspecting policy a program
+// customized through the public API: $VIRTLE_RANDOM$ is replaced by a
+// fresh value per request, $VIRTLE_REJECT$ refuses the request that
+// carries it, and Admit refuses a path outright. The server behind the
+// policy sees one random value in the header and the query, the guest sees
+// the answer and the two refusals, and all three requests are on record.
 func TestEgressInjection(t *testing.T) {
 	f := loadFixture(t)
 	var mu sync.Mutex
@@ -287,7 +307,16 @@ func TestEgressInjection(t *testing.T) {
 		Resolver:     hostTable{"inject.test": netip.MustParseAddr("127.0.0.1")},
 		Recorder:     events,
 		CA:           ca,
-		Injections:   []egress.Injection{{Token: "$VIRTLE_RANDOM$", Value: egress.Random(8)}},
+		Injections: []egress.Injection{
+			{Token: "$VIRTLE_RANDOM$", Value: randomHex(8)},
+			{Token: "$VIRTLE_REJECT$", Value: func(context.Context, egress.Request) (string, error) { return "", vmnet.ErrDenied }},
+		},
+		Admit: func(_ context.Context, r egress.Request) error {
+			if r.URL.Path == "/forbidden" {
+				return fmt.Errorf("%s is off limits: %w", r.URL.Path, vmnet.ErrDenied)
+			}
+			return nil
+		},
 	}
 	if err := policy.Validate(); err != nil {
 		t.Fatal(err)
@@ -319,15 +348,37 @@ func TestEgressInjection(t *testing.T) {
 		t.Errorf("server saw header=%q query=%q, want %q", sawHeader, sawQuery, value)
 	}
 	mu.Unlock()
-	events.mu.Lock()
-	defer events.mu.Unlock()
-	var request *egress.Event
-	for i := range events.list {
-		if e := &events.list[i]; e.Host == "inject.test" && e.Method != "" {
-			request = e
+	for _, probe := range []struct {
+		name string
+		line *regexp.Regexp
+	}{{"reject", rejectLine}, {"admit", admitLine}} {
+		m := probe.line.FindStringSubmatch(log.String())
+		if m == nil || !strings.Contains(m[1], "403") {
+			t.Errorf("%s probe: guest reported %q, want a 403 refusal", probe.name, m)
 		}
 	}
-	if request == nil || request.Method != "GET" || request.Path != "/echo" || request.Status != 200 || len(request.Injections) != 1 || request.Injections[0] != "$VIRTLE_RANDOM$" {
-		t.Fatalf("events = %+v, want the request recorded with its token", events.list)
+
+	events.mu.Lock()
+	defer events.mu.Unlock()
+	requests := map[string]egress.Event{}
+	for _, e := range events.list {
+		if e.Host == "inject.test" && e.Method != "" {
+			requests[e.Path+"/"+string(e.Decision)] = e
+		}
+	}
+	random, ok := requests["/echo/allow"]
+	if !ok || random.Status != 200 || len(random.Injections) != 1 || random.Injections[0] != "$VIRTLE_RANDOM$" {
+		t.Errorf("random request event = %+v, want 200 with the token on record", random)
+	}
+	rejected, ok := requests["/echo/deny"]
+	if !ok || rejected.Status != 403 || !strings.Contains(rejected.Reason, "$VIRTLE_REJECT$") {
+		t.Errorf("rejected request event = %+v, want 403 refused by the token", rejected)
+	}
+	forbidden, ok := requests["/forbidden/deny"]
+	if !ok || forbidden.Status != 403 || !strings.Contains(forbidden.Reason, "off limits") {
+		t.Errorf("admit event = %+v, want 403 with Admit's reason", forbidden)
+	}
+	if t.Failed() {
+		t.Logf("events: %+v", events.list)
 	}
 }

@@ -183,8 +183,8 @@ how Firecracker is deployed elsewhere and the only NIC it offers today.
 
 `vmnet` holds the contracts. A `Link` moves Ethernet frames for one guest
 NIC; backends build them from what their VMM offers (`vmnet.QEMUStream` for
-QEMU's stream netdev, `vmnet.Tunnel` for a guest agent's frame tunnel,
-`vmnet.NewDeferred` for a peer that arrives after boot). A `Network` is what
+QEMU's stream netdev; a guest agent's frame tunnel will be another). A
+`Network` is what
 links attach to and returns a `Port` with the guest's address and MAC. An
 `Egress` is one method, `DialFlow`, that returns the connection a guest flow
 is spliced to, or an error wrapping `vmnet.ErrDenied` to refuse it before it

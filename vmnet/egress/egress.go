@@ -81,12 +81,6 @@ type Event struct {
 // Recorder receives every Event.
 type Recorder interface{ Record(Event) }
 
-// RecorderFunc adapts a function to Recorder.
-type RecorderFunc func(Event)
-
-// Record implements Recorder.
-func (f RecorderFunc) Record(e Event) { f(e) }
-
 // Resolver resolves the names of allowed flows; *net.Resolver implements it.
 type Resolver interface {
 	LookupNetIP(ctx context.Context, network, host string) ([]netip.Addr, error)

@@ -128,7 +128,7 @@ func (n *Network) handleUDP(r *udp.ForwarderRequest) bool {
 		return true
 	}
 	n.logger.Debug("flow opened", "guest", flow.Guest, "proto", "udp", "dst", flow.Dst)
-	go relayDatagrams(gonet.NewUDPConn(&wq, ep), upstream, udpIdleTimeout)
+	go relayDatagrams(gonet.NewUDPConn(&wq, ep), upstream)
 	return true
 }
 
@@ -160,8 +160,8 @@ func splice(a, b net.Conn) {
 }
 
 // relayDatagrams copies datagrams in both directions until either side
-// fails or stays idle for the timeout.
-func relayDatagrams(a, b net.Conn, idle time.Duration) {
+// fails or stays idle for udpIdleTimeout.
+func relayDatagrams(a, b net.Conn) {
 	var wg sync.WaitGroup
 	closeBoth := sync.OnceFunc(func() {
 		_ = a.Close()
@@ -172,7 +172,7 @@ func relayDatagrams(a, b net.Conn, idle time.Duration) {
 		defer closeBoth()
 		buf := make([]byte, maxMTU)
 		for {
-			_ = src.SetReadDeadline(time.Now().Add(idle))
+			_ = src.SetReadDeadline(time.Now().Add(udpIdleTimeout))
 			k, err := src.Read(buf)
 			if err != nil {
 				return

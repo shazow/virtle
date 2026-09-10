@@ -37,8 +37,8 @@ compact before/after examples.
   `Egress`, `Flow`, `ErrDenied`) and frame adapters, with the in-process
   gVisor network in `vmnet/userspace` (`userspace.New`, `Network.DialContext`
   and `Listen`, fake-IP DNS) and the standard policy in `vmnet/egress`
-  (`Policy` with rules, deny ranges, a `Recorder`, inspection, and `Secret`
-  injection; `LoadOrCreateCA`, `GuestEnv`, `GuestFiles`).
+  (`Policy` with rules, deny ranges, a `Recorder`, inspection, and
+  injections; `LoadOrCreateCA`, `GuestEnv`, `GuestFiles`).
 - `egress.Policy.Injections` replaces a token the guest writes with a value
   computed as each inspected request passes, or refuses the request that
   carries it (`egress.Injection`; a `Value` returning an error wrapping

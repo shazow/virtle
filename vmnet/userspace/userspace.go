@@ -293,12 +293,6 @@ func (n *Network) Attach(ctx context.Context, link vmnet.Link, opts vmnet.Attach
 		_ = p.Close()
 		return nil, tcpipError("add neighbor", err)
 	}
-	for _, f := range opts.Forwards {
-		if _, err := p.Expose(ctx, f); err != nil {
-			_ = p.Close()
-			return nil, err
-		}
-	}
 	n.logger.Info("network port attached", "guest", p.name, "addr", p.addr, "mac", p.mac.String())
 	return p, nil
 }

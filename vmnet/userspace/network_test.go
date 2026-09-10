@@ -313,14 +313,14 @@ func TestAttachOptions(t *testing.T) {
 	} {
 		hostEnd, guestEnd := net.Pipe()
 		defer guestEnd.Close()
-		if p, err := n.Attach(context.Background(), vmnet.Tunnel(hostEnd, n.MTU()), opts); err == nil {
+		if p, err := n.Attach(context.Background(), vmnet.QEMUStream(hostEnd, n.MTU()), opts); err == nil {
 			p.Close()
 			t.Errorf("Attach with %s succeeded", name)
 		}
 	}
 	small, other := net.Pipe()
 	defer other.Close()
-	if p, err := n.Attach(context.Background(), vmnet.Tunnel(small, n.MTU()-1), vmnet.AttachOptions{}); err == nil {
+	if p, err := n.Attach(context.Background(), vmnet.QEMUStream(small, n.MTU()-1), vmnet.AttachOptions{}); err == nil {
 		p.Close()
 		t.Fatal("Attach accepted a link with a smaller MTU")
 	}
@@ -332,7 +332,7 @@ func TestAddressesRunOut(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		hostEnd, guestEnd := net.Pipe()
 		defer guestEnd.Close()
-		p, err := n.Attach(context.Background(), vmnet.Tunnel(hostEnd, n.MTU()), vmnet.AttachOptions{})
+		p, err := n.Attach(context.Background(), vmnet.QEMUStream(hostEnd, n.MTU()), vmnet.AttachOptions{})
 		if err != nil {
 			t.Fatalf("attach %d: %v", i, err)
 		}
@@ -340,13 +340,13 @@ func TestAddressesRunOut(t *testing.T) {
 	}
 	hostEnd, guestEnd := net.Pipe()
 	defer guestEnd.Close()
-	if p, err := n.Attach(context.Background(), vmnet.Tunnel(hostEnd, n.MTU()), vmnet.AttachOptions{}); err == nil {
+	if p, err := n.Attach(context.Background(), vmnet.QEMUStream(hostEnd, n.MTU()), vmnet.AttachOptions{}); err == nil {
 		p.Close()
 		t.Fatal("a /29 attached a sixth guest")
 	}
 	first := ports[0].Addr()
 	_ = ports[0].Close()
-	p, err := n.Attach(context.Background(), vmnet.NewDeferred(n.MTU()), vmnet.AttachOptions{})
+	p, err := n.Attach(context.Background(), idleLink(t, n.MTU()), vmnet.AttachOptions{})
 	if err != nil {
 		t.Fatalf("attach after a release: %v", err)
 	}
@@ -430,7 +430,7 @@ func TestCloseEndsEverything(t *testing.T) {
 	if _, err := g.port.Expose(context.Background(), vm.Forward{HostAddr: "127.0.0.1:0", GuestAddr: ":7"}); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("Expose after network Close = %v, want net.ErrClosed", err)
 	}
-	if _, err := n.Attach(context.Background(), vmnet.NewDeferred(n.MTU()), vmnet.AttachOptions{}); !errors.Is(err, net.ErrClosed) {
+	if _, err := n.Attach(context.Background(), idleLink(t, n.MTU()), vmnet.AttachOptions{}); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("Attach after Close = %v, want net.ErrClosed", err)
 	}
 	if _, ok := g.readFrame(time.Second); ok {
@@ -460,7 +460,7 @@ func TestConfigValidation(t *testing.T) {
 	if n.Gateway() != netip.MustParseAddr("10.20.30.65") || n.MTU() != 9000 {
 		t.Fatalf("gateway %s mtu %d", n.Gateway(), n.MTU())
 	}
-	p, err := n.Attach(context.Background(), vmnet.NewDeferred(9000), vmnet.AttachOptions{})
+	p, err := n.Attach(context.Background(), idleLink(t, 9000), vmnet.AttachOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

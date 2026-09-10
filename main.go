@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -92,6 +93,9 @@ func runLaunch(options *Options) error {
 	spec, b, err := manifestapi.LoadDocument(doc)
 	if err != nil {
 		return fmt.Errorf("load manifest %q: %w", resolvedPath, err)
+	}
+	if closer, ok := b.(io.Closer); ok {
+		defer closer.Close() // the network the loader built, once the session is over
 	}
 	opts := session.Options{
 		Resume:        session.ResumeMode(options.Launch.Resume),

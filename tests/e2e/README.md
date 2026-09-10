@@ -61,8 +61,10 @@ Both use the **identical initramfs**, 1 vCPU and 128 MiB RAM. The initramfs is
 the root filesystem: a static BusyBox, small init scripts and an input file
 containing `21`. Init mounts devtmpfs/proc/sysfs; the workload reads the input,
 doubles it, writes and reads back `/tmp/result`, verifies `42`, and prints the
-complete line `VIRTLE_READY:42`. When the guest has a NIC (the Go API network
-scenarios attach one; the CLI manifests attach none), it first takes a DHCP
+complete line `VIRTLE_READY:42`. When the guest has a NIC (the QEMU Go API
+guests have one, on QEMU's user network or, in the network scenarios, on a
+virtle network; the Firecracker guests and the CLI manifests have none), it
+first takes a DHCP
 lease with `udhcpc`, prints `VIRTLE_NET:<address>`, serves a TCP echo on port
 7, with `virtle.egress=PORT` on the command line connects to `allowed.test`
 and `blocked.test` on that port and prints the outcome, and with

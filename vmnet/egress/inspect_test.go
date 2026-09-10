@@ -516,3 +516,31 @@ func TestReplacingReaderValueContainingToken(t *testing.T) {
 		t.Fatalf("got %q, %v, used=%v", out, err, a.used.Load())
 	}
 }
+
+func TestInspectOutlivesTheDialContext(t *testing.T) {
+	got := &seen{}
+	upstream := httptest.NewServer(got.handler(t))
+	defer upstream.Close()
+	p := inspectingPolicy(t, upstream, &events{})
+	port := upstreamPort(upstream)
+	portNum, _ := strconv.Atoi(port)
+	// A network cancels the dial's context as soon as DialFlow returns; the
+	// inspected connection must keep serving for as long as the guest holds it.
+	client := &http.Client{Transport: &http.Transport{
+		DialContext: func(context.Context, string, string) (net.Conn, error) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			return p.DialFlow(ctx, namedFlow("plain.test", uint16(portNum)))
+		},
+		DisableKeepAlives: true,
+	}}
+	resp, err := client.Get("http://plain.test:" + port + "/after-dial")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 || string(body) != "ok" {
+		t.Fatalf("response %d %q; the proxy must not inherit the dial's cancellation", resp.StatusCode, body)
+	}
+}

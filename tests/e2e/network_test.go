@@ -293,7 +293,9 @@ func TestEgressInjection(t *testing.T) {
 
 	m := injectLine.FindStringSubmatch(log.String())
 	if m == nil {
-		t.Fatalf("guest did not report the fetch\n--- console ---\n%s", log.String())
+		events.mu.Lock()
+		defer events.mu.Unlock()
+		t.Fatalf("guest did not report the fetch\n--- events ---\n%+v\n--- console ---\n%s", events.list, log.String())
 	}
 	value := m[1]
 	if !regexp.MustCompile(`^[0-9a-f]{16}$`).MatchString(value) || m[2] != value {

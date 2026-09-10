@@ -101,18 +101,27 @@ func (f fixture) guests() []guest {
 		{
 			name: "qemu",
 			newBackend: func(console io.Writer) backend.Backend {
+				accel := qemu.AccelKVM
+				options := map[string]string{
+					"acpi": "off", "pcie": "off", "pit": "off", "pic": "off",
+					"rtc": "off", "usb": "off", "x-option-roms": "off",
+				}
+				if os.Getenv("VIRTLE_E2E_ACCEL") == "tcg" {
+					// Without KVM there is no kvm-clock, so the guest needs
+					// the PIT to calibrate its clock. Slow, for development
+					// on hosts without KVM; CI runs with KVM.
+					accel = qemu.AccelTCG
+					options = map[string]string{"acpi": "off", "pcie": "off", "usb": "off", "x-option-roms": "off"}
+				}
 				return &qemu.Backend{
-					Binary:      f.qemu,
-					MachineType: "microvm",
-					MachineOptions: map[string]string{
-						"acpi": "off", "pcie": "off", "pit": "off", "pic": "off",
-						"rtc": "off", "usb": "off", "x-option-roms": "off",
-					},
-					Accel:         qemu.AccelKVM,
-					Console:       qemu.ConsolePrint,
-					ConsoleOutput: console,
-					DisableVSock:  true,
-					Logger:        logger,
+					Binary:         f.qemu,
+					MachineType:    "microvm",
+					MachineOptions: options,
+					Accel:          accel,
+					Console:        qemu.ConsolePrint,
+					ConsoleOutput:  console,
+					DisableVSock:   true,
+					Logger:         logger,
 				}
 			},
 			spec: spec(f.path("bzImage")),

@@ -90,8 +90,8 @@ type Backend struct {
 
 	// Link selects the guest NIC's frame path: User (QEMU's built-in user
 	// networking), TAP (a host TAP device), or Stream (frames to Network).
-	// Nil means User without a Network and Stream with one; manifest.Load
-	// sets it from the manifest's [[networks]] type.
+	// Nil means User without a Network and Stream with one. A manifest.Load
+	// backend leaves it nil and follows the manifest's [[networks]] type.
 	Link Link
 
 	// RemoteControl selects the guest-control transport wired into
@@ -110,7 +110,8 @@ type Backend struct {
 	// is os.Stderr.
 	ConsoleOutput io.Writer
 
-	doc *imanifest.Document // base document of a manifest.Load backend; nil when configured in Go
+	doc          *imanifest.Document // base document of a manifest.Load backend; nil when configured in Go
+	ownedNetwork io.Closer           // a Network manifest.Load built for the document, released by Close
 }
 
 // RemoteControl is a guest-control transport for Backend.RemoteControl.
@@ -163,8 +164,24 @@ func NewBackendFromDocument(doc imanifest.Document, b Backend) backend.Backend {
 	if b.RemoteControl == nil {
 		b.RemoteControl = QGA{}
 	}
+	if closer, ok := b.Network.(io.Closer); ok {
+		// The loader built this network for the document; nobody else
+		// holds it.
+		b.ownedNetwork = closer
+	}
 	b.doc = &doc
 	return &b
+}
+
+// Close releases what the backend owns beyond its machines: the network
+// manifest.Load built for a [[networks]] entry of type virtle. A Network
+// the caller set is the caller's to close. Machines already started keep
+// running but lose their network, so stop them first.
+func (b *Backend) Close() error {
+	if b.ownedNetwork == nil {
+		return nil
+	}
+	return b.ownedNetwork.Close()
 }
 
 // Start implements backend.Backend: it lowers spec through the manifest

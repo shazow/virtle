@@ -298,11 +298,15 @@ vars = { Namespace = "org.freedesktop.*", SocketDir = ".virtle" }
 exec = ["xdg-dbus-proxy", "{{.Env.DBUS_SESSION_BUS_ADDRESS}}", "{{.SocketDir}}/dbus-notifications.sock", "--filter", "--see={{.Namespace}}"]
 
 [[networks]]
-# Network devices default to QEMU user networking, but the manifest needs a
-# place to describe non-default device identity and port forwarding. The id and
-# MAC are stable handles for QEMU and the guest.
+# Network devices default to QEMU user networking (slirp). type = "virtle"
+# attaches the guest to a network virtle runs in userspace instead: it fixes
+# the guest's address and MAC, exposes the forwards below on its port, and
+# `virtle status` reports the address. type = "tap" hands a host TAP device
+# (tap = "tap0") to QEMU for the host kernel to network; forwards are then the
+# host's business. The id and MAC are stable handles for QEMU and the guest; a
+# virtle network allocates the MAC when it is omitted.
 id = "microvm1"
-type = "user"  # Options: user (default: user)
+type = "user"  # Options: user, virtle, tap (default: user)
 mac = "02:02:00:00:00:01"
 
 # Port forwards are host/guest integration points. They are explicit because

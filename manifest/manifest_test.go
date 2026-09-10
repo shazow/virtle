@@ -1,11 +1,19 @@
 package manifest
 
 import (
+	"bytes"
+	"context"
+	"errors"
 	"io"
+	"log/slog"
+	"net"
 	"strings"
 	"testing"
 
+	"github.com/shazow/virtle/backend/qemu"
 	"github.com/shazow/virtle/units"
+	"github.com/shazow/virtle/vmnet"
+	"github.com/shazow/virtle/vmnet/userspace"
 )
 
 const testManifest = `
@@ -117,5 +125,83 @@ func TestLoadJSON(t *testing.T) {
 	}
 	if spec.Kernel.Path != "vmlinuz" {
 		t.Errorf("Kernel = %+v", spec.Kernel)
+	}
+}
+
+const virtleNetworkManifest = `
+[kernel]
+path = "vmlinuz"
+
+[[networks]]
+type = "virtle"
+forward = [{ host = "127.0.0.1:2222", guest = ":22" }]
+`
+
+func TestLoadBuildsVirtleNetwork(t *testing.T) {
+	spec, b, err := Load(strings.NewReader(virtleNetworkManifest))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	qb, ok := b.(*qemu.Backend)
+	if !ok {
+		t.Fatalf("backend = %T, want *qemu.Backend", b)
+	}
+	network, ok := qb.Network.(*userspace.Network)
+	if !ok {
+		t.Fatalf("Network = %T, want a userspace network", qb.Network)
+	}
+	if qb.Link != nil {
+		t.Errorf("Link = %v, want nil so the manifest's type decides", qb.Link)
+	}
+	if len(spec.Ports) != 1 || spec.Ports[0].GuestAddr != ":22" {
+		t.Errorf("Ports = %+v, want the forward", spec.Ports)
+	}
+
+	// The network logs through the backend's Logger, wherever it points by
+	// the time something happens, the way the CLI wires loggers after Load.
+	var logs bytes.Buffer
+	qb.Logger = slog.New(slog.NewTextHandler(&logs, nil))
+	port, err := network.Attach(context.Background(), vmnet.NewDeferred(network.MTU()), vmnet.AttachOptions{Name: "vm1"})
+	if err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	_ = port.Close()
+	if got := logs.String(); !strings.Contains(got, "network port attached") || !strings.Contains(got, "package=vmnet") {
+		t.Errorf("network logs did not reach the backend's logger: %q", got)
+	}
+
+	closer, ok := b.(io.Closer)
+	if !ok {
+		t.Fatal("a backend that owns a network does not implement io.Closer")
+	}
+	if err := closer.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if _, err := network.Attach(context.Background(), vmnet.NewDeferred(network.MTU()), vmnet.AttachOptions{}); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("Attach after Close = %v, want net.ErrClosed", err)
+	}
+	if err := closer.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+}
+
+func TestLoadOwnsNoNetworkForOtherTypes(t *testing.T) {
+	for name, doc := range map[string]string{
+		"user": testManifest,
+		"tap":  "[kernel]\npath = \"vmlinuz\"\n\n[[networks]]\ntype = \"tap\"\ntap = \"tap0\"\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, b, err := Load(strings.NewReader(doc))
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			qb := b.(*qemu.Backend)
+			if qb.Network != nil || qb.Link != nil {
+				t.Fatalf("Network = %v, Link = %v; want neither", qb.Network, qb.Link)
+			}
+			if err := qb.Close(); err != nil {
+				t.Fatalf("Close: %v", err)
+			}
+		})
 	}
 }

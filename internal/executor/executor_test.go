@@ -572,3 +572,35 @@ func TestMain(m *testing.M) {
 	os.Setenv("GORACE", "atexit_sleep_ms=0")
 	os.Exit(m.Run())
 }
+
+func TestRenderStringFromFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "npm.token"), []byte("npm_secret\r\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	renderer, err := NewWithEnviron(nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	renderer.Dir = dir
+	for tmpl, want := range map[string]string{
+		`{{ fromFile "npm.token" }}`:                               "npm_secret",
+		`{{ fromFile "` + filepath.Join(dir, "npm.token") + `" }}`: "npm_secret",
+		`Bearer {{fromFile "npm.token"}}`:                          "Bearer npm_secret",
+	} {
+		if got, err := renderer.RenderString(tmpl); err != nil || got != want {
+			t.Errorf("%s = %q, %v; want %q", tmpl, got, err, want)
+		}
+	}
+	if _, err := renderer.RenderString(`{{ fromFile "missing.token" }}`); err == nil {
+		t.Error("a missing file rendered")
+	}
+	// Without Dir, relative paths are the process's.
+	bare, _ := NewWithEnviron(nil, nil)
+	if _, err := bare.RenderString(`{{ fromFile "npm.token" }}`); err == nil {
+		t.Error("a relative path resolved without a directory")
+	}
+	if _, ok := TemplateFuncs()["fromFile"]; !ok {
+		t.Error("TemplateFuncs lacks fromFile")
+	}
+}

@@ -17,8 +17,11 @@ let
     cp ${./init} $out/init
     cp ${workload} $out/bin/ready
     cp ${./shutdown} $out/bin/shutdown
-    chmod +x $out/init $out/bin/{ready,shutdown}
+    cp ${./dhcp-bound} $out/bin/dhcp-bound
+    chmod +x $out/init $out/bin/{ready,shutdown,dhcp-bound}
     cp ${./inittab} $out/etc/inittab
+    # The lease script writes the resolver under /tmp; the root may be read-only.
+    ln -s /tmp/resolv.conf $out/etc/resolv.conf
     echo 21 > $out/input
     find $out -exec touch -h -d @1 '{}' +
   '';

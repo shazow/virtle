@@ -1,6 +1,7 @@
 package manifest
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"net"
@@ -112,6 +113,9 @@ func (d Document) ManifestWithOptions(options ResolveOptions) (*Manifest, error)
 	}
 	m.Hotplug = hotplug
 	m.WriteFiles = resolveWriteFiles(d.WriteFiles)
+	if m.Egress, err = m.resolveEgress(d); err != nil {
+		return nil, err
+	}
 
 	if err := m.Validate(); err != nil {
 		return nil, err
@@ -147,7 +151,7 @@ func (d Document) resolveQEMU(host HostInput, hotplugCount int, rootParams []str
 	if d.Machine.KVM != nil {
 		enableKVM = *d.Machine.KVM
 	}
-	qemuRenderer, err := NewTemplateRenderer(QEMUTemplateProvider{
+	qemuRenderer, err := NewTemplateRendererIn(d.WorkingDir, QEMUTemplateProvider{
 		HostName:   d.HostName,
 		WorkingDir: d.WorkingDir,
 		StateDir:   d.StateDir,
@@ -176,7 +180,7 @@ func (d Document) resolveQEMU(host HostInput, hotplugCount int, rootParams []str
 	sshReadySocket := d.SSH.ReadySocket
 	noGraphic := graphics.IsZero()
 	cpus := resolveCPUCount(d.Machine.VCPU)
-	networks, err := resolveNetwork(d.Networks, d.QEMU.FwdTunnelExec, host, transport, cpus)
+	networks, err := resolveNetwork(d.WorkingDir, d.Networks, d.QEMU.FwdTunnelExec, host, transport, cpus)
 	if err != nil {
 		return QEMU{}, err
 	}
@@ -694,7 +698,7 @@ func (m *Manifest) resolveImageHotplug(entry ImageMountInput) (HotplugDevice, er
 		return HotplugDevice{}, fmt.Errorf("id is required")
 	}
 	format := resolveImageFormat(entry.Image.Format)
-	renderer, err := NewTemplateRenderer(StaticTemplateContext(executor.Context{
+	renderer, err := NewTemplateRendererIn(m.Paths.WorkingDir, StaticTemplateContext(executor.Context{
 		"Serial": serial,
 		"Source": entry.SourcePath,
 		"Format": format,
@@ -736,7 +740,7 @@ func (m *Manifest) resolveVirtioFSHotplug(mount VirtioFSMountInput) (HotplugDevi
 	if len(args) == 0 {
 		args = DefaultVirtioFSArgs(socketPath, source, id)
 	} else {
-		renderedArgs, err := renderVirtioFSArgv(args, socketPath, source, id)
+		renderedArgs, err := renderVirtioFSArgv(m.Paths.WorkingDir, args, socketPath, source, id)
 		if err != nil {
 			return HotplugDevice{}, err
 		}
@@ -779,20 +783,9 @@ func resolveNetworkHotplug(entry NetworkInput, index int) (HotplugDevice, error)
 	if mac == "" {
 		mac = defaultNetworkMAC
 	}
-	forward := make([]HotplugForward, 0, len(entry.Forward))
-	for i, fwd := range entry.Forward {
-		normalized, err := normalizeForwardPort(fwd, fmt.Sprintf("forward[%d]", i))
-		if err != nil {
-			return HotplugDevice{}, err
-		}
-		if normalized.From == "guest" {
-			return HotplugDevice{}, fmt.Errorf("forward[%d].from guest is not supported for hotplug networks", i)
-		}
-		forward = append(forward, HotplugForward{
-			Proto: normalized.Proto,
-			Host:  formatPortEndpoint(normalized.Host),
-			Guest: formatPortEndpoint(normalized.Guest),
-		})
+	forward, err := resolveHostForwards(entry.Forward, "hotplug", func(i int) string { return fmt.Sprintf("forward[%d]", i) })
+	if err != nil {
+		return HotplugDevice{}, err
 	}
 	return HotplugDevice{
 		Kind: HotplugKindNet,
@@ -843,16 +836,17 @@ func (m *Manifest) addCleanupFile(path string) {
 	m.CleanupFiles = append(m.CleanupFiles, path)
 }
 
-func resolveNetwork(networks []NetworkInput, fwdTunnelExec []string, host HostInput, transport string, cpus CPUCount) ([]QEMUNetDevice, error) {
+func resolveNetwork(dir string, networks []NetworkInput, fwdTunnelExec []string, host HostInput, transport string, cpus CPUCount) ([]QEMUNetDevice, error) {
 	devices := make([]QEMUNetDevice, 0, len(networks))
+	managed := 0
 	for i, network := range networks {
 		id := network.ID
 		if id == "" {
 			id = defaultNetworkID
 		}
-		backend := network.Type
-		if backend == "" {
-			backend = defaultNetworkType
+		netType := network.Type
+		if netType == "" {
+			netType = defaultNetworkType
 		}
 		mac := network.MAC
 		if mac == "" {
@@ -866,21 +860,98 @@ func resolveNetwork(networks []NetworkInput, fwdTunnelExec []string, host HostIn
 		if cpus.Set && cpus.Value > 1 && transport == "pci" {
 			mqVectors = 2*cpus.Value + 2
 		}
-		forwardOptions, err := resolveForwardPorts(network.Forward, fwdTunnelExec, i)
+		if network.Tap != "" && netType != NetworkTypeTAP {
+			return nil, fmt.Errorf("manifest.networks[%d].tap applies to type tap only", i)
+		}
+		device := QEMUNetDevice{
+			ID:         id,
+			MacAddress: mac,
+			Transport:  transport,
+			DisableROM: disableROM,
+			MQVectors:  mqVectors,
+		}
+		switch netType {
+		case NetworkTypeUser:
+			device.Backend = "user"
+			forwardOptions, err := resolveForwardPorts(dir, network.Forward, fwdTunnelExec, i)
+			if err != nil {
+				return nil, err
+			}
+			device.NetdevOptions = forwardOptions
+		case NetworkTypeVirtle:
+			if managed++; managed > 1 {
+				return nil, fmt.Errorf("manifest.networks[%d]: a machine attaches to one virtle network", i)
+			}
+			device.Backend = "stream"
+			device.Managed = true
+			// The default MAC is the same address for every machine; on a
+			// shared network each port needs its own, so only a MAC the
+			// manifest chose is requested.
+			if network.MAC == "" || network.MAC == defaultNetworkMAC {
+				device.MacAddress = ""
+			}
+			forwards, err := resolveHostForwards(network.Forward, "virtle", func(j int) string {
+				return fmt.Sprintf("manifest.networks[%d].forward[%d]", i, j)
+			})
+			if err != nil {
+				return nil, err
+			}
+			device.Forward = forwards
+		case NetworkTypeTAP:
+			if err := validateTapName(network.Tap); err != nil {
+				return nil, fmt.Errorf("manifest.networks[%d].tap %w", i, err)
+			}
+			if len(network.Forward) > 0 {
+				return nil, fmt.Errorf("manifest.networks[%d].forward is not supported on a tap network; the host kernel routes it", i)
+			}
+			device.Backend = "tap"
+			device.NetdevOptions = []string{"ifname=" + network.Tap, "script=no", "downscript=no"}
+		default:
+			return nil, fmt.Errorf("manifest.networks[%d].type must be one of user, virtle, or tap", i)
+		}
+		devices = append(devices, device)
+	}
+	return devices, nil
+}
+
+// resolveHostForwards normalizes the host->guest forwards a NIC exposes
+// itself (a hotplugged NIC, a port on a virtle network), which carry no
+// guest->host direction; field names each entry for errors.
+func resolveHostForwards(ports []ForwardPort, network string, field func(i int) string) ([]HotplugForward, error) {
+	forwards := make([]HotplugForward, 0, len(ports))
+	for i, port := range ports {
+		normalized, err := normalizeForwardPort(port, field(i))
 		if err != nil {
 			return nil, err
 		}
-		devices = append(devices, QEMUNetDevice{
-			ID:            id,
-			Backend:       backend,
-			MacAddress:    mac,
-			Transport:     transport,
-			DisableROM:    disableROM,
-			NetdevOptions: forwardOptions,
-			MQVectors:     mqVectors,
+		if normalized.From != "host" {
+			return nil, fmt.Errorf("%s.from guest is not supported on a %s network", field(i), network)
+		}
+		forwards = append(forwards, HotplugForward{
+			Proto: normalized.Proto,
+			Host:  formatPortEndpoint(normalized.Host),
+			Guest: formatPortEndpoint(normalized.Guest),
 		})
 	}
-	return devices, nil
+	return forwards, nil
+}
+
+// validateTapName accepts a Linux interface name, which also keeps QEMU's
+// comma-separated option syntax intact.
+func validateTapName(name string) error {
+	const ifnamsiz = 15
+	if name == "" {
+		return errors.New("is required for type tap")
+	}
+	if len(name) > ifnamsiz {
+		return fmt.Errorf("%q is longer than %d characters", name, ifnamsiz)
+	}
+	for _, r := range name {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-' || r == '.') {
+			return fmt.Errorf("%q is not an interface name", name)
+		}
+	}
+	return nil
 }
 
 func parsePortEndpoint(value string) (PortEndpoint, error) {
@@ -914,17 +985,11 @@ type normalizedForwardPort struct {
 }
 
 func normalizeForwardPort(port ForwardPort, fieldPath string) (normalizedForwardPort, error) {
-	proto := port.Proto
-	if proto == "" {
-		proto = "tcp"
-	}
+	proto := cmp.Or(port.Proto, "tcp")
 	if proto != "tcp" && proto != "udp" {
 		return normalizedForwardPort{}, fmt.Errorf("%s.proto must be one of tcp or udp", fieldPath)
 	}
-	from := port.From
-	if from == "" {
-		from = "host"
-	}
+	from := cmp.Or(port.From, "host")
 	if from != "host" && from != "guest" {
 		return normalizedForwardPort{}, fmt.Errorf("%s.from must be one of host or guest", fieldPath)
 	}
@@ -948,7 +1013,7 @@ func formatPortEndpoint(endpoint PortEndpoint) string {
 	return net.JoinHostPort(endpoint.Address, strconv.Itoa(endpoint.Port))
 }
 
-func resolveForwardPorts(ports []ForwardPort, fwdTunnelExec []string, networkIndex int) ([]string, error) {
+func resolveForwardPorts(dir string, ports []ForwardPort, fwdTunnelExec []string, networkIndex int) ([]string, error) {
 	options := make([]string, 0, len(ports))
 	if len(fwdTunnelExec) == 0 {
 		fwdTunnelExec = []string{"nc", "{{.Host}}", "{{.Port}}"}
@@ -964,7 +1029,7 @@ func resolveForwardPorts(ports []ForwardPort, fwdTunnelExec []string, networkInd
 			if err := rejectLegacyFwdTunnelExecEnv(fwdTunnelExec); err != nil {
 				return nil, fmt.Errorf("manifest.qemu.fwd_tunnel_exec (manifest.networks[%d].forward[%d]): %w", networkIndex, i, err)
 			}
-			command, err := renderFwdTunnelExec(fwdTunnelExec, normalized.Host)
+			command, err := renderFwdTunnelExec(dir, fwdTunnelExec, normalized.Host)
 			if err != nil {
 				return nil, fmt.Errorf("manifest.qemu.fwd_tunnel_exec (manifest.networks[%d].forward[%d]): %w", networkIndex, i, err)
 			}
@@ -986,8 +1051,8 @@ func rejectLegacyFwdTunnelExecEnv(exec []string) error {
 	return nil
 }
 
-func renderFwdTunnelExec(exec []string, hostEndpoint PortEndpoint) ([]string, error) {
-	renderer, err := NewTemplateRenderer(ForwardTemplateProvider{
+func renderFwdTunnelExec(dir string, exec []string, hostEndpoint PortEndpoint) ([]string, error) {
+	renderer, err := NewTemplateRendererIn(dir, ForwardTemplateProvider{
 		Host: hostEndpoint.Address,
 		Port: hostEndpoint.Port,
 	})
@@ -1060,8 +1125,8 @@ func resolveImageFormat(format string) string {
 	return format
 }
 
-func renderVirtioFSArgv(argv []string, socketPath string, source string, tag string) ([]string, error) {
-	renderer, err := NewTemplateRenderer(VirtioFSTemplateProvider{
+func renderVirtioFSArgv(dir string, argv []string, socketPath string, source string, tag string) ([]string, error) {
+	renderer, err := NewTemplateRendererIn(dir, VirtioFSTemplateProvider{
 		SocketPath: socketPath,
 		SourcePath: source,
 		Tag:        tag,

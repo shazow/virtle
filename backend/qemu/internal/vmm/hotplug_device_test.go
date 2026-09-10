@@ -50,6 +50,8 @@ func TestAdHocHotplugDevicesReceiveExecutablePlansAndDefaults(t *testing.T) {
 		t.Errorf("distinct disk paths produced the same ID %q", disk.ID)
 	}
 
+	// Without a vmnet.Network a hotplugged forward is a NIC of its own on
+	// QEMU's user network; with one, Attach exposes it on the port instead.
 	fwd, err := hotplugDeviceFor(resolver, vm.Forward{HostAddr: "127.0.0.1:8080", GuestAddr: ":80"})
 	if err != nil {
 		t.Fatalf("forward: %v", err)

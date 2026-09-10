@@ -101,18 +101,27 @@ func (f fixture) guests() []guest {
 		{
 			name: "qemu",
 			newBackend: func(console io.Writer) backend.Backend {
+				accel := qemu.AccelKVM
+				options := map[string]string{
+					"acpi": "off", "pcie": "off", "pit": "off", "pic": "off",
+					"rtc": "off", "usb": "off", "x-option-roms": "off",
+				}
+				if os.Getenv("VIRTLE_E2E_ACCEL") == "tcg" {
+					// Without KVM there is no kvm-clock, so the guest needs
+					// the PIT to calibrate its clock. Slow, for development
+					// on hosts without KVM; CI runs with KVM.
+					accel = qemu.AccelTCG
+					options = map[string]string{"acpi": "off", "pcie": "off", "usb": "off", "x-option-roms": "off"}
+				}
 				return &qemu.Backend{
-					Binary:      f.qemu,
-					MachineType: "microvm",
-					MachineOptions: map[string]string{
-						"acpi": "off", "pcie": "off", "pit": "off", "pic": "off",
-						"rtc": "off", "usb": "off", "x-option-roms": "off",
-					},
-					Accel:         qemu.AccelKVM,
-					Console:       qemu.ConsolePrint,
-					ConsoleOutput: console,
-					DisableVSock:  true,
-					Logger:        logger,
+					Binary:         f.qemu,
+					MachineType:    "microvm",
+					MachineOptions: options,
+					Accel:          accel,
+					Console:        qemu.ConsolePrint,
+					ConsoleOutput:  console,
+					DisableVSock:   true,
+					Logger:         logger,
 				}
 			},
 			spec: spec(f.path("bzImage")),
@@ -237,6 +246,18 @@ func startReady(t *testing.T, g guest, spec *vm.Spec) (backend.Machine, *console
 	}
 	t.Cleanup(func() { _ = m.Kill() })
 	return m, b.console
+}
+
+// stepTimer logs how long each step of a scenario took since the previous
+// one, so a stall shows where it happened in the CI log.
+func stepTimer(t *testing.T) func(string) {
+	last := time.Now()
+	return func(step string) {
+		t.Helper()
+		now := time.Now()
+		t.Logf("%s: %.1fs", step, now.Sub(last).Seconds())
+		last = now
+	}
 }
 
 func waitExit(t *testing.T, m backend.Machine) {

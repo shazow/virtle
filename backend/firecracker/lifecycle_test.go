@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -534,3 +535,21 @@ func TestSharesManifestLockWithQEMU(t *testing.T) {
 }
 
 var _ io.Writer = (*eventWriter)(nil)
+
+func TestStatusReportsTAPNIC(t *testing.T) {
+	b, spec := helperBackend(t, "normal")
+	b.Link = TAP{Name: "tap0"}
+	m, err := b.Start(t.Context(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill() })
+	status, err := m.(backend.StatusReporter).Status(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []backend.NetworkStatus{{ID: "microvm1", MAC: "02:02:00:00:00:01"}}
+	if !reflect.DeepEqual(status.Networks, want) {
+		t.Fatalf("Networks = %+v, want %+v", status.Networks, want)
+	}
+}

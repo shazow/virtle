@@ -21,6 +21,9 @@ It also handles teardown, QMP-based shutdown, disk-backed suspend/resume, runtim
 ### Features
 
 - Runs QEMU or Firecracker microVMs through the same CLI and Go interfaces.
+- Networks guests in userspace with an egress policy: allow and deny by name,
+  record every connection, and let the guest use secrets it never holds (see
+  [docs/networking.md](docs/networking.md)).
 - Allocates block overlay images.
 - Manages [`virtiofsd`](https://gitlab.com/virtio-fs/virtiofsd) daemons for virtiofs mounts.
 - Provisions SSH between host and guest.
@@ -36,8 +39,8 @@ It also handles teardown, QMP-based shutdown, disk-backed suspend/resume, runtim
 
 QEMU is the default. Set `backend = "firecracker"` to launch a Firecracker
 microVM instead (Linux with KVM; direct kernel boot, raw disks, serial output,
-and the same lifecycle commands). Guest control, SSH, shares, networking,
-suspend, ballooning, and hotplug are QEMU-only today. See
+a host TAP NIC, and the same lifecycle commands). Guest control, SSH, shares,
+the virtle network, suspend, ballooning, and hotplug are QEMU-only today. See
 [docs/firecracker.md](docs/firecracker.md) and the
 [Firecracker recipe](docs/recipes/firecracker/README.md).
 
@@ -85,7 +88,9 @@ There are some handy sub-commands for working with manifest files:
 - `virtle manifest schema`
 
 Manifest exec arrays render each argv element as a Go `text/template`. The host
-process environment is available as `.Env` on every surface.
+process environment is available as `.Env` on every surface, and
+`{{fromFile "path"}}` reads a file (relative to the manifest's directory)
+without its trailing newline.
 
 | Surface | Template values | Injected environment |
 | --- | --- | --- |
@@ -95,6 +100,7 @@ process environment is available as `.Env` on every surface.
 | `mounts[type=virtiofs].virtiofs` | `Socket`, `MountSource`, `MountTag`, `CID`, `StateDir`, `.Env` | `SOCKET`, `MOUNT_SOURCE`, `MOUNT_TAG`, `CID`, `STATE_DIR`, `VIRTIOFSD_SOCKET` |
 | `run[].exec` | `CID`, `StateDir`, `Workspace.GuestPath`, `Workspace.HostPath`, user vars, `.Env` | scalar top-level values only |
 | `notifications.exec` | `State`, `Message`, notification context values, `.Env` | `STATE`, `MESSAGE`, normalized context values, `VIRTLE_NOTIFY_STATE`, `VIRTLE_NOTIFY_MESSAGE`, `VIRTLE_NOTIFY_CONTEXT_<KEY>` |
+| `egress.secrets[].from` | `.Env`, `fromFile`; rendered when a request carries the token | none |
 
 ## Library
 
@@ -128,6 +134,20 @@ err = g.Run(ctx, &vm.GuestCmd{Path: "make", Dir: "/workspace", Stdout: os.Stdout
 `&firecracker.Backend{}` takes the same `vm.Spec` and returns the same
 `backend.Machine`; see [docs/firecracker.md](docs/firecracker.md) for what it
 supports.
+
+Put the guest on a network virtle runs, with a policy on what it may reach
+(see [docs/networking.md](docs/networking.md)):
+
+```go
+policy := &egress.Policy{Rules: []egress.Rule{{Hosts: []string{"*.github.com"}, Ports: []int{443}}}}
+network, err := userspace.New(userspace.Config{DNS: userspace.DNSFakeIP, Egress: policy})
+defer network.Close()
+
+b := &qemu.Backend{Network: network, RemoteControl: qemu.QGA{}}
+m, err := b.Start(ctx, spec)
+status, _ := m.(backend.StatusReporter).Status(ctx)
+conn, err := network.DialContext(ctx, "tcp", status.Networks[0].Addr+":22")
+```
 
 Optional functionality is discovered by type assertion, as in
 `database/sql/driver`:

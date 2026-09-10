@@ -82,6 +82,9 @@ func DocumentWithDefaults(document Document) Document {
 	if document.Run != nil {
 		defaults.Run = document.Run
 	}
+	if document.Egress != nil {
+		defaults.Egress = document.Egress
+	}
 	defaults.Hotplug = mergeHotplugInput(defaults.Hotplug, document.Hotplug)
 
 	return defaults

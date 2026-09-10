@@ -37,34 +37,44 @@ raw-disk recipe checks remain separate.
 ## What the fixture contains
 
 `fixtures/fast/kernel.nix` starts from `tinyconfig` in the root-pinned nixpkgs
-Linux source. Serial console, KVM guest support, virtio MMIO/block/console,
-ext4, and the i8042 keyboard shutdown path are built in. Modules, PCI and ACPI
-are disabled. Gzip replaces tinyconfig's XZ kernel compression to reduce
+Linux source. Serial console, KVM guest support, virtio MMIO/block/console/net,
+IPv4 (no IPv6), packet sockets, ext4, and the i8042 keyboard shutdown path are
+built in. Modules, PCI and ACPI are disabled. Gzip replaces tinyconfig's XZ kernel compression to reduce
 QEMU's decompression cost. The same kernel build supplies ELF `vmlinux` to
 Firecracker and `bzImage` to QEMU; the formats differ because their loaders
 differ.
 
 Two package outputs keep capability scope explicit:
 
-- `e2e-fast-fixture` is the frozen minimal backend benchmark.
+- `e2e-fast-fixture` is the minimal backend benchmark. Its kernel gained the
+  virtio-net NIC and IPv4 with the virtle network, so timings before that
+  change are not comparable with timings after it.
 - `e2e-fast-userspace-fixture` adds built-in eventfd, inotify, file locking and
-  Unix-domain sockets (`NET` plus `UNIX`) while disabling unrelated optional
-  `NET` defaults. These common primitives support Go, libuv and similar Nix
-  closures without adopting a distribution kernel's PCI, ACPI, modules, device
-  drivers, filesystems, cgroups or namespaces. It reuses the same initramfs and
-  manifests; the minimal profile remains the benchmark baseline. No check boots
-  it yet: `nix flake check` only generates its kernel configuration
-  (`e2e-fast-userspace-config`), so the fragment stays valid.
+  Unix-domain sockets. These common primitives support Go, libuv and similar
+  Nix closures without adopting a distribution kernel's PCI, ACPI, modules,
+  device drivers, filesystems, cgroups or namespaces. It reuses the same
+  initramfs and manifests; the minimal profile remains the benchmark baseline.
+  No check boots it yet: `nix flake check` only generates its kernel
+  configuration (`e2e-fast-userspace-config`), so the fragment stays valid.
 
 Both use the **identical initramfs**, 1 vCPU and 128 MiB RAM. The initramfs is
 the root filesystem: a static BusyBox, small init scripts and an input file
 containing `21`. Init mounts devtmpfs/proc/sysfs; the workload reads the input,
 doubles it, writes and reads back `/tmp/result`, verifies `42`, and prints the
-complete line `VIRTLE_READY:42`. There is no modprobe, NixOS activation, service
-manager, network setup, SSH, or guest agent. No disk is attached in this test;
-the Firecracker recipe covers raw disk I/O and clean unmounting. The archive
-normalizes owner, timestamps, ordering, inode numbering and gzip headers. All
-dependencies come from the root lock.
+complete line `VIRTLE_READY:42`. When the guest has a NIC (the QEMU Go API
+guests have one, on QEMU's user network or, in the network scenarios, on a
+virtle network; the Firecracker guests and the CLI manifests have none), it
+first takes a DHCP
+lease with `udhcpc`, prints `VIRTLE_NET:<address>`, serves a TCP echo on port
+7, with `virtle.egress=PORT` on the command line connects to `allowed.test`
+and `blocked.test` on that port and prints the outcome, and with
+`virtle.inject=PORT` fetches `http://inject.test:PORT/echo` with
+`$VIRTLE_RANDOM$` in a header and the query, then with `$VIRTLE_REJECT$`, then
+`/forbidden`, and prints what came back each time. There
+is no modprobe, NixOS activation, service manager, SSH, or guest agent. No disk
+is attached in the CLI benchmark; the Firecracker recipe covers raw disk I/O and
+clean unmounting. The archive normalizes owner, timestamps, ordering, inode
+numbering and gzip headers. All dependencies come from the root lock.
 
 QEMU runs its `microvm` machine with KVM, qboot, and PCIe, ACPI, PIT, PIC, RTC,
 USB and option ROMs disabled. It retains virtle's normal console and control

@@ -3,6 +3,7 @@ package manifest
 import (
 	"errors"
 	"fmt"
+	"net"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -54,8 +55,18 @@ type Firecracker struct {
 	MemoryMiB       units.MiB         `json:"memoryMiB"`
 	Kernel          FirecrackerKernel `json:"kernel"`
 	Disks           []FirecrackerDisk `json:"disks,omitempty"`
+	// Networks are the guest NICs, each a host TAP device.
+	Networks []FirecrackerNetwork `json:"networks,omitempty"`
 	// Console is KernelSerialOff or KernelSerialPrint.
 	Console string `json:"console"`
+}
+
+// FirecrackerNetwork is a guest NIC backed by a host TAP device: the host
+// kernel provides the network, Firecracker only moves frames.
+type FirecrackerNetwork struct {
+	ID  string `json:"id"`
+	Tap string `json:"tap"`
+	MAC string `json:"mac"`
 }
 
 // FirecrackerKernel is the resolved boot source.
@@ -108,6 +119,51 @@ func unconfigured[T any](section T, baselines ...T) bool {
 	return false
 }
 
+// firecrackerNetworks lowers [[networks]] for Firecracker, whose only NIC is
+// a host TAP device. The user entry virtle seeds by default means no NIC,
+// as it did before Firecracker had any.
+func firecrackerNetworks(networks, defaults []NetworkInput) ([]FirecrackerNetwork, error) {
+	if len(networks) == 0 || reflect.DeepEqual(networks, defaults) {
+		return nil, nil
+	}
+	result := make([]FirecrackerNetwork, 0, len(networks))
+	ids := make(map[string]bool, len(networks))
+	for i, network := range networks {
+		switch network.Type {
+		case NetworkTypeTAP:
+		case NetworkTypeVirtle:
+			return nil, unsupported("manifest.networks[%d].type virtle: firecracker reaches a virtle network through the guest daemon, which does not exist yet", i)
+		case "", NetworkTypeUser:
+			return nil, unsupported("manifest.networks[%d].type user: firecracker has no user networking; use type tap", i)
+		default:
+			return nil, fmt.Errorf("manifest.networks[%d].type must be tap for firecracker", i)
+		}
+		if err := validateTapName(network.Tap); err != nil {
+			return nil, fmt.Errorf("manifest.networks[%d].tap %w", i, err)
+		}
+		if len(network.Forward) != 0 {
+			return nil, unsupported("manifest.networks[%d].forward on a tap network; the host kernel routes it", i)
+		}
+		id := network.ID
+		if id == "" {
+			id = defaultNetworkID
+		}
+		if ids[id] {
+			return nil, fmt.Errorf("manifest.networks[%d].id %q is used twice", i, id)
+		}
+		ids[id] = true
+		mac := network.MAC
+		if mac == "" {
+			mac = defaultNetworkMAC
+		}
+		if _, err := net.ParseMAC(mac); err != nil {
+			return nil, fmt.Errorf("manifest.networks[%d].mac: %w", i, err)
+		}
+		result = append(result, FirecrackerNetwork{ID: id, Tap: network.Tap, MAC: mac})
+	}
+	return result, nil
+}
+
 // firecrackerManifest resolves a backend = "firecracker" document. Sections
 // that configure QEMU devices, host helpers, or guest-agent features are
 // rejected rather than silently dropped, so a QEMU manifest switched to
@@ -124,8 +180,6 @@ func (d Document) firecrackerManifest() (*Manifest, error) {
 		return nil, unsupported("manifest.vsock: firecracker guests have no vsock device")
 	case !unconfigured(d.QEMU, seeded.QEMU, defaults.QEMU):
 		return nil, unsupported("manifest.qemu configures QEMU; remove it or set backend = %q", BackendQEMU)
-	case len(d.Networks) != 0 && !reflect.DeepEqual(d.Networks, defaults.Networks):
-		return nil, unsupported("manifest.networks: firecracker guests have no network device yet")
 	case len(d.WriteFiles) != 0 || d.Workspace != (WorkspaceInput{}):
 		return nil, unsupported("manifest.write_files and manifest.workspace need a guest control transport, which firecracker does not have yet")
 	case len(d.Run) != 0 || len(d.Notifications.Exec) != 0 || len(d.Notifications.States) != 0:
@@ -140,6 +194,12 @@ func (d Document) firecrackerManifest() (*Manifest, error) {
 		return nil, unsupported("firecracker requires KVM; manifest.machine.kvm cannot be false")
 	case len(d.Mounts) != len(d.Mounts.Image()):
 		return nil, unsupported("only image mounts are supported")
+	case d.Egress != nil:
+		return nil, unsupported("manifest.egress needs a network of type virtle, which firecracker reaches only through the guest daemon")
+	}
+	networks, err := firecrackerNetworks(d.Networks, defaults.Networks)
+	if err != nil {
+		return nil, err
 	}
 
 	d = DocumentWithDefaults(d)
@@ -192,7 +252,8 @@ func (d Document) firecrackerManifest() (*Manifest, error) {
 			InitrdPath: m.resolvePath(d.Kernel.InitrdPath),
 			Cmdline:    firecrackerKernelParams(serialMode, rootParams, d.Kernel.Params),
 		},
-		Console: serialMode,
+		Networks: networks,
+		Console:  serialMode,
 	}
 	switch {
 	case fc.Binary == "":

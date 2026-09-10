@@ -45,6 +45,40 @@ type Document struct {
 	Notifications NotificationsInput `json:"notifications,omitempty" toml:"notifications" jsonschema:"Host command hooks invoked for selected runtime notification states."`
 	Run           []RunInput         `json:"run,omitempty" toml:"run" jsonschema:"Host-side processes started before QEMU and stopped during teardown."`
 	Hotplug       HotplugInput       `json:"hotplug,omitempty" toml:"hotplug" jsonschema:"Devices that may be attached or detached after launch."`
+	Egress        *EgressInput       `json:"egress,omitempty" toml:"egress" jsonschema:"What the guest may reach through a network of type virtle, and the secrets it uses without holding them."`
+}
+
+// EgressInput is the [egress] section: the policy of a network of type
+// virtle. Its allow and deny entries become both the network's rules and
+// the guest's own vm.Egress.
+type EgressInput struct {
+	Allow   []EgressRuleInput   `json:"allow,omitempty" toml:"allow" jsonschema:"Destinations the guest may reach; everything else is refused."`
+	Deny    []EgressReachInput  `json:"deny,omitempty" toml:"deny" jsonschema:"Destinations refused even when an allow entry matches."`
+	Secrets []EgressSecretInput `json:"secrets,omitempty" toml:"secrets" jsonschema:"Secrets the guest uses through a token that inspected requests replace with the real value."`
+	CADir   string              `json:"ca_dir,omitempty" toml:"ca_dir" jsonschema:"Directory of the certificate authority that signs inspected connections; default <state_dir>/egress-ca."`
+}
+
+// EgressReachInput is one destination pattern with optional ports.
+type EgressReachInput struct {
+	Host  string `json:"host" toml:"host" jsonschema:"Destination: a name pattern such as *.github.com, a CIDR, or an address."`
+	Ports []int  `json:"ports,omitempty" toml:"ports" jsonschema:"Ports the entry applies to; empty means any."`
+}
+
+// EgressRuleInput is an allow entry.
+type EgressRuleInput struct {
+	Host    string `json:"host" toml:"host" jsonschema:"Destination: a name pattern such as *.github.com, a CIDR, or an address."`
+	Ports   []int  `json:"ports,omitempty" toml:"ports" jsonschema:"Ports the entry applies to; empty means any."`
+	Inspect bool   `json:"inspect,omitempty" toml:"inspect" jsonschema:"Terminate TLS and HTTP to record each request and replace secret tokens; the guest must trust the CA."`
+}
+
+// EgressSecretInput is a secret the guest uses without holding.
+type EgressSecretInput struct {
+	Name    string   `json:"name" toml:"name" jsonschema:"Environment variable the guest receives the token in, and the name the token is derived from."`
+	From    string   `json:"from" toml:"from" jsonschema:"Go text/template rendering the value when a request carries the token: the host environment is .Env ({{.Env.GITHUB_TOKEN}}) and fromFile reads a file relative to the manifest ({{fromFile \"npm.token\"}}). The value itself never appears in the manifest."`
+	Hosts   []string `json:"hosts" toml:"hosts" jsonschema:"Name patterns of the inspected destinations that may receive the value."`
+	Methods []string `json:"methods,omitempty" toml:"methods" jsonschema:"HTTP methods the value may be sent with; empty means any."`
+	Paths   []string `json:"paths,omitempty" toml:"paths" jsonschema:"URL path patterns the value may be sent to; empty means any."`
+	In      []string `json:"in,omitempty" toml:"in" jsonschema:"Where the token is replaced: header, query, path, body; empty means everywhere."`
 }
 
 // ResolveWorkingDir makes WorkingDir absolute against the process working
@@ -240,11 +274,19 @@ type WorkspaceInput struct {
 	MountCWD bool   `json:"mount_cwd,omitempty" toml:"mount_cwd" jsonschema:"Mount the current working directory into the guest after launch."`
 }
 
+// Network types accepted by networks[].type.
+const (
+	NetworkTypeUser   = "user"   // the VMM's built-in user networking (QEMU slirp)
+	NetworkTypeVirtle = "virtle" // a network virtle runs in userspace (vmnet)
+	NetworkTypeTAP    = "tap"    // a host TAP device the host kernel networks
+)
+
 type NetworkInput struct {
-	ID      string        `json:"id,omitempty" toml:"id" jsonschema:"QEMU network device identifier."`
-	Type    string        `json:"type,omitempty" toml:"type" jsonschema:"Network backend type."`
-	MAC     string        `json:"mac,omitempty" toml:"mac" jsonschema:"Guest network interface MAC address."`
-	Forward []ForwardPort `json:"forward,omitempty" toml:"forward" jsonschema:"Port forwarding rules for this network backend."`
+	ID      string        `json:"id,omitempty" toml:"id" jsonschema:"Network device identifier."`
+	Type    string        `json:"type,omitempty" toml:"type" jsonschema:"Network type: user (the VMM's built-in user networking, the default), virtle (a network virtle runs in userspace), or tap (a host TAP device)."`
+	MAC     string        `json:"mac,omitempty" toml:"mac" jsonschema:"Guest network interface MAC address; a virtle network allocates one when omitted."`
+	Tap     string        `json:"tap,omitempty" toml:"tap" jsonschema:"Host TAP device name, for type tap."`
+	Forward []ForwardPort `json:"forward,omitempty" toml:"forward" jsonschema:"Port forwarding rules for this network."`
 }
 
 type ForwardPort struct {

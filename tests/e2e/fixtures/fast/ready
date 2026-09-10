@@ -16,4 +16,42 @@ for dev in /sys/block/vd*; do
   umount /mnt
   break
 done
+# A NIC is the virtle network: take its lease, report the address, serve a
+# TCP echo on port 7, and probe two names when the command line asks for it
+# (virtle.egress=PORT), so the host can see its policy decide by name.
+if [ -e /sys/class/net/eth0 ]; then
+  ifconfig lo up
+  # udhcpc needs the link up: on a down link it reopens its socket forever
+  # instead of giving up, so the retry limit never fires.
+  ifconfig eth0 up
+  timeout 20 udhcpc -i eth0 -n -q -f -s /bin/dhcp-bound >/dev/null 2>&1 || true
+  ip=none
+  [ -r /tmp/ip ] && read -r ip < /tmp/ip
+  echo "VIRTLE_NET:$ip"
+  tcpsvd -E 0.0.0.0 7 cat &
+  port=$(sed -n 's/.*virtle\.egress=\([0-9]*\).*/\1/p' /proc/cmdline)
+  if [ -n "$port" ]; then
+    allowed=$(echo ping | nc -w 5 allowed.test "$port" 2>/dev/null || true)
+    blocked=refused
+    if echo ping | nc -w 5 blocked.test "$port" >/dev/null 2>&1; then
+      blocked=open
+    fi
+    echo "VIRTLE_EGRESS:allowed=$allowed,blocked=$blocked"
+  fi
+  # With virtle.inject=PORT, fetch a page through the inspecting policy with
+  # an injection token in a header and in the query, and report what the
+  # server saw. The token is single-quoted: it is the host's to replace.
+  port=$(sed -n 's/.*virtle\.inject=\([0-9]*\).*/\1/p' /proc/cmdline)
+  if [ -n "$port" ]; then
+    seen=$(wget -q -T 5 -O - --header 'X-Random: $VIRTLE_RANDOM$' \
+      "http://inject.test:$port/echo?r="'$VIRTLE_RANDOM$' 2>&1 || true)
+    echo "VIRTLE_INJECT:$seen"
+    # A token that refuses the request, and a path the policy refuses on
+    # its own; wget reports the 403 either way.
+    rejected=$(wget -q -T 5 -O - --header 'X-Token: $VIRTLE_REJECT$' "http://inject.test:$port/echo" 2>&1 || true)
+    echo "VIRTLE_REJECT:$rejected"
+    forbidden=$(wget -q -T 5 -O - "http://inject.test:$port/forbidden" 2>&1 || true)
+    echo "VIRTLE_ADMIT:$forbidden"
+  fi
+fi
 echo "VIRTLE_READY:$result"

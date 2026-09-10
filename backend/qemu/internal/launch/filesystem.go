@@ -5,9 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"os/user"
 	"path/filepath"
-	"strconv"
 	"syscall"
 
 	"github.com/shazow/virtle/internal/diskimage"
@@ -30,7 +28,7 @@ func EnsurePersistenceDirectory(path string, runAsUser string) error {
 	mode := privateDirectoryMode
 	gid := -1
 	if runAsUser != "" {
-		_, resolvedGID, err := lookupUserIDs(runAsUser)
+		_, resolvedGID, err := diskimage.LookupOwner(runAsUser)
 		if err != nil {
 			return err
 		}
@@ -105,7 +103,7 @@ func createPrivateFile(path string, runAsUser string) (*os.File, error) {
 		return nil, err
 	}
 	if runAsUser != "" {
-		uid, gid, err := lookupUserIDs(runAsUser)
+		uid, gid, err := diskimage.LookupOwner(runAsUser)
 		if err != nil {
 			return nil, err
 		}
@@ -115,22 +113,6 @@ func createPrivateFile(path string, runAsUser string) (*os.File, error) {
 	}
 	keep = true
 	return file, nil
-}
-
-func lookupUserIDs(name string) (int, int, error) {
-	account, err := user.Lookup(name)
-	if err != nil {
-		return 0, 0, fmt.Errorf("look up qemu user %q: %w", name, err)
-	}
-	uid, err := strconv.Atoi(account.Uid)
-	if err != nil {
-		return 0, 0, fmt.Errorf("parse uid %q for qemu user %q: %w", account.Uid, name, err)
-	}
-	gid, err := strconv.Atoi(account.Gid)
-	if err != nil {
-		return 0, 0, fmt.Errorf("parse gid %q for qemu user %q: %w", account.Gid, name, err)
-	}
-	return uid, gid, nil
 }
 
 // CreateVolumeImage creates a volume image and optionally assigns the new file

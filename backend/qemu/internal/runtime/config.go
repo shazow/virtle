@@ -7,6 +7,7 @@ import (
 
 	"github.com/shazow/virtle/backend/qemu/internal/launch"
 	"github.com/shazow/virtle/backend/qemu/internal/qmpclient"
+	"github.com/shazow/virtle/internal/control"
 	"github.com/shazow/virtle/internal/manifest"
 )
 
@@ -24,4 +25,6 @@ type Config struct {
 	WriteBackTimeout time.Duration
 	Logger           *slog.Logger
 	SavedSuspendExit func(error) bool
+	// Networks is the guest's NIC list for Status, fixed at launch.
+	Networks []control.NetworkStatus
 }

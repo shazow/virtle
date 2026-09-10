@@ -26,6 +26,7 @@ type Core struct {
 	savedSuspendExit func(error) bool
 	writeBack        func(context.Context) error
 	cleanup          func() error
+	networks         []control.NetworkStatus
 	savedSuspend     atomic.Bool
 
 	state   *state
@@ -48,6 +49,7 @@ func New(config Config) *Core {
 		processes:        config.Processes,
 		writeBack:        config.WriteBack,
 		cleanup:          config.Cleanup,
+		networks:         config.Networks,
 		state:            state,
 		closer:           newCloser(state),
 	}
@@ -160,7 +162,7 @@ func (r *Core) Status(_ context.Context, _ control.StatusRequest) (control.Statu
 		MonitorSocket:      r.paths.QMPSocket,
 		GuestControlSocket: r.paths.GuestAgentSocket,
 		ReadySocket:        r.paths.SSHReadySocket,
-	}, r.stats), nil
+	}, r.stats, r.networks), nil
 }
 
 func (r *Core) Suspend(ctx context.Context, req control.SuspendRequest) (control.SuspendResponse, error) {

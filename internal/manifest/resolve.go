@@ -226,7 +226,7 @@ func cloneQEMUMountDevices(mounts []QEMUMountDevice) []QEMUMountDevice {
 func (m *Manifest) ResolvedRuns(cid int) ([]ResolvedRun, error) {
 	runs := make([]ResolvedRun, 0, len(m.Run))
 	for i, run := range m.Run {
-		renderer, err := NewTemplateRenderer(RunTemplateProvider{
+		renderer, err := NewTemplateRendererIn(m.Paths.WorkingDir, RunTemplateProvider{
 			CID:       cid,
 			StateDir:  m.ResolvedPersistenceStateDir(),
 			Workspace: m.Workspace,

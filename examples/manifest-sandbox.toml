@@ -1,0 +1,45 @@
+# A sandbox on the virtle network: the guest reaches only what [egress]
+# allows, GitHub API calls are inspected and recorded, and the guest uses a
+# GitHub token it never holds. See docs/networking.md.
+
+[machine]
+vcpu = 2
+memory = 2048
+
+[kernel]
+path = "vmlinuz"
+initrd_path = "initrd.img"
+
+[[mounts]]
+type = "virtiofs"
+tag = "src"
+source = "."
+target = "/workspace"
+virtiofs.socket = "src.sock"
+
+[[networks]]
+type = "virtle"
+forward = [{ host = "127.0.0.1:2222", guest = ":22" }]
+
+[egress]
+[[egress.allow]]
+host = "api.github.com"
+ports = [443]
+inspect = true
+
+[[egress.allow]]
+host = "*.githubusercontent.com"
+ports = [443]
+
+[[egress.allow]]
+host = "registry.npmjs.org"
+ports = [443]
+
+[[egress.deny]]
+host = "uploads.github.com"
+
+[[egress.secrets]]
+name = "GITHUB_TOKEN"
+from = "{{.Env.GITHUB_TOKEN}}"  # a template rendered when a request needs it; fromFile "path" reads a file
+hosts = ["api.github.com"]
+in = ["header"]

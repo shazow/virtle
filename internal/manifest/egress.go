@@ -1,6 +1,7 @@
 package manifest
 
 import (
+	"cmp"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -14,8 +15,11 @@ import (
 )
 
 // Egress is the resolved [egress] section: what the loader builds a
-// vmnet/egress policy from, and what the guest's vm.Egress says.
+// vmnet/egress policy from, and what the guest's vm.Egress says. A virtle
+// network without a section resolves to one that reaches the internet.
 type Egress struct {
+	// Reach is what lies beyond the allow entries, an egress.Reach.
+	Reach   string         `json:"reach"`
 	Allow   []EgressRule   `json:"allow,omitempty"`
 	Deny    []EgressRule   `json:"deny,omitempty"`
 	Secrets []EgressSecret `json:"secrets,omitempty"`
@@ -93,15 +97,25 @@ var envNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // resolveEgress validates the [egress] section against a document whose
 // defaults are applied and resolves its paths. Values are never read here.
+// A virtle network without a section gets the default policy: the
+// internet, and nothing on the host or its networks.
 func (m *Manifest) resolveEgress(d Document) (*Egress, error) {
-	if d.Egress == nil {
+	virtle := declaresNetworkType(d.Networks, NetworkTypeVirtle)
+	in := d.Egress
+	switch {
+	case in == nil && !virtle:
 		return nil, nil
-	}
-	if !declaresNetworkType(d.Networks, NetworkTypeVirtle) {
+	case in == nil:
+		in = &EgressInput{}
+	case !virtle:
 		return nil, fmt.Errorf("manifest.egress needs a network of type %s", NetworkTypeVirtle)
 	}
-	in := d.Egress
-	e := &Egress{CADir: in.CADir}
+	e := &Egress{CADir: in.CADir, Reach: cmp.Or(in.Reach, string(egress.ReachInternet))}
+	switch egress.Reach(e.Reach) {
+	case egress.ReachRules, egress.ReachInternet, egress.ReachAll:
+	default:
+		return nil, fmt.Errorf("manifest.egress.reach %q must be one of %s, %s, or %s", in.Reach, egress.ReachRules, egress.ReachInternet, egress.ReachAll)
+	}
 	for i, r := range in.Allow {
 		rule, err := resolveEgressRule(r.Host, r.Ports, fmt.Sprintf("manifest.egress.allow[%d]", i))
 		if err != nil {

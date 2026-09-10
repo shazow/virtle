@@ -14,12 +14,14 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"testing/iotest"
+	"time"
 
 	"github.com/shazow/virtle/vm"
 	"github.com/shazow/virtle/vmnet"
@@ -30,6 +32,7 @@ type seen struct {
 	mu            sync.Mutex
 	auth, query   string
 	path, body    string
+	host          string
 	contentLength int64
 	proto         string
 }
@@ -42,7 +45,7 @@ func (s *seen) handler(t *testing.T) http.HandlerFunc {
 		}
 		s.mu.Lock()
 		s.auth, s.query, s.path, s.body = r.Header.Get("Authorization"), r.URL.Query().Get("key"), r.URL.Path, string(body)
-		s.contentLength, s.proto = r.ContentLength, r.Proto
+		s.contentLength, s.proto, s.host = r.ContentLength, r.Proto, r.Host
 		s.mu.Unlock()
 		_, _ = io.WriteString(w, "ok")
 	}
@@ -681,4 +684,132 @@ func TestAdmitDecidesPerRequest(t *testing.T) {
 		t.Error("the forbidden request reached the upstream")
 	}
 	got.mu.Unlock()
+}
+
+func TestInspectedFlowsEndWithTheConnection(t *testing.T) {
+	got := &seen{}
+	plain := httptest.NewServer(got.handler(t))
+	defer plain.Close()
+	secure := httptest.NewTLSServer(got.handler(t))
+	defer secure.Close()
+	for name, tc := range map[string]struct {
+		upstream *httptest.Server
+		url      string
+		h2       bool
+	}{
+		"http/1.1": {plain, "http://plain.test:" + upstreamPort(plain) + "/", false},
+		"h2":       {secure, "https://api.test:" + upstreamPort(secure) + "/", true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := inspectingPolicy(t, tc.upstream, &events{})
+			client := guestClient(p, nil, tc.h2)
+			get := func() {
+				t.Helper()
+				resp, err := client.Get(tc.url)
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, _ = io.Copy(io.Discard, resp.Body)
+				resp.Body.Close()
+				if resp.StatusCode != 200 {
+					t.Fatalf("status %d", resp.StatusCode)
+				}
+			}
+			settled := func(limit int) bool {
+				deadline := time.Now().Add(5 * time.Second)
+				for runtime.NumGoroutine() > limit && time.Now().Before(deadline) {
+					time.Sleep(10 * time.Millisecond)
+				}
+				return runtime.NumGoroutine() <= limit
+			}
+			get() // whatever starts lazily is in the baseline
+			settled(0)
+			baseline := runtime.NumGoroutine()
+			const requests = 20
+			for i := 0; i < requests; i++ {
+				get()
+			}
+			// Each connection's server ends with it; only goroutines still
+			// winding down may remain.
+			if !settled(baseline + requests/4) {
+				t.Fatalf("%d goroutines after %d inspected connections, %d before them: the server of a closed connection lives on", runtime.NumGoroutine(), requests, baseline)
+			}
+		})
+	}
+}
+
+func TestInjectedQueryValuesAreEncoded(t *testing.T) {
+	got := &seen{}
+	upstream := httptest.NewServer(got.handler(t))
+	defer upstream.Close()
+	const value = "a b&c=d/e?#"
+	p := inspectingPolicy(t, upstream, &events{}, Injection{Token: "$V$", Value: constValue(value)})
+	port := upstreamPort(upstream)
+	resp, err := guestClient(p, nil, false).Get("http://plain.test:" + port + "/q?key=$V$&other=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	got.mu.Lock()
+	defer got.mu.Unlock()
+	if got.query != value {
+		t.Errorf("upstream decoded key=%q, want %q: the value must be query-encoded in place of the token", got.query, value)
+	}
+	// The request reaches the upstream with the Host the guest sent.
+	if got.host != "plain.test:"+port {
+		t.Errorf("upstream saw Host %q, want %q", got.host, "plain.test:"+port)
+	}
+}
+
+func TestInspectMintsForTheResolvedName(t *testing.T) {
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer upstream.Close()
+	p := inspectingPolicy(t, upstream, &events{})
+	p.Rules = append(p.Rules, Rule{Hosts: []string{"127.0.0.0/8"}, Inspect: true})
+	port := netip.MustParseAddrPort(upstream.Listener.Addr().String()).Port()
+	pool := x509.NewCertPool()
+	pool.AppendCertsFromPEM(p.CAPEM())
+	handshake := func(f vmnet.Flow, cfg *tls.Config) (*x509.Certificate, error) {
+		t.Helper()
+		raw, err := p.DialFlow(context.Background(), f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer raw.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		c := tls.Client(raw, cfg)
+		if err := c.HandshakeContext(ctx); err != nil {
+			return nil, err
+		}
+		return c.ConnectionState().PeerCertificates[0], nil
+	}
+
+	// The name the guest resolved names the certificate.
+	cert, err := handshake(namedFlow("api.test", port), &tls.Config{ServerName: "api.test", RootCAs: pool})
+	if err != nil {
+		t.Fatalf("handshake for the resolved name: %v", err)
+	}
+	if len(cert.DNSNames) != 1 || cert.DNSNames[0] != "api.test" {
+		t.Errorf("certificate names %v, want api.test", cert.DNSNames)
+	}
+	// An SNI for another name gets the same certificate, and no new one is
+	// minted for it: the guest connected to api.test's address.
+	if _, err := handshake(namedFlow("api.test", port), &tls.Config{ServerName: "other.test", RootCAs: pool}); err == nil {
+		t.Error("a certificate verified for an SNI other than the resolved name")
+	}
+	p.mu.Lock()
+	leaves := len(p.leaves)
+	p.mu.Unlock()
+	if leaves != 1 {
+		t.Errorf("%d certificates minted, want 1: a guest's SNI must not mint", leaves)
+	}
+	// A flow by address without an SNI gets a certificate for the address.
+	cert, err = handshake(addrFlow(netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), port)), &tls.Config{InsecureSkipVerify: true})
+	if err != nil {
+		t.Fatalf("handshake for an address flow: %v", err)
+	}
+	if len(cert.IPAddresses) != 1 || !cert.IPAddresses[0].Equal(net.ParseIP("127.0.0.1")) || len(cert.DNSNames) != 0 {
+		t.Errorf("address flow certificate names %v / %v, want the address", cert.DNSNames, cert.IPAddresses)
+	}
 }

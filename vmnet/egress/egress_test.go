@@ -274,3 +274,20 @@ func TestValidPattern(t *testing.T) {
 		}
 	}
 }
+
+func TestInspectingRulesRefuseUDP(t *testing.T) {
+	rec := &events{}
+	p := &Policy{
+		Rules:        []Rule{{Hosts: []string{"*.test"}, Inspect: true}},
+		DenyPrefixes: []netip.Prefix{},
+		Recorder:     rec,
+	}
+	f := namedFlow("api.test", 443)
+	f.Proto = vm.UDP
+	if _, err := p.DialFlow(context.Background(), f); !errors.Is(err, vmnet.ErrDenied) {
+		t.Fatalf("UDP to an inspected host = %v, want ErrDenied: it would pass uninspected", err)
+	}
+	if ev := rec.last(t); ev.Decision != Denied || ev.Proto != vm.UDP || !strings.Contains(ev.Reason, "tcp") {
+		t.Errorf("event = %+v", ev)
+	}
+}

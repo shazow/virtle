@@ -2,6 +2,7 @@ package userspace
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/netip"
@@ -30,11 +31,15 @@ func (n *Network) installForwarders() {
 	n.stack.SetTransportProtocolHandler(udp.ProtocolNumber, uf.HandlePacket)
 }
 
+// errUnknownFakeIP refuses a flow to a synthetic address the DNS never
+// handed out: it stands for no name, so nothing can be dialed for it.
+var errUnknownFakeIP = errors.New("userspace: no name resolved to the address")
+
 // flowFor describes a forwarder request: the guest is found by its source
 // address, which the switch has already checked belongs to it, and in
 // DNSFakeIP mode the destination is translated back to the name the guest
 // resolved.
-func (n *Network) flowFor(proto vm.Proto, id stack.TransportEndpointID) vmnet.Flow {
+func (n *Network) flowFor(proto vm.Proto, id stack.TransportEndpointID) (vmnet.Flow, error) {
 	f := vmnet.Flow{
 		Proto: proto,
 		Src:   netip.AddrPortFrom(netipAddr(id.RemoteAddress), id.RemotePort),
@@ -44,21 +49,36 @@ func (n *Network) flowFor(proto vm.Proto, id stack.TransportEndpointID) vmnet.Fl
 		f.Guest = p.name
 		f.Egress = p.egress
 	}
-	if n.fakeIPs != nil {
-		if name, ok := n.fakeIPs.name(f.Dst.Addr()); ok {
-			f.Host = name
+	if n.fakeIPs != nil && n.fakeIPs.contains(f.Dst.Addr()) {
+		name, ok := n.fakeIPs.name(f.Dst.Addr())
+		if !ok {
+			return f, errUnknownFakeIP
 		}
+		f.Host = name
 	}
-	return f
+	return f, nil
+}
+
+// dialFlow dials a forwarder request through the Egress, within timeout.
+func (n *Network) dialFlow(proto vm.Proto, id stack.TransportEndpointID, timeout time.Duration) (vmnet.Flow, net.Conn, error) {
+	f, err := n.flowFor(proto, id)
+	if err != nil {
+		return f, nil, err
+	}
+	ctx, cancel := context.WithTimeout(n.ctx, timeout)
+	defer cancel()
+	upstream, err := n.egress.DialFlow(ctx, f)
+	return f, upstream, err
 }
 
 // forwardable reports whether a flow is one an Egress should see: unicast
-// from a guest. The stack loops its own broadcasts (DHCP answers) back to
-// itself, and guests broadcast and multicast among themselves (mDNS, SSDP);
-// neither leaves the segment.
+// from a guest to somewhere beyond the gateway. The stack loops its own
+// broadcasts (DHCP answers) back to itself; guests broadcast and multicast
+// among themselves (mDNS, SSDP); and a gateway port with no service behind
+// it is closed, not a way out. None of these leave the segment.
 func (n *Network) forwardable(id stack.TransportEndpointID) bool {
 	dst := id.LocalAddress
-	if id.RemoteAddress == n.gateway4 || dst == header.IPv4Broadcast || dst == addr4(n.broadcast) {
+	if id.RemoteAddress == n.gateway4 || dst == n.gateway4 || dst == header.IPv4Broadcast || dst == addr4(n.broadcast) {
 		return false
 	}
 	return !header.IsV4MulticastAddress(dst)
@@ -71,10 +91,7 @@ func (n *Network) handleTCP(r *tcp.ForwarderRequest) {
 		r.Complete(true)
 		return
 	}
-	flow := n.flowFor(vm.TCP, r.ID())
-	ctx, cancel := context.WithTimeout(n.ctx, dialTimeout)
-	upstream, err := n.egress.DialFlow(ctx, flow)
-	cancel()
+	flow, upstream, err := n.dialFlow(vm.TCP, r.ID(), dialTimeout)
 	if err != nil {
 		n.logger.Debug("flow refused", "guest", flow.Guest, "proto", "tcp", "dst", flow.Dst, "err", err)
 		r.Complete(true)
@@ -98,10 +115,7 @@ func (n *Network) handleUDP(r *udp.ForwarderRequest) bool {
 	if !n.forwardable(r.ID()) {
 		return false
 	}
-	flow := n.flowFor(vm.UDP, r.ID())
-	ctx, cancel := context.WithTimeout(n.ctx, udpDialTimeout)
-	upstream, err := n.egress.DialFlow(ctx, flow)
-	cancel()
+	flow, upstream, err := n.dialFlow(vm.UDP, r.ID(), udpDialTimeout)
 	if err != nil {
 		n.logger.Debug("flow refused", "guest", flow.Guest, "proto", "udp", "dst", flow.Dst, "err", err)
 		return false

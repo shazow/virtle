@@ -27,6 +27,9 @@ const (
 	// re-minted when less than leafRenewal remains.
 	leafValidity = 7 * 24 * time.Hour
 	leafRenewal  = time.Hour
+	// maxLeaves bounds the minted certificates kept; past it the cache
+	// starts over, and a name costs one more key generation.
+	maxLeaves = 1024
 )
 
 // LoadOrCreateCA returns the certificate authority in dir, creating one
@@ -146,7 +149,7 @@ func (p *Policy) certFor(host string) (*tls.Certificate, error) {
 		return nil, err
 	}
 	cert := &tls.Certificate{Certificate: [][]byte{der, p.CA.Certificate[0]}, PrivateKey: key, Leaf: leaf}
-	if p.leaves == nil {
+	if p.leaves == nil || len(p.leaves) >= maxLeaves {
 		p.leaves = make(map[string]*tls.Certificate)
 	}
 	p.leaves[host] = cert

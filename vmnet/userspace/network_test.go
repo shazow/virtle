@@ -468,3 +468,51 @@ func TestConfigValidation(t *testing.T) {
 		t.Fatalf("first guest at %s", p.Addr())
 	}
 }
+
+func TestGatewayPortsAreClosedNotForwarded(t *testing.T) {
+	egress := &recordingEgress{dial: vmnet.Passthrough{}.DialFlow}
+	n := newTestNetwork(t, Config{Egress: egress})
+	g := attachGuest(t, n, "vm1", vmnet.AttachOptions{})
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+	defer cancel()
+	start := time.Now()
+	if c, err := g.dialTCP(ctx, netip.AddrPortFrom(n.Gateway(), 9)); err == nil {
+		c.Close()
+		t.Fatal("a gateway port with nothing behind it accepted")
+	} else if !strings.Contains(err.Error(), "refused") || time.Since(start) > testTimeout/2 {
+		t.Fatalf("dialing the gateway failed with %v after %s, want a prompt refusal", err, time.Since(start))
+	}
+	egress.mu.Lock()
+	defer egress.mu.Unlock()
+	if len(egress.flows) != 0 {
+		t.Errorf("the egress saw %d flows to the gateway, want none: it is not a way out", len(egress.flows))
+	}
+}
+
+func TestExposeRacesWithClose(t *testing.T) {
+	n := newTestNetwork(t, Config{})
+	for i := 0; i < 20; i++ {
+		hostEnd, guestEnd := net.Pipe()
+		p, err := n.Attach(context.Background(), vmnet.QEMUStream(hostEnd, n.MTU()), vmnet.AttachOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		host := freePort(t, "tcp")
+		exposed := make(chan error, 1)
+		go func() {
+			_, err := p.Expose(context.Background(), vm.Forward{HostAddr: host, GuestAddr: ":7"})
+			exposed <- err
+		}()
+		_ = p.Close()
+		if err := <-exposed; err == nil {
+			// Exposed before the close, so the close took the listener.
+			if c, err := net.DialTimeout("tcp", host, time.Second); err == nil {
+				c.Close()
+				t.Fatal("a forward exposed on a port that closed still listens")
+			}
+		} else if !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("Expose during Close = %v", err)
+		}
+		guestEnd.Close()
+	}
+}

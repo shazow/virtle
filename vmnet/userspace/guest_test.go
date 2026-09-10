@@ -45,6 +45,14 @@ type guest struct {
 
 const testTimeout = 10 * time.Second
 
+// idleLink is a link whose peer never speaks, for attaching without a guest.
+func idleLink(t *testing.T, mtu int) vmnet.Link {
+	t.Helper()
+	hostEnd, guestEnd := net.Pipe()
+	t.Cleanup(func() { _ = guestEnd.Close() })
+	return vmnet.QEMUStream(hostEnd, mtu)
+}
+
 func newTestNetwork(t *testing.T, cfg Config) *Network {
 	t.Helper()
 	n, err := New(cfg)
@@ -64,12 +72,12 @@ func attachGuest(t *testing.T, n *Network, name string, opts vmnet.AttachOptions
 	t.Helper()
 	hostEnd, guestEnd := net.Pipe()
 	opts.Name = name
-	port, err := n.Attach(context.Background(), vmnet.Tunnel(hostEnd, n.MTU()), opts)
+	port, err := n.Attach(context.Background(), vmnet.QEMUStream(hostEnd, n.MTU()), opts)
 	if err != nil {
 		t.Fatalf("Attach %s: %v", name, err)
 	}
 	t.Cleanup(func() { _ = port.Close() })
-	g := &guest{t: t, n: n, port: port, link: vmnet.Tunnel(guestEnd, n.MTU()), mac: tcpip.LinkAddress(port.MAC())}
+	g := &guest{t: t, n: n, port: port, link: vmnet.QEMUStream(guestEnd, n.MTU()), mac: tcpip.LinkAddress(port.MAC())}
 	g.dhcp()
 	g.start()
 	return g

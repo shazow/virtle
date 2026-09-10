@@ -140,6 +140,14 @@ type = "virtle"
 forward = [{ host = "127.0.0.1:2222", guest = ":22" }]
 `
 
+// idleLink is a link whose peer never speaks, for attaching without a guest.
+func idleLink(t *testing.T, mtu int) vmnet.Link {
+	t.Helper()
+	hostEnd, guestEnd := net.Pipe()
+	t.Cleanup(func() { _ = guestEnd.Close() })
+	return vmnet.QEMUStream(hostEnd, mtu)
+}
+
 func TestLoadBuildsVirtleNetwork(t *testing.T) {
 	spec, b, err := Load(strings.NewReader(virtleNetworkManifest))
 	if err != nil {
@@ -164,7 +172,7 @@ func TestLoadBuildsVirtleNetwork(t *testing.T) {
 	// the time something happens, the way the CLI wires loggers after Load.
 	var logs bytes.Buffer
 	qb.Logger = slog.New(slog.NewTextHandler(&logs, nil))
-	port, err := network.Attach(context.Background(), vmnet.NewDeferred(network.MTU()), vmnet.AttachOptions{Name: "vm1"})
+	port, err := network.Attach(context.Background(), idleLink(t, network.MTU()), vmnet.AttachOptions{Name: "vm1"})
 	if err != nil {
 		t.Fatalf("Attach: %v", err)
 	}
@@ -180,7 +188,7 @@ func TestLoadBuildsVirtleNetwork(t *testing.T) {
 	if err := closer.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	if _, err := network.Attach(context.Background(), vmnet.NewDeferred(network.MTU()), vmnet.AttachOptions{}); !errors.Is(err, net.ErrClosed) {
+	if _, err := network.Attach(context.Background(), idleLink(t, network.MTU()), vmnet.AttachOptions{}); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("Attach after Close = %v, want net.ErrClosed", err)
 	}
 	if err := closer.Close(); err != nil {

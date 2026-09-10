@@ -22,9 +22,9 @@ import (
 )
 
 // Link is one L2 attachment: Ethernet frames between a guest NIC and a
-// Network. Backends build links from what their VMM offers (a QEMU stream
-// socket, a guest agent's vsock tunnel); networks consume them without
-// knowing which.
+// Network. Backends build links from what their VMM offers (today a QEMU
+// stream socket, see QEMUStream); networks consume them without knowing
+// which.
 //
 // ReadFrame returns exactly one frame per call and io.ErrShortBuffer when a
 // frame does not fit p, dropping that frame. MTU is the largest payload the
@@ -58,8 +58,6 @@ type AttachOptions struct {
 	// its kernel still holds; the zero value lets the network allocate one.
 	// Attach fails when it is outside the network or in use.
 	Addr netip.Addr
-	// Forwards are host->guest forwards exposed for the port's lifetime.
-	Forwards []vm.Forward
 	// Egress is this guest's policy data; nil means the network's default.
 	Egress *vm.Egress
 }

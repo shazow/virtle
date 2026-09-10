@@ -206,7 +206,8 @@ type Renderer struct {
 //   - fromFile "path": the file's contents without a trailing newline, the
 //     path relative to the Renderer's Dir.
 //
-// The functions here fail when called; a Renderer binds the real ones.
+// These are bound to a zero Renderer, so a relative path resolves against
+// the process's working directory; a Renderer renders with its own Dir.
 func TemplateFuncs() template.FuncMap {
 	return (&Renderer{}).funcs()
 }

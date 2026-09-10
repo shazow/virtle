@@ -9,46 +9,35 @@ import (
 	"net/netip"
 	"strconv"
 	"testing"
-	"time"
 
 	"github.com/shazow/virtle/vm"
 )
 
 func TestFramedLinksRoundTrip(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		wrap func(net.Conn, int) Link
-	}{
-		{"qemu stream", QEMUStream},
-		{"tunnel", Tunnel},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			a, b := net.Pipe()
-			la, lb := tc.wrap(a, 1500), tc.wrap(b, 1500)
-			defer la.Close()
-			defer lb.Close()
-			frames := [][]byte{bytes.Repeat([]byte{0xab}, 60), bytes.Repeat([]byte{0xcd}, 1514), {}}
-			go func() {
-				for _, f := range frames {
-					if err := la.WriteFrame(f); err != nil {
-						t.Error(err)
-					}
-				}
-			}()
-			buf := make([]byte, 1514)
-			for _, want := range frames {
-				n, err := lb.ReadFrame(buf)
-				if err != nil {
-					t.Fatalf("ReadFrame: %v", err)
-				}
-				if !bytes.Equal(buf[:n], want) {
-					t.Fatalf("frame = %d bytes, want %d", n, len(want))
-				}
+	a, b := net.Pipe()
+	la, lb := QEMUStream(a, 1500), QEMUStream(b, 1500)
+	defer la.Close()
+	defer lb.Close()
+	frames := [][]byte{bytes.Repeat([]byte{0xab}, 60), bytes.Repeat([]byte{0xcd}, 1514), {}}
+	go func() {
+		for _, f := range frames {
+			if err := la.WriteFrame(f); err != nil {
+				t.Error(err)
 			}
-			if err := la.WriteFrame(make([]byte, 1515)); err == nil {
-				t.Fatal("a frame above the MTU was written")
-			}
-		})
+		}
+	}()
+	buf := make([]byte, 1514)
+	for _, want := range frames {
+		n, err := lb.ReadFrame(buf)
+		if err != nil {
+			t.Fatalf("ReadFrame: %v", err)
+		}
+		if !bytes.Equal(buf[:n], want) {
+			t.Fatalf("frame = %d bytes, want %d", n, len(want))
+		}
+	}
+	if err := la.WriteFrame(make([]byte, 1515)); err == nil {
+		t.Fatal("a frame above the MTU was written")
 	}
 }
 
@@ -91,72 +80,6 @@ func TestFramedLinkSkipsFramesThatDoNotFit(t *testing.T) {
 	go func() { _, _ = big.Write([]byte{0x7f, 0xff, 0xff, 0xff}) }()
 	if _, err := lother.ReadFrame(buf); !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Fatalf("impossible frame length = %v, want a framing error", err)
-	}
-}
-
-func TestDeferredLinkWaitsForItsPeer(t *testing.T) {
-	d := NewDeferred(1500)
-	if err := d.WriteFrame([]byte{1}); err != nil {
-		t.Fatalf("write before bind = %v, want a dropped frame", err)
-	}
-	read := make(chan error, 1)
-	go func() {
-		buf := make([]byte, 1514)
-		n, err := d.ReadFrame(buf)
-		if err == nil && (n != 3 || buf[0] != 9) {
-			err = errors.New("wrong frame")
-		}
-		read <- err
-	}()
-	select {
-	case err := <-read:
-		t.Fatalf("ReadFrame returned before Bind: %v", err)
-	case <-time.After(50 * time.Millisecond):
-	}
-	a, b := net.Pipe()
-	if err := d.Bind(Tunnel(a, 1500)); err != nil {
-		t.Fatal(err)
-	}
-	if err := d.Bind(Tunnel(a, 1500)); err == nil {
-		t.Fatal("second Bind succeeded")
-	}
-	go func() { _ = Tunnel(b, 1500).WriteFrame([]byte{9, 9, 9}) }()
-	if err := <-read; err != nil {
-		t.Fatalf("ReadFrame after Bind: %v", err)
-	}
-	if !d.Bound() {
-		t.Fatal("Bound = false after Bind")
-	}
-	if err := d.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := d.ReadFrame(make([]byte, 16)); !errors.Is(err, net.ErrClosed) {
-		t.Fatalf("ReadFrame after Close = %v, want net.ErrClosed", err)
-	}
-	if err := d.Bind(Tunnel(b, 1500)); !errors.Is(err, net.ErrClosed) {
-		t.Fatalf("Bind after Close = %v, want net.ErrClosed", err)
-	}
-}
-
-func TestDeferredCloseUnblocksReaders(t *testing.T) {
-	d := NewDeferred(1500)
-	done := make(chan error, 1)
-	go func() {
-		_, err := d.ReadFrame(make([]byte, 16))
-		done <- err
-	}()
-	time.Sleep(20 * time.Millisecond)
-	_ = d.Close()
-	select {
-	case err := <-done:
-		if !errors.Is(err, net.ErrClosed) {
-			t.Fatalf("blocked read ended with %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("Close did not unblock ReadFrame")
-	}
-	if err := d.Bind(NewDeferred(100)); err == nil {
-		t.Fatal("bound a link with a smaller MTU")
 	}
 }
 

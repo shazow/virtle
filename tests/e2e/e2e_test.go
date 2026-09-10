@@ -248,6 +248,18 @@ func startReady(t *testing.T, g guest, spec *vm.Spec) (backend.Machine, *console
 	return m, b.console
 }
 
+// stepTimer logs how long each step of a scenario took since the previous
+// one, so a stall shows where it happened in the CI log.
+func stepTimer(t *testing.T) func(string) {
+	last := time.Now()
+	return func(step string) {
+		t.Helper()
+		now := time.Now()
+		t.Logf("%s: %.1fs", step, now.Sub(last).Seconds())
+		last = now
+	}
+}
+
 func waitExit(t *testing.T, m backend.Machine) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), readyTimeout)

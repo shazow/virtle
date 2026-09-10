@@ -88,12 +88,14 @@ func TestNetwork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer network.Close()
+	step := stepTimer(t)
+	defer func() { _ = network.Close(); step("network close") }()
 	g := f.networkGuest(t, network)
 	spec := g.spec(t)
 	forward := freeLoopbackPort(t)
 	spec.Ports = []vm.Forward{{HostAddr: forward, GuestAddr: ":7"}}
 	m, log := startReady(t, g, spec)
+	step("ready")
 	ctx := context.Background()
 
 	leased := netLine.FindStringSubmatch(log.String())
@@ -111,9 +113,12 @@ func TestNetwork(t *testing.T) {
 		t.Fatalf("NIC %+v is not on %s", status.Networks[0], network.Subnet())
 	}
 
+	step("status")
 	guestAddr := net.JoinHostPort(status.Networks[0].Addr, "7")
 	echoLine(t, func() (net.Conn, error) { return network.DialContext(ctx, "tcp", guestAddr) }, "direct")
+	step("direct echo")
 	echoLine(t, func() (net.Conn, error) { return net.DialTimeout("tcp", forward, readyTimeout) }, "forwarded")
+	step("forwarded echo")
 
 	attacher := m.(backend.DeviceAttacher)
 	extra := vm.Forward{HostAddr: freeLoopbackPort(t), GuestAddr: ":7"}
@@ -121,6 +126,7 @@ func TestNetwork(t *testing.T) {
 		t.Fatalf("Attach forward: %v", err)
 	}
 	echoLine(t, func() (net.Conn, error) { return net.DialTimeout("tcp", extra.HostAddr, readyTimeout) }, "attached")
+	step("attached echo")
 	if err := attacher.Detach(ctx, extra); err != nil {
 		t.Fatalf("Detach forward: %v", err)
 	}
@@ -135,10 +141,12 @@ func TestNetwork(t *testing.T) {
 		c.Close()
 		t.Fatal("the detached Spec forward still accepts")
 	}
+	step("detached")
 	if err := m.Kill(); err != nil {
 		t.Fatal(err)
 	}
 	waitExit(t, m)
+	step("exit")
 	// The port went with the machine: its address has nothing behind it, so
 	// a dial gets no answer at all rather than a refusal.
 	gone, cancel := context.WithTimeout(ctx, 3*time.Second)
@@ -147,6 +155,7 @@ func TestNetwork(t *testing.T) {
 		c.Close()
 		t.Fatal("the port outlived the machine")
 	}
+	step("dial after exit")
 }
 
 // lineEcho answers one line per connection and hangs up, so a client that
@@ -216,11 +225,13 @@ func TestEgressPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer network.Close()
+	step := stepTimer(t)
+	defer func() { _ = network.Close(); step("network close") }()
 	g := f.networkGuest(t, network)
 	spec := g.spec(t)
 	spec.Kernel.Cmdline = fmt.Sprintf("%s virtle.egress=%d", fixtureCmdline, port)
 	_, log := startReady(t, g, spec)
+	step("ready")
 
 	if want := "VIRTLE_EGRESS:allowed=ping,blocked=refused"; !strings.Contains(log.String(), want) {
 		t.Fatalf("guest did not report %q\n--- console ---\n%s", want, log.String())
@@ -285,11 +296,13 @@ func TestEgressInjection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer network.Close()
+	step := stepTimer(t)
+	defer func() { _ = network.Close(); step("network close") }()
 	g := f.networkGuest(t, network)
 	spec := g.spec(t)
 	spec.Kernel.Cmdline = fmt.Sprintf("%s virtle.inject=%d", fixtureCmdline, port)
 	_, log := startReady(t, g, spec)
+	step("ready")
 
 	m := injectLine.FindStringSubmatch(log.String())
 	if m == nil {

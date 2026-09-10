@@ -126,3 +126,61 @@ func TestConfigurationStopsOnError(t *testing.T) {
 		t.Fatalf("calls %d, error %v", calls, err)
 	}
 }
+
+func TestConfigurationWithTAP(t *testing.T) {
+	spec := &vm.Spec{Dir: "/work", Kernel: vm.Kernel{Path: "kernel"}}
+	mf, err := (&Backend{Link: TAP{Name: "tap0"}}).resolveSpec(spec, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []imanifest.FirecrackerNetwork{{ID: "microvm1", Tap: "tap0", MAC: "02:02:00:00:00:01"}}; !reflect.DeepEqual(mf.Firecracker.Networks, want) {
+		t.Fatalf("networks = %+v, want %+v", mf.Firecracker.Networks, want)
+	}
+	var paths []string
+	var bodies []map[string]any
+	c := &apiClient{http: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		paths = append(paths, r.URL.Path)
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		bodies = append(bodies, body)
+		return &http.Response{StatusCode: 204, Body: io.NopCloser(strings.NewReader(""))}, nil
+	})}}
+	if err := c.configure(t.Context(), mf.Firecracker); err != nil {
+		t.Fatal(err)
+	}
+	// The NIC is configured before the instance starts.
+	if !reflect.DeepEqual(paths, []string{"/machine-config", "/boot-source", "/network-interfaces/microvm1", "/actions"}) {
+		t.Fatal(paths)
+	}
+	if bodies[2]["iface_id"] != "microvm1" || bodies[2]["host_dev_name"] != "tap0" || bodies[2]["guest_mac"] != "02:02:00:00:00:01" {
+		t.Fatal(bodies[2])
+	}
+	if got := networkStatuses(mf.Firecracker); len(got) != 1 || got[0].ID != "microvm1" || got[0].MAC != "02:02:00:00:00:01" || got[0].Attached || got[0].Addr != "" {
+		t.Fatalf("statuses = %+v", got)
+	}
+
+	if _, err := (&Backend{Link: TAP{}}).resolveSpec(spec, ""); err == nil || !strings.Contains(err.Error(), "Name") {
+		t.Fatalf("TAP without a name: %v", err)
+	}
+	if _, err := (&Backend{Link: TAP{Name: "tap0"}}).resolveSpec(&vm.Spec{Kernel: vm.Kernel{Path: "kernel"}, Ports: []vm.Forward{{HostAddr: ":1", GuestAddr: ":1"}}}, ""); !errors.Is(err, errors.ErrUnsupported) {
+		t.Fatalf("ports on a TAP NIC: %v", err)
+	}
+	// A manifest-declared network keeps its identity under a Go-set TAP.
+	doc, err := imanifest.DecodeDocumentBytes([]byte("backend = \"firecracker\"\n[kernel]\npath = \"kernel\"\n[[networks]]\nid = \"eth0\"\nmac = \"02:aa:00:00:00:01\"\ntype = \"tap\"\ntap = \"tap9\"\n"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := NewBackendFromDocument(doc, Backend{Link: TAP{Name: "tap0"}}).(*Backend)
+	mf, err = b.resolveSpec(&vm.Spec{}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []imanifest.FirecrackerNetwork{{ID: "eth0", Tap: "tap0", MAC: "02:aa:00:00:00:01"}}; !reflect.DeepEqual(mf.Firecracker.Networks, want) {
+		t.Fatalf("networks = %+v, want %+v", mf.Firecracker.Networks, want)
+	}
+	if b.doc.Networks[0].Tap != "tap9" {
+		t.Fatal("the overlay wrote into the backend's stored document")
+	}
+}

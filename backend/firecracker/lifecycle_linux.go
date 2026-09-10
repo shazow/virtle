@@ -174,10 +174,11 @@ func (b *Backend) start(ctx context.Context, mf *imanifest.Manifest, ephemeralSt
 	// hard-kills here, and the grace period bounds its wait for the reaper.
 	m.process.SetGracePeriod(killWaitTimeout)
 	m.status = backend.Status{
-		State: backend.StateStarting,
-		PID:   m.process.PID(),
-		Paths: backend.StatusPaths{ControlSocket: controlPath, MonitorSocket: socket},
-		Stats: backend.RuntimeStats{StartedAt: time.Now()},
+		State:    backend.StateStarting,
+		PID:      m.process.PID(),
+		Paths:    backend.StatusPaths{ControlSocket: controlPath, MonitorSocket: socket},
+		Stats:    backend.RuntimeStats{StartedAt: time.Now()},
+		Networks: networkStatuses(cfg),
 	}
 	router, err := control.NewMachineRouter(controlMachine{m})
 	if err != nil {

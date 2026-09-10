@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"strconv"
 	"testing"
 	"time"
 
@@ -167,5 +168,12 @@ func TestPassthroughAndDenyAll(t *testing.T) {
 	}
 	if (Flow{Proto: vm.UDP}).Network() != "udp" {
 		t.Fatal("UDP flow network")
+	}
+	// A known name is dialed by name: the address the guest used may be a
+	// synthetic one that only the name resolves.
+	port := strconv.Itoa(int(dst.Port()))
+	named := Flow{Dst: netip.MustParseAddrPort("198.18.0.1:" + port), Host: "localhost"}
+	if named.Target() != "localhost:"+port {
+		t.Fatalf("Target = %q", named.Target())
 	}
 }

@@ -16,6 +16,7 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"strconv"
 
 	"github.com/shazow/virtle/vm"
 )
@@ -82,6 +83,10 @@ type Flow struct {
 	Dst   netip.AddrPort // as the guest addressed it
 	Host  string         // the name the guest resolved to Dst, when the network knows it
 	Guest string         // AttachOptions.Name of the originating port
+	// Egress is the originating port's AttachOptions.Egress: the guest's
+	// own policy data for an Egress that honors it. Nil means the network's
+	// default.
+	Egress *vm.Egress
 }
 
 // Network returns the Go network name for the flow's protocol.
@@ -107,7 +112,8 @@ type Egress interface {
 }
 
 // Passthrough allows everything: it dials the flow's destination with the
-// Dialer (a zero Dialer when nil). It is the default Egress.
+// Dialer (a zero Dialer when nil), by name when the network knows the name
+// the guest resolved and by address otherwise. It is the default Egress.
 type Passthrough struct{ Dialer *net.Dialer }
 
 // DialFlow implements Egress.
@@ -116,7 +122,16 @@ func (p Passthrough) DialFlow(ctx context.Context, f Flow) (net.Conn, error) {
 	if d == nil {
 		d = &net.Dialer{}
 	}
-	return d.DialContext(ctx, f.Network(), f.Dst.String())
+	return d.DialContext(ctx, f.Network(), f.Target())
+}
+
+// Target is the "host:port" an Egress dials for the flow: the resolved name
+// with the destination port when the network knows it, else the address.
+func (f Flow) Target() string {
+	if f.Host != "" {
+		return net.JoinHostPort(f.Host, strconv.Itoa(int(f.Dst.Port())))
+	}
+	return f.Dst.String()
 }
 
 // DenyAll refuses every guest-initiated flow.

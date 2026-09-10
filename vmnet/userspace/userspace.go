@@ -36,13 +36,21 @@ import (
 	"github.com/shazow/virtle/vmnet"
 )
 
-// DNSMode selects how the gateway answers guest queries.
+// DNSMode selects how the gateway answers guest queries. In both modes AAAA
+// answers are empty, because the segment carries only IPv4, and queries for
+// other record types go to the host's resolver.
 type DNSMode string
 
 const (
-	// DNSForward resolves names with the host's resolver and answers A
-	// records; AAAA answers are empty because the segment carries only IPv4.
+	// DNSForward resolves names with the host's resolver and answers with
+	// the real addresses. An Egress then sees addresses, never names.
 	DNSForward DNSMode = "forward"
+	// DNSFakeIP answers every name with a synthetic address from
+	// Config.FakeIPRange and remembers which name it stands for, so the
+	// Egress sees each flow's Host and resolves it itself when it dials:
+	// the mode for policies that decide by name (vmnet/egress). A name that
+	// does not exist fails at connect time rather than at resolution.
+	DNSFakeIP DNSMode = "fakeip"
 )
 
 // DefaultMTU is the segment MTU when Config.MTU is zero.
@@ -94,6 +102,9 @@ type Config struct {
 	MTU int
 	// DNS is the gateway's answering mode. Default DNSForward.
 	DNS DNSMode
+	// FakeIPRange is where DNSFakeIP answers come from; it must not overlap
+	// Subnet. Default DefaultFakeIPRange.
+	FakeIPRange netip.Prefix
 	// Egress dials guest-initiated flows. Default vmnet.Passthrough{}.
 	Egress vmnet.Egress
 	// Logger receives attach, flow, and drop events; nil discards them.
@@ -113,13 +124,14 @@ type Network struct {
 	egress    vmnet.Egress
 	logger    *slog.Logger
 
-	stack  *stack.Stack
-	ep     *channel.Endpoint
-	ctx    context.Context
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
-	dhcp   *dhcpServer
-	dns    *dnsServer
+	stack   *stack.Stack
+	ep      *channel.Endpoint
+	ctx     context.Context
+	cancel  context.CancelFunc
+	wg      sync.WaitGroup
+	dhcp    *dhcpServer
+	dns     *dnsServer
+	fakeIPs *fakeIPTable // set in DNSFakeIP mode
 
 	mu     sync.Mutex
 	closed bool
@@ -167,6 +179,19 @@ func New(cfg Config) (*Network, error) {
 	}
 	switch cfg.DNS {
 	case "", DNSForward:
+	case DNSFakeIP:
+		fakeRange := cfg.FakeIPRange
+		if !fakeRange.IsValid() {
+			fakeRange = DefaultFakeIPRange
+		}
+		fakeRange = fakeRange.Masked()
+		switch {
+		case !fakeRange.Addr().Is4() || fakeRange.Bits() > 30:
+			return nil, fmt.Errorf("userspace: fake IP range %s is not an IPv4 range with room for names", cfg.FakeIPRange)
+		case fakeRange.Overlaps(n.subnet):
+			return nil, fmt.Errorf("userspace: fake IP range %s overlaps the subnet %s", fakeRange, n.subnet)
+		}
+		n.fakeIPs = newFakeIPTable(fakeRange)
 	default:
 		return nil, fmt.Errorf("userspace: unknown DNS mode %q", cfg.DNS)
 	}
@@ -307,6 +332,7 @@ func (n *Network) newPort(link vmnet.Link, opts vmnet.AttachOptions) (*port, err
 	p := &port{
 		n:         n,
 		name:      opts.Name,
+		egress:    opts.Egress,
 		addr:      addr,
 		addr4:     addr4(addr),
 		mac:       append(net.HardwareAddr(nil), mac...),

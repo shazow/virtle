@@ -61,8 +61,8 @@ hosts = ["*.npmjs.org"]
 	if !reflect.DeepEqual(e.Allow, wantAllow) || !reflect.DeepEqual(e.Deny, []EgressRule{{Host: "evil.github.com"}}) || !e.Inspects {
 		t.Fatalf("rules = %+v / %+v (inspects %v)", e.Allow, e.Deny, e.Inspects)
 	}
-	if e.Reach != "internet" {
-		t.Fatalf("reach = %q, want the internet by default", e.Reach)
+	if e.Reach != "rules" {
+		t.Fatalf("reach = %q; allow entries are an allowlist unless the manifest says otherwise", e.Reach)
 	}
 	if len(e.Secrets) != 2 || e.Secrets[0].From != "{{.Env.GH_TOKEN}}" || e.Secrets[0].Methods[1] != "POST" || e.Secrets[0].In[0] != "header" {
 		t.Fatalf("secrets = %+v", e.Secrets)
@@ -98,9 +98,13 @@ hosts = ["*.npmjs.org"]
 		t.Fatal("an empty value passed")
 	}
 
-	custom := decodeEgress(t, egressBase+"[egress]\nreach = 'rules'\nca_dir = 'ca'\n[[egress.allow]]\nhost = '*.test'\n")
-	if custom.Egress.CADir != filepath.Join(custom.Paths.WorkingDir, "ca") || custom.Egress.Inspects || custom.Egress.Reach != "rules" {
+	custom := decodeEgress(t, egressBase+"[egress]\nreach = 'internet'\nca_dir = 'ca'\n[[egress.allow]]\nhost = '*.test'\n")
+	if custom.Egress.CADir != filepath.Join(custom.Paths.WorkingDir, "ca") || custom.Egress.Inspects || custom.Egress.Reach != "internet" {
 		t.Fatalf("egress = %+v", custom.Egress)
+	}
+	// Deny entries alone subtract from the internet.
+	if denyOnly := decodeEgress(t, egressBase+"[egress]\n[[egress.deny]]\nhost = 'tracker.test'\n"); denyOnly.Egress.Reach != "internet" || len(denyOnly.Egress.Deny) != 1 {
+		t.Fatalf("deny-only egress = %+v, want the internet minus the entry", denyOnly.Egress)
 	}
 	// A virtle network without a section reaches the internet and nothing
 	// else; a network of another type has no policy at all.

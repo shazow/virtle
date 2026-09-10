@@ -1,7 +1,6 @@
 package manifest
 
 import (
-	"cmp"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -97,8 +96,10 @@ var envNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // resolveEgress validates the [egress] section against a document whose
 // defaults are applied and resolves its paths. Values are never read here.
-// A virtle network without a section gets the default policy: the
-// internet, and nothing on the host or its networks.
+// Without a reach, allow entries are the whole reach, an allowlist, and
+// without those the guest reaches the internet and nothing on the host or
+// its networks, which is also what a virtle network without a section
+// gets.
 func (m *Manifest) resolveEgress(d Document) (*Egress, error) {
 	virtle := declaresNetworkType(d.Networks, NetworkTypeVirtle)
 	in := d.Egress
@@ -110,7 +111,15 @@ func (m *Manifest) resolveEgress(d Document) (*Egress, error) {
 	case !virtle:
 		return nil, fmt.Errorf("manifest.egress needs a network of type %s", NetworkTypeVirtle)
 	}
-	e := &Egress{CADir: in.CADir, Reach: cmp.Or(in.Reach, string(egress.ReachInternet))}
+	e := &Egress{CADir: in.CADir, Reach: in.Reach}
+	if e.Reach == "" {
+		// Entries that read like an allowlist are one; saying otherwise
+		// takes an explicit reach, so forgetting fails closed.
+		e.Reach = string(egress.ReachInternet)
+		if len(in.Allow) != 0 {
+			e.Reach = string(egress.ReachRules)
+		}
+	}
 	switch egress.Reach(e.Reach) {
 	case egress.ReachRules, egress.ReachInternet, egress.ReachAll:
 	default:

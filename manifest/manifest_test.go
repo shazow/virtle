@@ -229,7 +229,6 @@ path = "vmlinuz"
 type = "virtle"
 
 [egress]
-reach = "rules"
 [[egress.allow]]
 host = "api.github.com"
 ports = [443]

@@ -32,6 +32,28 @@ type Spec struct {
 	// temporary directory that is removed when the machine exits; set Dir to
 	// keep state across runs, which Suspend and Resume require.
 	Dir string
+
+	// Egress is this guest's egress policy on a network that dials its
+	// flows in userspace (see vmnet). Nil means the network's default policy.
+	Egress *Egress
+}
+
+// Egress is what a guest may reach on a network that dials its flows in
+// userspace, and which named secrets it may present. It is data, not
+// mechanism: secret values, certificates, and inspection live on the host
+// side (vmnet/egress), keyed by the names here. It can only narrow the
+// host's policy, never widen it; a kernel-backed network ignores it.
+type Egress struct {
+	Allow   []Reach  // empty with a non-nil Egress means the guest reaches nothing
+	Deny    []Reach  // wins over Allow
+	Secrets []string // names of host-side secrets whose tokens this guest receives
+}
+
+// Reach is one destination pattern: a domain glob ("*.github.com") or a
+// CIDR, with the ports it applies to (empty: any port).
+type Reach struct {
+	Host  string
+	Ports []int
 }
 
 // Kernel configures direct kernel boot (microVM style).

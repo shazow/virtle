@@ -19,9 +19,10 @@ compact before/after examples.
   QEMU and Firecracker. `type = "user"` stays the default. See
   [docs/networking.md](docs/networking.md).
 - A virtle network reaches the internet and nothing on the host or its
-  networks unless the manifest says otherwise: `[egress] reach = "internet"`
-  is the default, `"rules"` keeps the guest to the allow entries, and
-  `"all"` lets it reach anything the host can.
+  networks unless the manifest says otherwise. `[egress] reach` names what
+  lies beyond the allow entries: `"rules"` (only them, the default when
+  there are any), `"internet"` (the default without them), or `"all"`
+  (anything the host can reach).
 - New `[egress]` section for virtle networks: `[[egress.allow]]` and
   `[[egress.deny]]` entries by name pattern, CIDR, or address with optional
   `ports`; beyond them the guest reaches what `reach` says, and loopback,

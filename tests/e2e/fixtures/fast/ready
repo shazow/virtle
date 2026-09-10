@@ -16,4 +16,24 @@ for dev in /sys/block/vd*; do
   umount /mnt
   break
 done
+# A NIC is the virtle network: take its lease, report the address, serve a
+# TCP echo on port 7, and probe two names when the command line asks for it
+# (virtle.egress=PORT), so the host can see its policy decide by name.
+if [ -e /sys/class/net/eth0 ]; then
+  ifconfig lo up
+  udhcpc -i eth0 -n -q -s /bin/dhcp-bound >/dev/null 2>&1 || true
+  ip=none
+  [ -r /tmp/ip ] && read -r ip < /tmp/ip
+  echo "VIRTLE_NET:$ip"
+  tcpsvd -E 0.0.0.0 7 cat &
+  port=$(sed -n 's/.*virtle\.egress=\([0-9]*\).*/\1/p' /proc/cmdline)
+  if [ -n "$port" ]; then
+    allowed=$(echo ping | nc -w 5 allowed.test "$port" 2>/dev/null || true)
+    blocked=refused
+    if echo ping | nc -w 5 blocked.test "$port" >/dev/null 2>&1; then
+      blocked=open
+    fi
+    echo "VIRTLE_EGRESS:allowed=$allowed,blocked=$blocked"
+  fi
+fi
 echo "VIRTLE_READY:$result"

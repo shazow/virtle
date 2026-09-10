@@ -63,6 +63,11 @@ func (n *Network) fromGuest(p *port, frame []byte) {
 		return
 	}
 	eth := header.Ethernet(frame)
+	switch eth.Type() {
+	case header.IPv4ProtocolNumber, header.ARPProtocolNumber:
+	default:
+		return // IPv6 and the rest: the segment carries IPv4 only
+	}
 	if eth.SourceAddress() != tcpip.LinkAddress(p.mac) || !p.ownsSource(eth.Type(), frame[header.EthernetMinimumSize:]) {
 		p.rejected.Add(1)
 		p.warnOnce(&p.warnedSpoof, "dropping frames from the guest with a source that is not its own")
@@ -117,7 +122,7 @@ func (p *port) ownsSource(proto tcpip.NetworkProtocolNumber, payload []byte) boo
 		src := tcpip.AddrFrom4Slice(a.ProtocolAddressSender())
 		return string(a.HardwareAddressSender()) == string(p.mac) && (src == p.addr4 || src == header.IPv4Any)
 	}
-	return false // IPv6 and the rest: the segment carries IPv4 only
+	return false
 }
 
 // toStack injects a guest's frame into the stack, which parses the

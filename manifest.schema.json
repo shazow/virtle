@@ -1044,7 +1044,7 @@
               },
               "from": {
                 "type": "string",
-                "description": "Where the value is read when a request needs it: env:NAME or file:PATH. The value never appears in the manifest."
+                "description": "Go text/template rendering the value when a request carries the token: the host environment is .Env ({{.Env.GITHUB_TOKEN}}) and fromFile reads a file relative to the manifest ({{fromFile \"npm.token\"}}). The value itself never appears in the manifest."
               },
               "hosts": {
                 "type": [

@@ -231,7 +231,7 @@ host = "uploads.github.com"
 
 [[egress.secrets]]
 name = "GITHUB_TOKEN"
-from = "env:GH_TOKEN"
+from = "{{.Env.GH_TOKEN}}"
 hosts = ["api.github.com"]
 `
 	spec, b, err := Load(strings.NewReader(doc))
@@ -263,7 +263,7 @@ hosts = ["api.github.com"]
 	}
 
 	// Without inspection there is no CA and nothing to give the guest.
-	plain := strings.Replace(strings.Replace(doc, "inspect = true\n", "", 1), "[[egress.secrets]]\nname = \"GITHUB_TOKEN\"\nfrom = \"env:GH_TOKEN\"\nhosts = [\"api.github.com\"]\n", "", 1)
+	plain := strings.Replace(strings.Replace(doc, "inspect = true\n", "", 1), "[[egress.secrets]]\nname = \"GITHUB_TOKEN\"\nfrom = \"{{.Env.GH_TOKEN}}\"\nhosts = [\"api.github.com\"]\n", "", 1)
 	spec, b, err = Load(strings.NewReader(plain))
 	if err != nil {
 		t.Fatalf("Load without inspection: %v", err)

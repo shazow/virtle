@@ -195,6 +195,38 @@ func (w *lineLogger) flush() {
 type Renderer struct {
 	data map[string]any
 	env  []string
+	// Dir is what fromFile resolves relative paths against; empty means the
+	// process's working directory.
+	Dir string
+}
+
+// TemplateFuncs are the functions every template rendered by a Renderer can
+// call, for parsing a template ahead of rendering it:
+//
+//   - fromFile "path": the file's contents without a trailing newline, the
+//     path relative to the Renderer's Dir.
+//
+// The functions here fail when called; a Renderer binds the real ones.
+func TemplateFuncs() template.FuncMap {
+	return (&Renderer{}).funcs()
+}
+
+func (r *Renderer) funcs() template.FuncMap {
+	return template.FuncMap{
+		"fromFile": func(path string) (string, error) {
+			if path == "" {
+				return "", fmt.Errorf("fromFile: path is required")
+			}
+			if !filepath.IsAbs(path) && r.Dir != "" {
+				path = filepath.Join(r.Dir, path)
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return "", fmt.Errorf("fromFile: %w", err)
+			}
+			return strings.TrimRight(string(data), "\r\n"), nil
+		},
+	}
 }
 
 // New returns a Renderer that uses the current process environment for Env lookups.
@@ -234,7 +266,7 @@ func (r *Renderer) RenderArgv(argv []string) ([]string, error) {
 
 // RenderString renders value as a Go template.
 func (r *Renderer) RenderString(value string) (string, error) {
-	tmpl, err := template.New("exec").Option("missingkey=error").Parse(value)
+	tmpl, err := template.New("exec").Option("missingkey=error").Funcs(r.funcs()).Parse(value)
 	if err != nil {
 		return "", err
 	}

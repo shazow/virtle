@@ -22,6 +22,17 @@ func NewTemplateRenderer(providers ...TemplateProvider) (*executor.Renderer, err
 	return executor.New(TemplateContext(providers...))
 }
 
+// NewTemplateRendererIn is NewTemplateRenderer for templates of a manifest
+// whose working directory is dir: fromFile resolves relative paths there.
+func NewTemplateRendererIn(dir string, providers ...TemplateProvider) (*executor.Renderer, error) {
+	renderer, err := NewTemplateRenderer(providers...)
+	if err != nil {
+		return nil, err
+	}
+	renderer.Dir = dir
+	return renderer, nil
+}
+
 func TemplateContext(providers ...TemplateProvider) executor.Context {
 	context := executor.Context{}
 	for _, provider := range providers {

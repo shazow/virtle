@@ -9,6 +9,8 @@ import (
 	"text/template"
 	"text/template/parse"
 
+	"github.com/shazow/virtle/internal/executor"
+
 	"github.com/shazow/virtle/units"
 )
 
@@ -256,7 +258,7 @@ func validateRun(index int, run Run) error {
 
 func validateRunTemplates(index int, field string, values []string) error {
 	for i, value := range values {
-		tmpl, err := template.New("exec").Parse(value)
+		tmpl, err := template.New("exec").Funcs(executor.TemplateFuncs()).Parse(value)
 		if err != nil {
 			continue
 		}

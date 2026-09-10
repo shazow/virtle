@@ -74,7 +74,7 @@ type EgressRuleInput struct {
 // EgressSecretInput is a secret the guest uses without holding.
 type EgressSecretInput struct {
 	Name    string   `json:"name" toml:"name" jsonschema:"Environment variable the guest receives the token in, and the name the token is derived from."`
-	From    string   `json:"from" toml:"from" jsonschema:"Where the value is read when a request needs it: env:NAME or file:PATH. The value never appears in the manifest."`
+	From    string   `json:"from" toml:"from" jsonschema:"Go text/template rendering the value when a request carries the token: the host environment is .Env ({{.Env.GITHUB_TOKEN}}) and fromFile reads a file relative to the manifest ({{fromFile \"npm.token\"}}). The value itself never appears in the manifest."`
 	Hosts   []string `json:"hosts" toml:"hosts" jsonschema:"Name patterns of the inspected destinations that may receive the value."`
 	Methods []string `json:"methods,omitempty" toml:"methods" jsonschema:"HTTP methods the value may be sent with; empty means any."`
 	Paths   []string `json:"paths,omitempty" toml:"paths" jsonschema:"URL path patterns the value may be sent to; empty means any."`

@@ -21,7 +21,10 @@ done
 # (virtle.egress=PORT), so the host can see its policy decide by name.
 if [ -e /sys/class/net/eth0 ]; then
   ifconfig lo up
-  udhcpc -i eth0 -n -q -s /bin/dhcp-bound >/dev/null 2>&1 || true
+  # udhcpc needs the link up: on a down link it reopens its socket forever
+  # instead of giving up, so the retry limit never fires.
+  ifconfig eth0 up
+  timeout 20 udhcpc -i eth0 -n -q -f -s /bin/dhcp-bound >/dev/null 2>&1 || true
   ip=none
   [ -r /tmp/ip ] && read -r ip < /tmp/ip
   echo "VIRTLE_NET:$ip"

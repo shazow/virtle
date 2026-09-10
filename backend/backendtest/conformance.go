@@ -3,6 +3,8 @@ package backendtest
 import (
 	"context"
 	"errors"
+	"net"
+	"net/netip"
 	"testing"
 
 	"github.com/shazow/virtle/backend"
@@ -90,6 +92,20 @@ func TestBackend(t *testing.T, start func(t *testing.T) (backend.Backend, *vm.Sp
 		}
 		if status.State == "" {
 			t.Fatal("Status state is empty")
+		}
+		for i, nic := range status.Networks {
+			if nic.ID == "" {
+				t.Errorf("Networks[%d] has no ID", i)
+			}
+			if _, err := net.ParseMAC(nic.MAC); err != nil {
+				t.Errorf("Networks[%d] MAC %q: %v", i, nic.MAC, err)
+			}
+			switch addr, err := netip.ParseAddr(nic.Addr); {
+			case nic.Attached && (err != nil || !addr.Is4()):
+				t.Errorf("Networks[%d] is attached with address %q: %v", i, nic.Addr, err)
+			case !nic.Attached && nic.Addr != "":
+				t.Errorf("Networks[%d] is not attached but reports address %q", i, nic.Addr)
+			}
 		}
 	})
 

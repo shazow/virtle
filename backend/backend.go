@@ -67,6 +67,24 @@ type Status struct {
 	PID   int          `json:"pid,omitempty"`
 	Paths StatusPaths  `json:"paths"`
 	Stats RuntimeStats `json:"stats"`
+	// Networks lists the guest's NICs in device order; empty when it has
+	// none.
+	Networks []NetworkStatus `json:"networks,omitempty"`
+}
+
+// NetworkStatus is one guest NIC and, when virtle runs the network it is
+// on, the guest's address there.
+type NetworkStatus struct {
+	// ID is the backend's device identifier for the NIC.
+	ID string `json:"id"`
+	// MAC is the hardware address the guest sees.
+	MAC string `json:"mac"`
+	// Attached reports whether the NIC is a port on a vmnet.Network, which
+	// fixed the address and can be dialed from the host. A NIC on the VMM's
+	// own user networking or on a kernel TAP is never attached.
+	Attached bool `json:"attached"`
+	// Addr is the guest's IPv4 address on the attached network.
+	Addr string `json:"addr,omitempty"`
 }
 
 // StatusPaths are host-side sockets associated with a machine. The JSON

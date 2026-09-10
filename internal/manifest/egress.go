@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"text/template"
 	"text/template/parse"
@@ -90,9 +91,6 @@ func validateSecretTemplate(from string) error {
 
 var envNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-// egressPlacements are the accepted values of a secret's in list.
-var egressPlacements = []string{"header", "query", "path", "body"}
-
 // resolveEgress validates the [egress] section against a document whose
 // defaults are applied and resolves its paths. Values are never read here.
 func (m *Manifest) resolveEgress(d Document) (*Egress, error) {
@@ -143,8 +141,8 @@ func (m *Manifest) resolveEgress(d Document) (*Egress, error) {
 			}
 		}
 		for _, p := range s.In {
-			if !containsString(egressPlacements, p) {
-				return nil, fmt.Errorf("%s.in %q must be one of %s", field, p, strings.Join(egressPlacements, ", "))
+			if !slices.Contains(egress.Placements, egress.Placement(p)) {
+				return nil, fmt.Errorf("%s.in %q must be one of %s", field, p, placementNames())
 			}
 		}
 		e.Secrets = append(e.Secrets, EgressSecret{
@@ -182,11 +180,11 @@ func declaresNetworkType(networks []NetworkInput, netType string) bool {
 	return false
 }
 
-func containsString(list []string, s string) bool {
-	for _, v := range list {
-		if v == s {
-			return true
-		}
+// placementNames lists egress.Placements for an error message.
+func placementNames() string {
+	names := make([]string, len(egress.Placements))
+	for i, p := range egress.Placements {
+		names[i] = string(p)
 	}
-	return false
+	return strings.Join(names, ", ")
 }

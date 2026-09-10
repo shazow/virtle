@@ -2277,7 +2277,7 @@ func TestDocumentHotplugNetworkForwardValidation(t *testing.T) {
 				Host:  "127.0.0.1:2223",
 				Guest: "10.0.2.15:22",
 			},
-			wantError: "manifest.hotplug.networks[0]: forward[0].from guest is not supported for hotplug networks",
+			wantError: "manifest.hotplug.networks[0]: forward[0].from guest is not supported on a hotplug network",
 		},
 	}
 

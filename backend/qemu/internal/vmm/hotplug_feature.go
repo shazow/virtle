@@ -1,6 +1,7 @@
 package vmm
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"fmt"
@@ -101,7 +102,7 @@ func hotplugDeviceFor(resolver hotplugResolver, dev vm.Device) (manifest.Hotplug
 			ID:  deviceID("fwd", identity),
 			MAC: deviceMAC(identity),
 			Forward: []manifest.ForwardPort{{
-				Proto: string(forwardProto(d)),
+				Proto: string(cmp.Or(d.Proto, vm.TCP)),
 				From:  "host",
 				Host:  d.HostAddr,
 				Guest: d.GuestAddr,
@@ -112,17 +113,10 @@ func hotplugDeviceFor(resolver hotplugResolver, dev vm.Device) (manifest.Hotplug
 	}
 }
 
-func forwardProto(d vm.Forward) vm.Proto {
-	if d.Proto == "" {
-		return vm.TCP
-	}
-	return d.Proto
-}
-
 // forwardIdentity names a forward for device IDs, independent of how it is
 // realized.
 func forwardIdentity(d vm.Forward) string {
-	return string(forwardProto(d)) + "\x00" + d.HostAddr + "\x00" + d.GuestAddr
+	return string(cmp.Or(d.Proto, vm.TCP)) + "\x00" + d.HostAddr + "\x00" + d.GuestAddr
 }
 
 func controlHotplugDevice(resolver hotplugResolver, req controlpkg.DeviceRequest) (manifest.HotplugDevice, error) {

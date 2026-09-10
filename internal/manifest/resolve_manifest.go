@@ -1,6 +1,7 @@
 package manifest
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"net"
@@ -782,20 +783,9 @@ func resolveNetworkHotplug(entry NetworkInput, index int) (HotplugDevice, error)
 	if mac == "" {
 		mac = defaultNetworkMAC
 	}
-	forward := make([]HotplugForward, 0, len(entry.Forward))
-	for i, fwd := range entry.Forward {
-		normalized, err := normalizeForwardPort(fwd, fmt.Sprintf("forward[%d]", i))
-		if err != nil {
-			return HotplugDevice{}, err
-		}
-		if normalized.From == "guest" {
-			return HotplugDevice{}, fmt.Errorf("forward[%d].from guest is not supported for hotplug networks", i)
-		}
-		forward = append(forward, HotplugForward{
-			Proto: normalized.Proto,
-			Host:  formatPortEndpoint(normalized.Host),
-			Guest: formatPortEndpoint(normalized.Guest),
-		})
+	forward, err := resolveHostForwards(entry.Forward, "hotplug", func(i int) string { return fmt.Sprintf("forward[%d]", i) })
+	if err != nil {
+		return HotplugDevice{}, err
 	}
 	return HotplugDevice{
 		Kind: HotplugKindNet,
@@ -900,7 +890,9 @@ func resolveNetwork(dir string, networks []NetworkInput, fwdTunnelExec []string,
 			if network.MAC == "" || network.MAC == defaultNetworkMAC {
 				device.MacAddress = ""
 			}
-			forwards, err := resolveManagedForwards(network.Forward, i)
+			forwards, err := resolveHostForwards(network.Forward, "virtle", func(j int) string {
+				return fmt.Sprintf("manifest.networks[%d].forward[%d]", i, j)
+			})
 			if err != nil {
 				return nil, err
 			}
@@ -922,17 +914,18 @@ func resolveNetwork(dir string, networks []NetworkInput, fwdTunnelExec []string,
 	return devices, nil
 }
 
-// resolveManagedForwards normalizes the host->guest forwards a virtle
-// network's port exposes.
-func resolveManagedForwards(ports []ForwardPort, networkIndex int) ([]HotplugForward, error) {
+// resolveHostForwards normalizes the host->guest forwards a NIC exposes
+// itself (a hotplugged NIC, a port on a virtle network), which carry no
+// guest->host direction; field names each entry for errors.
+func resolveHostForwards(ports []ForwardPort, network string, field func(i int) string) ([]HotplugForward, error) {
 	forwards := make([]HotplugForward, 0, len(ports))
 	for i, port := range ports {
-		normalized, err := normalizeForwardPort(port, fmt.Sprintf("manifest.networks[%d].forward[%d]", networkIndex, i))
+		normalized, err := normalizeForwardPort(port, field(i))
 		if err != nil {
 			return nil, err
 		}
 		if normalized.From != "host" {
-			return nil, fmt.Errorf("manifest.networks[%d].forward[%d].from guest is not supported on a virtle network yet", networkIndex, i)
+			return nil, fmt.Errorf("%s.from guest is not supported on a %s network", field(i), network)
 		}
 		forwards = append(forwards, HotplugForward{
 			Proto: normalized.Proto,
@@ -992,17 +985,11 @@ type normalizedForwardPort struct {
 }
 
 func normalizeForwardPort(port ForwardPort, fieldPath string) (normalizedForwardPort, error) {
-	proto := port.Proto
-	if proto == "" {
-		proto = "tcp"
-	}
+	proto := cmp.Or(port.Proto, "tcp")
 	if proto != "tcp" && proto != "udp" {
 		return normalizedForwardPort{}, fmt.Errorf("%s.proto must be one of tcp or udp", fieldPath)
 	}
-	from := port.From
-	if from == "" {
-		from = "host"
-	}
+	from := cmp.Or(port.From, "host")
 	if from != "host" && from != "guest" {
 		return normalizedForwardPort{}, fmt.Errorf("%s.from must be one of host or guest", fieldPath)
 	}

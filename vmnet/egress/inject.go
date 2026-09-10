@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"slices"
+	"strings"
 
 	"github.com/shazow/virtle/vmnet"
 )
@@ -76,7 +78,7 @@ func scopeApplies(hosts, methods, paths []string, anyHost bool, f vmnet.Flow, me
 	} else if !matchesAny(hosts, f) {
 		return false
 	}
-	if len(methods) != 0 && !containsFold(methods, method) {
+	if len(methods) != 0 && !slices.ContainsFunc(methods, func(m string) bool { return strings.EqualFold(m, method) }) {
 		return false
 	}
 	if len(paths) != 0 && !matchesPath(paths, urlPath) {

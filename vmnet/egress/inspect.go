@@ -15,6 +15,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"path"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -71,7 +72,7 @@ func (p *Policy) injectionsFor(e *vm.Egress) []*Injection {
 	var list []*Injection
 	for i := range p.Injections {
 		inj := &p.Injections[i]
-		if inj.Name == "" || e == nil || containsString(e.Secrets, inj.Name) {
+		if inj.Name == "" || e == nil || slices.Contains(e.Secrets, inj.Name) {
 			list = append(list, inj)
 		}
 	}
@@ -143,7 +144,7 @@ func (p *Policy) Validate() error {
 			}
 		}
 		for _, in := range inj.In {
-			if !containsPlacement(Placements, in) {
+			if !slices.Contains(Placements, in) {
 				return fmt.Errorf("egress: injection %q: unknown placement %q", inj.label(), in)
 			}
 		}
@@ -601,30 +602,3 @@ func (l *oneConnListener) Close() error {
 }
 
 func (l *oneConnListener) Addr() net.Addr { return l.conn.LocalAddr() }
-
-func containsString(list []string, s string) bool {
-	for _, v := range list {
-		if v == s {
-			return true
-		}
-	}
-	return false
-}
-
-func containsFold(list []string, s string) bool {
-	for _, v := range list {
-		if strings.EqualFold(v, s) {
-			return true
-		}
-	}
-	return false
-}
-
-func containsPlacement(list []Placement, p Placement) bool {
-	for _, v := range list {
-		if v == p {
-			return true
-		}
-	}
-	return false
-}

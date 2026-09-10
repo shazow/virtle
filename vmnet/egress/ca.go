@@ -50,11 +50,7 @@ func LoadOrCreateCA(dir string) (tls.Certificate, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return tls.Certificate{}, fmt.Errorf("egress: create CA directory: %w", err)
 	}
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		return tls.Certificate{}, err
-	}
-	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 127))
+	key, serial, err := newKeyAndSerial()
 	if err != nil {
 		return tls.Certificate{}, err
 	}
@@ -93,6 +89,19 @@ func LoadOrCreateCA(dir string) (tls.Certificate, error) {
 	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key, Leaf: leaf}, nil
 }
 
+// newKeyAndSerial makes the key pair and the serial number of a certificate.
+func newKeyAndSerial() (*ecdsa.PrivateKey, *big.Int, error) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, nil, err
+	}
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 127))
+	if err != nil {
+		return nil, nil, err
+	}
+	return key, serial, nil
+}
+
 // CAPEM is the CA certificate in PEM form, for guests to trust; nil
 // without a CA.
 func (p *Policy) CAPEM() []byte {
@@ -118,11 +127,7 @@ func (p *Policy) certFor(host string) (*tls.Certificate, error) {
 			return nil, err
 		}
 	}
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		return nil, err
-	}
-	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 127))
+	key, serial, err := newKeyAndSerial()
 	if err != nil {
 		return nil, err
 	}

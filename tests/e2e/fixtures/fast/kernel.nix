@@ -60,22 +60,33 @@ let
         KEYBOARD_ATKBD = yes;
         SERIO = yes;
         SERIO_I8042 = yes;
-      }
-      // pkgs.lib.optionalAttrs userspace {
-        # Common userspace primitives required by Go, libuv and similar tools.
-        EVENTFD = yes;
-        INOTIFY_USER = yes;
-        FILE_LOCKING = yes;
+        # A virtio-net NIC with IPv4 only: enough for a DHCP lease, a TCP
+        # echo, and name lookups over the virtle network. The unrelated NET
+        # defaults stay out.
         NET = yes;
-        UNIX = yes;
-        # NET is required for AF_UNIX, but its unrelated defaults stay out.
-        AF_UNIX_OOB = no;
+        INET = yes;
+        IPV6 = no;
+        PACKET = yes;
+        NETDEVICES = yes;
+        NET_CORE = yes;
+        VIRTIO_NET = yes;
         BQL = no;
         ETHTOOL_NETLINK = no;
         NETWORK_FILESYSTEMS = no;
         NET_FLOW_LIMIT = no;
         RFS_ACCEL = no;
         WIRELESS = no;
+        # NETDEVICES defaults these on; WLAN would select WIRELESS back in.
+        WLAN = no;
+        ETHERNET = no;
+      }
+      // pkgs.lib.optionalAttrs userspace {
+        # Common userspace primitives required by Go, libuv and similar tools.
+        EVENTFD = yes;
+        INOTIFY_USER = yes;
+        FILE_LOCKING = yes;
+        UNIX = yes;
+        AF_UNIX_OOB = no;
       };
   };
 in

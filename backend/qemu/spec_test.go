@@ -2,6 +2,7 @@ package qemu
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"log/slog"
 	"maps"
@@ -15,6 +16,7 @@ import (
 	imanifest "github.com/shazow/virtle/internal/manifest"
 	"github.com/shazow/virtle/units"
 	"github.com/shazow/virtle/vm"
+	"github.com/shazow/virtle/vmnet"
 )
 
 func TestBackendLoggersAreConfiguredIndependently(t *testing.T) {
@@ -384,5 +386,72 @@ func TestSpecDocumentOverlaysBase(t *testing.T) {
 	}
 	if got := files[0]; got.GuestPath != "/etc/backend.conf" || got.Content.Kind != imanifest.WriteFileContentPath || got.Content.Path != "/work/host.conf" || !got.WriteBack {
 		t.Errorf("backend-owned host file = %+v", got)
+	}
+}
+
+// fakeVMNet stands in for a vmnet.Network that is never attached to.
+type fakeVMNet struct{}
+
+func (fakeVMNet) Attach(context.Context, vmnet.Link, vmnet.AttachOptions) (vmnet.Port, error) {
+	return nil, errors.New("not attached in this test")
+}
+
+func TestSpecDocumentAppliesLink(t *testing.T) {
+	network := fakeVMNet{}
+	for name, tc := range map[string]struct {
+		cfg      Backend
+		wantType string
+		wantTap  string
+		wantErr  error
+		anyErr   bool
+	}{
+		"default":                {cfg: Backend{}, wantType: "user"},
+		"network selects stream": {cfg: Backend{Network: network}, wantType: "virtle"},
+		"stream":                 {cfg: Backend{Network: network, Link: Stream{}}, wantType: "virtle"},
+		"user":                   {cfg: Backend{Link: User{}}, wantType: "user"},
+		"tap":                    {cfg: Backend{Link: TAP{Name: "tap0"}}, wantType: "tap", wantTap: "tap0"},
+		"stream without network": {cfg: Backend{Link: Stream{}}, wantErr: errors.ErrUnsupported},
+		"user with network":      {cfg: Backend{Network: network, Link: User{}}, wantErr: errors.ErrUnsupported},
+		"tap with network":       {cfg: Backend{Network: network, Link: TAP{Name: "tap0"}}, wantErr: errors.ErrUnsupported},
+		"tap without name":       {cfg: Backend{Link: TAP{}}, anyErr: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			doc, err := specDocument(testSpec(), &tc.cfg, nil)
+			switch {
+			case tc.wantErr != nil:
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("error = %v, want %v", err, tc.wantErr)
+				}
+				return
+			case tc.anyErr:
+				if err == nil {
+					t.Fatal("specDocument succeeded")
+				}
+				return
+			case err != nil:
+				t.Fatalf("specDocument: %v", err)
+			}
+			if len(doc.Networks) != 1 || doc.Networks[0].Type != tc.wantType || doc.Networks[0].Tap != tc.wantTap {
+				t.Fatalf("networks = %+v, want one of type %q tap %q", doc.Networks, tc.wantType, tc.wantTap)
+			}
+		})
+	}
+
+	// A Network-backed document resolves to a managed NIC carrying the
+	// Spec's forwards for the port, with no slirp options.
+	doc, err := specDocument(testSpec(), &Backend{Network: network}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mf, err := doc.Manifest()
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	devices := mf.QEMU.Devices.Network
+	if len(devices) != 1 || !devices[0].Managed || devices[0].Backend != "stream" || len(devices[0].NetdevOptions) != 0 {
+		t.Fatalf("network devices = %+v, want one managed stream device", devices)
+	}
+	if want := []imanifest.HotplugForward{{Proto: "tcp", Host: "127.0.0.1:8080", Guest: "10.0.2.15:80"}}; !reflect.DeepEqual(devices[0].Forward, want) {
+		t.Fatalf("forwards = %+v, want %+v", devices[0].Forward, want)
 	}
 }

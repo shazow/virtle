@@ -845,14 +845,15 @@ func (m *Manifest) addCleanupFile(path string) {
 
 func resolveNetwork(networks []NetworkInput, fwdTunnelExec []string, host HostInput, transport string, cpus CPUCount) ([]QEMUNetDevice, error) {
 	devices := make([]QEMUNetDevice, 0, len(networks))
+	managed := 0
 	for i, network := range networks {
 		id := network.ID
 		if id == "" {
 			id = defaultNetworkID
 		}
-		backend := network.Type
-		if backend == "" {
-			backend = defaultNetworkType
+		netType := network.Type
+		if netType == "" {
+			netType = defaultNetworkType
 		}
 		mac := network.MAC
 		if mac == "" {
@@ -866,21 +867,95 @@ func resolveNetwork(networks []NetworkInput, fwdTunnelExec []string, host HostIn
 		if cpus.Set && cpus.Value > 1 && transport == "pci" {
 			mqVectors = 2*cpus.Value + 2
 		}
-		forwardOptions, err := resolveForwardPorts(network.Forward, fwdTunnelExec, i)
+		if network.Tap != "" && netType != NetworkTypeTAP {
+			return nil, fmt.Errorf("manifest.networks[%d].tap applies to type tap only", i)
+		}
+		device := QEMUNetDevice{
+			ID:         id,
+			MacAddress: mac,
+			Transport:  transport,
+			DisableROM: disableROM,
+			MQVectors:  mqVectors,
+		}
+		switch netType {
+		case NetworkTypeUser:
+			device.Backend = "user"
+			forwardOptions, err := resolveForwardPorts(network.Forward, fwdTunnelExec, i)
+			if err != nil {
+				return nil, err
+			}
+			device.NetdevOptions = forwardOptions
+		case NetworkTypeVirtle:
+			if managed++; managed > 1 {
+				return nil, fmt.Errorf("manifest.networks[%d]: a machine attaches to one virtle network", i)
+			}
+			device.Backend = "stream"
+			device.Managed = true
+			// The default MAC is the same address for every machine; on a
+			// shared network each port needs its own, so only a MAC the
+			// manifest chose is requested.
+			if network.MAC == "" || network.MAC == defaultNetworkMAC {
+				device.MacAddress = ""
+			}
+			forwards, err := resolveManagedForwards(network.Forward, i)
+			if err != nil {
+				return nil, err
+			}
+			device.Forward = forwards
+		case NetworkTypeTAP:
+			if err := validateTapName(network.Tap); err != nil {
+				return nil, fmt.Errorf("manifest.networks[%d].tap %w", i, err)
+			}
+			if len(network.Forward) > 0 {
+				return nil, fmt.Errorf("manifest.networks[%d].forward is not supported on a tap network; the host kernel routes it", i)
+			}
+			device.Backend = "tap"
+			device.NetdevOptions = []string{"ifname=" + network.Tap, "script=no", "downscript=no"}
+		default:
+			return nil, fmt.Errorf("manifest.networks[%d].type must be one of user, virtle, or tap", i)
+		}
+		devices = append(devices, device)
+	}
+	return devices, nil
+}
+
+// resolveManagedForwards normalizes the host->guest forwards a virtle
+// network's port exposes.
+func resolveManagedForwards(ports []ForwardPort, networkIndex int) ([]HotplugForward, error) {
+	forwards := make([]HotplugForward, 0, len(ports))
+	for i, port := range ports {
+		normalized, err := normalizeForwardPort(port, fmt.Sprintf("manifest.networks[%d].forward[%d]", networkIndex, i))
 		if err != nil {
 			return nil, err
 		}
-		devices = append(devices, QEMUNetDevice{
-			ID:            id,
-			Backend:       backend,
-			MacAddress:    mac,
-			Transport:     transport,
-			DisableROM:    disableROM,
-			NetdevOptions: forwardOptions,
-			MQVectors:     mqVectors,
+		if normalized.From != "host" {
+			return nil, fmt.Errorf("manifest.networks[%d].forward[%d].from guest is not supported on a virtle network yet", networkIndex, i)
+		}
+		forwards = append(forwards, HotplugForward{
+			Proto: normalized.Proto,
+			Host:  formatPortEndpoint(normalized.Host),
+			Guest: formatPortEndpoint(normalized.Guest),
 		})
 	}
-	return devices, nil
+	return forwards, nil
+}
+
+// validateTapName accepts a Linux interface name, which also keeps QEMU's
+// comma-separated option syntax intact.
+func validateTapName(name string) error {
+	const ifnamsiz = 15
+	if name == "" {
+		return errors.New("is required for type tap")
+	}
+	if len(name) > ifnamsiz {
+		return fmt.Errorf("%q is longer than %d characters", name, ifnamsiz)
+	}
+	for _, r := range name {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-' || r == '.') {
+			return fmt.Errorf("%q is not an interface name", name)
+		}
+	}
+	return nil
 }
 
 func parsePortEndpoint(value string) (PortEndpoint, error) {

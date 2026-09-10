@@ -21,19 +21,28 @@ import (
 // hub, the guest's serial port (a stdio chardev) rides the hub's streams so
 // it can be printed, retained, and attached to; an interactive console owns
 // the host terminal instead.
-func buildQEMUCommand(mf *manifest.Manifest, cid int, incoming bool, consoleOutput io.Writer, hub *console.Hub) (*exec.Cmd, error) {
+func buildQEMUCommand(mf *manifest.Manifest, cid int, incoming bool, consoleOutput io.Writer, hub *console.Hub, attached *networkAttachment) (*exec.Cmd, error) {
 	qemu, err := mf.ResolvedQEMU()
 	if err != nil {
 		return nil, err
 	}
 
-	args, err := buildQEMUArgs(qemu, cid, incoming)
+	var managed *managedNetdev
+	var extraFiles []*os.File
+	if attached != nil {
+		// The first inherited file is descriptor 3.
+		netdev := attached.netdev(3)
+		managed = &netdev
+		extraFiles = []*os.File{attached.guestFile()}
+	}
+	args, err := buildQEMUArgs(qemu, cid, incoming, managed)
 	if err != nil {
 		return nil, err
 	}
 
 	cmd := executor.Command(qemu.BinaryPath, args, nil)
 	cmd.Dir = mf.Paths.WorkingDir
+	cmd.ExtraFiles = extraFiles
 	// An interactive console must stay in the foreground process group to read the terminal.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: !qemu.Console.Interactive()}
 	if qemu.Console.Interactive() {
@@ -53,7 +62,7 @@ func buildQEMUCommand(mf *manifest.Manifest, cid int, incoming bool, consoleOutp
 	return cmd, nil
 }
 
-func buildQEMUArgs(qemu manifest.QEMU, cid int, incoming bool) ([]string, error) {
+func buildQEMUArgs(qemu manifest.QEMU, cid int, incoming bool, managed *managedNetdev) ([]string, error) {
 	config := &govmmQemu.Config{
 		Machine: govmmQemu.Machine{
 			Type: qemu.Machine.Type,
@@ -211,13 +220,26 @@ func buildQEMUArgs(qemu manifest.QEMU, cid int, incoming bool) ([]string, error)
 			netdev.Backend,
 			fmt.Sprintf("id=%s", netdev.ID),
 		}
+		mac := netdev.MacAddress
+		var deviceExtra []string
+		if netdev.Managed {
+			// Frames go over the inherited socket to the network that
+			// allocated the MAC; the guest learns the segment MTU with them.
+			if managed == nil || managed.ID != netdev.ID {
+				return nil, fmt.Errorf("network %q is not attached to a vmnet port", netdev.ID)
+			}
+			netdevParams = append(netdevParams, "addr.type=fd", fmt.Sprintf("addr.str=%d", managed.FD))
+			mac = managed.MAC
+			deviceExtra = append(deviceExtra, fmt.Sprintf("host_mtu=%d", managed.MTU))
+		}
 		netdevParams = append(netdevParams, netdev.NetdevOptions...)
 
 		deviceParams := []string{
 			driver,
 			fmt.Sprintf("netdev=%s", netdev.ID),
-			fmt.Sprintf("mac=%s", netdev.MacAddress),
+			fmt.Sprintf("mac=%s", mac),
 		}
+		deviceParams = append(deviceParams, deviceExtra...)
 		if netdev.DisableROM {
 			deviceParams = append(deviceParams, "romfile=")
 		} else if netdev.RomFile != "" {

@@ -38,6 +38,9 @@ type StatusResponse = backend.Status
 // StatusPaths are host-side sockets associated with the runtime.
 type StatusPaths = backend.StatusPaths
 
+// NetworkStatus is one guest NIC in a StatusResponse.
+type NetworkStatus = backend.NetworkStatus
+
 // RuntimeStats reports lifecycle timing captured during launch and teardown.
 type RuntimeStats = backend.RuntimeStats
 

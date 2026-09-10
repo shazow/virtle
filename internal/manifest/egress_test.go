@@ -61,6 +61,9 @@ hosts = ["*.npmjs.org"]
 	if !reflect.DeepEqual(e.Allow, wantAllow) || !reflect.DeepEqual(e.Deny, []EgressRule{{Host: "evil.github.com"}}) || !e.Inspects {
 		t.Fatalf("rules = %+v / %+v (inspects %v)", e.Allow, e.Deny, e.Inspects)
 	}
+	if e.Reach != "internet" {
+		t.Fatalf("reach = %q, want the internet by default", e.Reach)
+	}
 	if len(e.Secrets) != 2 || e.Secrets[0].From != "{{.Env.GH_TOKEN}}" || e.Secrets[0].Methods[1] != "POST" || e.Secrets[0].In[0] != "header" {
 		t.Fatalf("secrets = %+v", e.Secrets)
 	}
@@ -95,12 +98,21 @@ hosts = ["*.npmjs.org"]
 		t.Fatal("an empty value passed")
 	}
 
-	custom := decodeEgress(t, egressBase+"[egress]\nca_dir = 'ca'\n[[egress.allow]]\nhost = '*.test'\n")
-	if custom.Egress.CADir != filepath.Join(custom.Paths.WorkingDir, "ca") || custom.Egress.Inspects {
+	custom := decodeEgress(t, egressBase+"[egress]\nreach = 'rules'\nca_dir = 'ca'\n[[egress.allow]]\nhost = '*.test'\n")
+	if custom.Egress.CADir != filepath.Join(custom.Paths.WorkingDir, "ca") || custom.Egress.Inspects || custom.Egress.Reach != "rules" {
 		t.Fatalf("egress = %+v", custom.Egress)
 	}
-	if plain := decodeEgress(t, egressBase); plain.Egress != nil {
-		t.Fatal("egress resolved without a section")
+	// A virtle network without a section reaches the internet and nothing
+	// else; a network of another type has no policy at all.
+	plain := decodeEgress(t, egressBase)
+	if plain.Egress == nil || plain.Egress.Reach != "internet" || len(plain.Egress.Allow) != 0 || plain.Egress.Inspects {
+		t.Fatalf("egress without a section = %+v, want the internet", plain.Egress)
+	}
+	if want := filepath.Join(plain.ResolvedPersistenceStateDir(), "egress-ca"); plain.Egress.CADir != want {
+		t.Fatalf("default CADir = %q, want %q", plain.Egress.CADir, want)
+	}
+	if user := decodeEgress(t, "[kernel]\npath = 'k'\ninitrd_path = 'i'\n"); user.Egress != nil {
+		t.Fatalf("a user network resolved a policy: %+v", user.Egress)
 	}
 }
 
@@ -109,6 +121,7 @@ func TestResolveEgressRejects(t *testing.T) {
 	for name, tc := range map[string]struct{ body, want string }{
 		"without virtle network": {"[kernel]\npath = 'k'\ninitrd_path = 'i'\n[egress]\n[[egress.allow]]\nhost = 'a.test'\n", "network of type virtle"},
 		"bad pattern":            {egressBase + "[egress]\n[[egress.allow]]\nhost = '['\n", "allow[0].host"},
+		"bad reach":              {egressBase + "[egress]\nreach = 'lan'\n", "reach"},
 		"bad port":               {egressBase + "[egress]\n[[egress.allow]]\nhost = 'a.test'\nports = [70000]\n", "not a port"},
 		"bad deny":               {egressBase + "[egress]\n[[egress.deny]]\nhost = 'a b'\n", "deny[0].host"},
 		"secret name":            {egressBase + inspecting + "[[egress.secrets]]\nname = '1x'\nfrom = '{{.Env.A}}'\nhosts = ['api.test']\n", "environment variable name"},

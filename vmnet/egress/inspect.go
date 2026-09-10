@@ -102,11 +102,17 @@ func (p *Policy) tokenOf(inj *Injection) string {
 	return token
 }
 
-// Validate reports a Policy that cannot work: malformed patterns, a rule
-// that inspects with no CA to mint certificates from, or an Injection with
+// Validate reports a Policy that cannot work: an unknown Reach, malformed
+// patterns, a rule that inspects with no CA to mint certificates from, or an
+// Injection with
 // neither a name nor a token, without a value, named twice, or named but
 // without the hosts its value may go to.
 func (p *Policy) Validate() error {
+	switch p.Reach {
+	case "", ReachRules, ReachInternet, ReachAll:
+	default:
+		return fmt.Errorf("egress: unknown reach %q", p.Reach)
+	}
 	inspects := false
 	for i, r := range p.Rules {
 		if len(r.Hosts) == 0 {
@@ -294,7 +300,7 @@ func (p *Policy) upstreamTransport(f vmnet.Flow) http.RoundTripper {
 	}
 	return &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			conn, _, err := p.dial(ctx, f)
+			conn, _, err := p.dial(ctx, f, false) // inspected flows come from Rules
 			return conn, err
 		},
 		TLSClientConfig:   tlsConfig,

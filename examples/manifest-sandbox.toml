@@ -1,6 +1,8 @@
 # A sandbox on the virtle network: the guest reaches only what [egress]
 # allows, GitHub API calls are inspected and recorded, and the guest uses a
-# GitHub token it never holds. See docs/networking.md.
+# GitHub token it never holds. Without an [egress] section the guest would
+# reach the internet and nothing on the host or its networks. See
+# docs/networking.md.
 
 [machine]
 vcpu = 2
@@ -22,6 +24,7 @@ type = "virtle"
 forward = [{ host = "127.0.0.1:2222", guest = ":22" }]
 
 [egress]
+reach = "rules"  # only the entries below; the default, "internet", is everything public
 [[egress.allow]]
 host = "api.github.com"
 ports = [443]

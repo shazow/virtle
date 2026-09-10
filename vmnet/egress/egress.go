@@ -1,5 +1,6 @@
 // Package egress is the standard vmnet.Egress: an allowlist of destinations
-// by name pattern or address range, a deny list of address ranges checked
+// by name pattern or address range, or the whole internet and nothing on
+// the host or its networks (Reach), a deny list of address ranges checked
 // on what names resolve to, per-guest narrowing from vm.Egress, and a
 // record of every decision. A rule can also inspect: the flow's TLS and
 // HTTP are terminated with a certificate minted from the Policy's CA, each
@@ -64,7 +65,7 @@ type Event struct {
 	Src, Dst netip.AddrPort
 	Host     string         // the name the guest resolved, when known
 	Decision Decision       // Allowed or Denied
-	Rule     string         // the pattern that allowed the flow
+	Rule     string         // the pattern that allowed the flow, or "reach:<Reach>" when the Policy's Reach did
 	Reason   string         // why the flow was denied
 	Upstream netip.AddrPort // where an allowed flow was dialed
 	Err      error          // why an allowed flow's dial or request failed
@@ -101,12 +102,16 @@ var DefaultDenyPrefixes = []netip.Prefix{
 	netip.MustParsePrefix("fd00:ec2::254/128"),
 }
 
-// Policy is a vmnet.Egress that allows what its Rules name, denies
-// everything else, and records each decision. The zero value denies every
-// flow. It is safe for concurrent use once configured.
+// Policy is a vmnet.Egress that allows what its Rules name and what its
+// Reach admits, denies everything else, and records each decision. The zero
+// value denies every flow. It is safe for concurrent use once configured.
 type Policy struct {
-	// Rules allow flows; a flow no rule matches is denied.
+	// Rules allow flows; a flow no rule matches falls to Reach.
 	Rules []Rule
+	// Reach is what a flow no Rule matches may reach: nothing (ReachRules,
+	// the zero value), the public internet (ReachInternet), or anything
+	// the host can (ReachAll).
+	Reach Reach
 	// DenyPrefixes are address ranges no flow may reach whatever the Rules
 	// say, checked on the addresses a name resolves to as well as on
 	// addresses guests dial directly. Nil means DefaultDenyPrefixes; an
@@ -141,6 +146,7 @@ type Policy struct {
 	mu     sync.Mutex
 	leaves map[string]*tls.Certificate // minted per host
 	tokens map[string]string           // generated per Injection.Name
+	host   hostAddrs                   // the host's own addresses, for ReachInternet
 }
 
 // DialFlow implements vmnet.Egress. A denied flow fails with an error
@@ -148,7 +154,7 @@ type Policy struct {
 // it accepted; a name that resolves only to denied ranges counts as denied.
 func (p *Policy) DialFlow(ctx context.Context, f vmnet.Flow) (net.Conn, error) {
 	ev := Event{Time: time.Now(), Guest: f.Guest, Proto: cmp.Or(f.Proto, vm.TCP), Src: f.Src, Dst: f.Dst, Host: f.Host}
-	matched, rule, reason := p.decide(f)
+	matched, rule, reason, public := p.decide(f)
 	if reason == "" && matched.Inspect && f.Network() != "tcp" {
 		// Inspection terminates TCP; a datagram flow to the same host
 		// would pass unseen, so it is refused and the guest falls back.
@@ -172,7 +178,7 @@ func (p *Policy) DialFlow(ctx context.Context, f vmnet.Flow) (net.Conn, error) {
 		p.record(ev)
 		return conn, err
 	}
-	conn, upstream, err := p.dial(ctx, f)
+	conn, upstream, err := p.dial(ctx, f, public)
 	ev.Rule, ev.Upstream = rule, upstream
 	switch {
 	case errors.Is(err, vmnet.ErrDenied):
@@ -186,14 +192,16 @@ func (p *Policy) DialFlow(ctx context.Context, f vmnet.Flow) (net.Conn, error) {
 	return conn, err
 }
 
-// decide applies the guest's own policy, the deny ranges for a flow dialed
-// by address, and the Rules. It returns the allowing rule and pattern, or
-// the reason for a denial.
-func (p *Policy) decide(f vmnet.Flow) (matched Rule, pattern, reason string) {
+// decide applies the guest's own policy, the Rules and then the Reach, and
+// the deny ranges for a flow dialed by address. It returns the allowing
+// rule and pattern, or the reason for a denial; public is set when the
+// flow owes its admission to ReachInternet and so may only reach public
+// addresses.
+func (p *Policy) decide(f vmnet.Flow) (matched Rule, pattern, reason string, public bool) {
 	if f.Egress != nil {
 		for _, r := range f.Egress.Deny {
 			if matchPattern(r.Host, r.Ports, f) {
-				return Rule{}, "", "denied by the guest's policy"
+				return Rule{}, "", "denied by the guest's policy", false
 			}
 		}
 		allowed := false
@@ -204,25 +212,44 @@ func (p *Policy) decide(f vmnet.Flow) (matched Rule, pattern, reason string) {
 			}
 		}
 		if !allowed {
-			return Rule{}, "", "outside the guest's allow list"
+			return Rule{}, "", "outside the guest's allow list", false
 		}
 	}
-	if f.Host == "" && p.denied(f.Dst.Addr()) {
-		return Rule{}, "", fmt.Sprintf("%s is in a denied range", f.Dst.Addr())
+	matched, pattern, public, ok := p.admit(f)
+	if !ok {
+		return Rule{}, "", "no rule allows it", false
 	}
+	if f.Host == "" {
+		if why := p.refused(f.Dst.Addr(), public); why != "" {
+			return Rule{}, "", fmt.Sprintf("%s is %s", f.Dst.Addr(), why), false
+		}
+	}
+	return matched, pattern, "", public
+}
+
+// admit finds what allows a flow: the first Rule that matches it, else the
+// Reach. ok is false when nothing does.
+func (p *Policy) admit(f vmnet.Flow) (matched Rule, pattern string, public, ok bool) {
 	for _, r := range p.Rules {
 		for _, h := range r.Hosts {
 			if matchPattern(h, r.Ports, f) {
-				return r, h, ""
+				return r, h, false, true
 			}
 		}
 	}
-	return Rule{}, "", "no rule allows it"
+	switch p.Reach {
+	case ReachInternet:
+		return Rule{}, "reach:" + string(ReachInternet), true, true
+	case ReachAll:
+		return Rule{}, "reach:" + string(ReachAll), false, true
+	}
+	return Rule{}, "", false, false
 }
 
 // dial connects an allowed flow: by address when that is all the guest
-// gave, else by resolving the name and refusing addresses in denied ranges.
-func (p *Policy) dial(ctx context.Context, f vmnet.Flow) (net.Conn, netip.AddrPort, error) {
+// gave, else by resolving the name and refusing addresses in denied ranges,
+// and off the internet when public is set.
+func (p *Policy) dial(ctx context.Context, f vmnet.Flow, public bool) (net.Conn, netip.AddrPort, error) {
 	dialer := p.Dialer
 	if dialer == nil {
 		dialer = &net.Dialer{}
@@ -243,9 +270,9 @@ func (p *Policy) dial(ctx context.Context, f vmnet.Flow) (net.Conn, netip.AddrPo
 	var firstErr error
 	for _, a := range addrs {
 		a = a.Unmap()
-		if p.denied(a) {
+		if why := p.refused(a, public); why != "" {
 			if firstErr == nil {
-				firstErr = fmt.Errorf("%s resolves to %s, in a denied range: %w", host, a, vmnet.ErrDenied)
+				firstErr = fmt.Errorf("%s resolves to %s, %s: %w", host, a, why, vmnet.ErrDenied)
 			}
 			continue
 		}
@@ -264,18 +291,20 @@ func (p *Policy) dial(ctx context.Context, f vmnet.Flow) (net.Conn, netip.AddrPo
 	return nil, netip.AddrPort{}, firstErr
 }
 
-func (p *Policy) denied(a netip.Addr) bool {
+// refused says why an address may not be dialed, or nothing: it is in a
+// denied range, or, for a flow admitted by ReachInternet, off the internet.
+func (p *Policy) refused(a netip.Addr, public bool) string {
 	prefixes := p.DenyPrefixes
 	if prefixes == nil {
 		prefixes = DefaultDenyPrefixes
 	}
-	a = a.Unmap()
-	for _, prefix := range prefixes {
-		if prefix.Contains(a) {
-			return true
-		}
+	switch {
+	case inPrefixes(prefixes, a):
+		return "in a denied range"
+	case public && p.local(a):
+		return "not on the internet"
 	}
-	return false
+	return ""
 }
 
 func (p *Policy) record(ev Event) {

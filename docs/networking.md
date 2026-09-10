@@ -78,11 +78,21 @@ name resolves to as well as on addresses dialed directly, so a rebinding name
 cannot get through. Every decision is an `Event` for a `Recorder`, or a
 structured log line by default.
 
+`Policy.Reach` says what a flow no rule matches may reach: nothing
+(`ReachRules`, the zero value, an allowlist), the public internet
+(`ReachInternet`), or anything the host can (`ReachAll`). `ReachInternet`
+refuses every address in `egress.LocalPrefixes`, the private, carrier-grade
+NAT, loopback, link-local, multicast, reserved, and documentation ranges of
+both families, and every address the host itself holds, on what a name
+resolves to as well as on addresses dialed directly. A rule is an explicit
+decision and is not held to that, so a rule can still name a host on the
+LAN under `ReachInternet`.
+
 Name rules need names. The network's fake-IP DNS mode
 (`userspace.DNSFakeIP`) answers every query with a synthetic address it
 remembers, the flow to that address carries the name the guest resolved, and
 the egress resolves it when it dials. The manifest loader selects that mode
-whenever an `[egress]` section exists.
+for every virtle network.
 
 ```go
 policy := &egress.Policy{
@@ -139,11 +149,18 @@ the names it may use, and the recorded path is the one the guest sent, so a
 value never reaches a log. The library ships no values of its own; a
 program using it brings them, as the e2e scenario in `tests/e2e` does.
 
+A virtle network with no `[egress]` section reaches the internet and nothing
+on the host or its networks. In the section, `reach` says what lies beyond
+its entries: `internet` (the default), `rules` (only the allow entries, an
+allowlist), or `all` (anything the host can reach). Deny entries always
+apply, and allow entries can reach the host's networks under any of them.
+
 ```toml
 [[networks]]
 type = "virtle"
 
 [egress]
+reach = "rules"   # only the entries below
 [[egress.allow]]
 host = "api.github.com"
 ports = [443]

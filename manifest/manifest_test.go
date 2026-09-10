@@ -229,6 +229,7 @@ path = "vmlinuz"
 type = "virtle"
 
 [egress]
+reach = "rules"
 [[egress.allow]]
 host = "api.github.com"
 ports = [443]
@@ -279,5 +280,36 @@ hosts = ["api.github.com"]
 	defer b.(io.Closer).Close()
 	if len(spec.Files) != 0 || spec.Egress == nil || len(spec.Egress.Secrets) != 0 {
 		t.Fatalf("Files = %+v, Egress = %+v", spec.Files, spec.Egress)
+	}
+}
+
+func TestLoadVirtleNetworkReachesTheInternetByDefault(t *testing.T) {
+	spec, b, err := Load(strings.NewReader(virtleNetworkManifest))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	qb := b.(*qemu.Backend)
+	defer qb.Close()
+	// The policy is there (the network resolves names for it), the guest
+	// has nothing of its own to add to it, and gets no files.
+	if network := qb.Network.(*userspace.Network); network.DNS() != userspace.DNSFakeIP {
+		t.Fatalf("DNS mode = %s; a virtle network carries a policy by default", network.DNS())
+	}
+	if spec.Egress != nil || len(spec.Files) != 0 {
+		t.Fatalf("Egress = %+v, Files = %+v; want the network's default policy and no files", spec.Egress, spec.Files)
+	}
+
+	// Deny entries under the default reach: the guest's view says
+	// everything but them, and the policy narrows everything to the internet.
+	spec, b, err = Load(strings.NewReader(virtleNetworkManifest + "\n[egress]\n[[egress.deny]]\nhost = \"tracker.test\"\n"))
+	if err != nil {
+		t.Fatalf("Load with a deny entry: %v", err)
+	}
+	defer b.(io.Closer).Close()
+	if spec.Egress == nil || len(spec.Egress.Deny) != 1 || len(spec.Egress.Allow) != 3 || spec.Egress.Allow[0].Host != "*" || spec.Egress.Allow[1].Host != "0.0.0.0/0" {
+		t.Fatalf("Egress = %+v", spec.Egress)
+	}
+	if _, _, err := Load(strings.NewReader(virtleNetworkManifest + "\n[egress]\nreach = \"lan\"\n")); err == nil || !strings.Contains(err.Error(), "reach") {
+		t.Fatalf("unknown reach loaded: %v", err)
 	}
 }

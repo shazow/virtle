@@ -21,8 +21,9 @@ It also handles teardown, QMP-based shutdown, disk-backed suspend/resume, runtim
 ### Features
 
 - Runs QEMU or Firecracker microVMs through the same CLI and Go interfaces.
-- Networks guests in userspace with an egress policy: allow and deny by name,
-  record every connection, and let the guest use secrets it never holds (see
+- Networks guests in userspace with an egress policy: the internet and nothing
+  on the host or its LAN by default, allow and deny by name, record every
+  connection, and let the guest use secrets it never holds (see
   [docs/networking.md](docs/networking.md)).
 - Allocates block overlay images.
 - Manages [`virtiofsd`](https://gitlab.com/virtio-fs/virtiofsd) daemons for virtiofs mounts.

@@ -18,9 +18,13 @@ compact before/after examples.
   `type = "tap"` with `tap = "tap0"` hands a host TAP device to the VMM on
   QEMU and Firecracker. `type = "user"` stays the default. See
   [docs/networking.md](docs/networking.md).
+- A virtle network reaches the internet and nothing on the host or its
+  networks unless the manifest says otherwise: `[egress] reach = "internet"`
+  is the default, `"rules"` keeps the guest to the allow entries, and
+  `"all"` lets it reach anything the host can.
 - New `[egress]` section for virtle networks: `[[egress.allow]]` and
   `[[egress.deny]]` entries by name pattern, CIDR, or address with optional
-  `ports`; everything else is refused before it connects, and loopback,
+  `ports`; beyond them the guest reaches what `reach` says, and loopback,
   link-local, and metadata ranges are always refused. `inspect = true` on an
   allow entry terminates TLS and HTTP to record each request; the guest gets
   the CA certificate at `/etc/virtle/ca.pem`. `[[egress.secrets]]` names a
@@ -39,6 +43,10 @@ compact before/after examples.
   and `Listen`, fake-IP DNS) and the standard policy in `vmnet/egress`
   (`Policy` with rules, deny ranges, a `Recorder`, inspection, and
   injections; `LoadOrCreateCA`, `GuestEnv`, `GuestFiles`).
+- `egress.Policy.Reach` is what a flow no rule matches may reach:
+  `ReachRules` (the zero value), `ReachInternet`, or `ReachAll`.
+  `ReachInternet` refuses `egress.LocalPrefixes` and the host's own
+  addresses, on what names resolve to as well as on addresses dialed.
 - `egress.Policy.Injections` replaces a token the guest writes with a value
   computed as each inspected request passes, or refuses the request that
   carries it (`egress.Injection`; a `Value` returning an error wrapping

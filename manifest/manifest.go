@@ -45,9 +45,11 @@ import (
 // virtle runs in userspace (vmnet/userspace) and hand it to the backend,
 // which owns it: it logs through the backend's Logger, and closing the
 // backend (it implements io.Closer) releases it once its machines are done.
-// An [egress] section becomes that network's policy (vmnet/egress) and the
-// Spec's Egress; the guest gets the policy's CA certificate and its secret
-// tokens as files (egress.GuestCAPath, GuestSecretsPath).
+// The network's policy (vmnet/egress) comes from the [egress] section, and
+// without one reaches the internet and nothing on the host or its
+// networks; the section's entries also become the Spec's Egress, and the
+// guest gets the policy's CA certificate and its secret tokens as files
+// (egress.GuestCAPath, GuestSecretsPath).
 func Load(r io.Reader) (*vm.Spec, backend.Backend, error) {
 	data, err := io.ReadAll(r)
 	if err != nil {
@@ -122,7 +124,7 @@ const GuestSecretsPath = "/etc/virtle/secrets.env"
 // egressPolicy builds the network's policy from the manifest's [egress]
 // section, creating the CA when an entry inspects.
 func egressPolicy(e *imanifest.Egress, logger *slog.Logger) (*egress.Policy, error) {
-	policy := &egress.Policy{Logger: logger}
+	policy := &egress.Policy{Logger: logger, Reach: egress.Reach(e.Reach)}
 	for _, r := range e.Allow {
 		policy.Rules = append(policy.Rules, egress.Rule{Hosts: []string{r.Host}, Ports: r.Ports, Inspect: r.Inspect})
 	}
@@ -154,8 +156,14 @@ func egressPolicy(e *imanifest.Egress, logger *slog.Logger) (*egress.Policy, err
 }
 
 // specEgress is the guest's view of the [egress] section: the same allow
-// and deny entries, and the names of every secret it may hold.
+// and deny entries and the names of every secret it may hold, with a reach
+// beyond the entries spelled out as patterns for everything, which the
+// network's policy narrows to the internet or not. Nil when the section
+// adds nothing to the network's policy, which is then the guest's.
 func specEgress(e *imanifest.Egress) *vm.Egress {
+	if len(e.Allow) == 0 && len(e.Deny) == 0 && len(e.Secrets) == 0 {
+		return nil
+	}
 	reaches := func(rules []imanifest.EgressRule) []vm.Reach {
 		out := make([]vm.Reach, 0, len(rules))
 		for _, r := range rules {
@@ -163,11 +171,15 @@ func specEgress(e *imanifest.Egress) *vm.Egress {
 		}
 		return out
 	}
+	allow := reaches(e.Allow)
+	if egress.Reach(e.Reach) != egress.ReachRules {
+		allow = append(allow, vm.Reach{Host: "*"}, vm.Reach{Host: "0.0.0.0/0"}, vm.Reach{Host: "::/0"})
+	}
 	names := make([]string, 0, len(e.Secrets))
 	for _, s := range e.Secrets {
 		names = append(names, s.Name)
 	}
-	return &vm.Egress{Allow: reaches(e.Allow), Deny: reaches(e.Deny), Secrets: names}
+	return &vm.Egress{Allow: allow, Deny: reaches(e.Deny), Secrets: names}
 }
 
 // guestSecretsFile places the guest's tokens at GuestSecretsPath; a token

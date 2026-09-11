@@ -4,12 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"os/exec"
 	"runtime"
 
 	"github.com/shazow/virtle/backend"
-	"github.com/shazow/virtle/internal/diskimage"
 	imanifest "github.com/shazow/virtle/internal/manifest"
 	"github.com/shazow/virtle/internal/vmmhost"
 )
@@ -39,9 +37,9 @@ func (b *Backend) start(ctx context.Context, mf *imanifest.Manifest, ephemeralSt
 		Console:          cfg.Console == imanifest.KernelSerialPrint,
 		ConsoleOutput:    b.consoleOutput(),
 		Logger:           logger,
-		Networks:         networkStatuses(cfg),
+		Networks:         vmmhost.NetworkStatuses(cfg.Networks),
 		Prepare: func(context.Context) (func() error, error) {
-			return nil, createDisks(cfg.Disks, logger)
+			return nil, vmmhost.CreateDisks(cfg.Disks, logger)
 		},
 		Command: func(socket string) *exec.Cmd {
 			return exec.Command(cfg.Binary, "--api-sock", socket)
@@ -60,24 +58,6 @@ func (b *Backend) start(ctx context.Context, mf *imanifest.Manifest, ephemeralSt
 		return nil, err
 	}
 	return &Machine{m}, nil
-}
-
-// createDisks formats the images vm.Disk.Size asked for before launch, as
-// QEMU does; existing images are kept.
-func createDisks(disks []imanifest.RawDisk, logger *slog.Logger) error {
-	for _, disk := range disks {
-		if !disk.Create {
-			continue
-		}
-		created, err := diskimage.Ensure(diskimage.Image{Path: disk.Path, Size: disk.SizeMiB.Bytes().Int64(), Label: disk.Label})
-		if err != nil {
-			return err
-		}
-		if created {
-			logger.Info("created disk image", "path", disk.Path, "size_mib", disk.SizeMiB)
-		}
-	}
-	return nil
 }
 
 // Shutdown asks the guest to stop and waits for the VMM to exit, killing it

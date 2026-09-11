@@ -20,6 +20,7 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/jessevdk/go-flags"
 	"github.com/shazow/virtle/backend"
+	"github.com/shazow/virtle/backend/cloudhypervisor"
 	"github.com/shazow/virtle/backend/firecracker"
 	"github.com/shazow/virtle/backend/qemu"
 	qemusession "github.com/shazow/virtle/backend/qemu/session"
@@ -111,6 +112,9 @@ func runLaunch(options *Options) error {
 		b.ConsoleOutput = os.Stderr
 		opts.Hooks = qemusession.Hooks()
 	case *firecracker.Backend:
+		b.Logger = rootLogger
+		b.ConsoleOutput = os.Stderr
+	case *cloudhypervisor.Backend:
 		b.Logger = rootLogger
 		b.ConsoleOutput = os.Stderr
 	}

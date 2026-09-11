@@ -37,6 +37,12 @@ type Launch struct {
 	Logger           *slog.Logger        // lifecycle logs; nil discards them
 	Networks         []backend.NetworkStatus
 
+	// ConsoleTerminal hands the VMM a pseudo-terminal as its standard input
+	// and output instead of pipes, for a VMM that reads console input only
+	// from a terminal (Cloud Hypervisor). Output still reaches ConsoleOutput
+	// and Machine.Console; the VMM's stderr stays a pipe.
+	ConsoleTerminal bool
+
 	// Command returns the VMM command serving its API on socket. Start sets
 	// its working directory, process group, and standard streams.
 	Command func(socket string) *exec.Cmd
@@ -71,7 +77,9 @@ type Machine struct {
 	ephemeralState  string // temporary state directory removed on exit, or ""
 	shutdownTimeout time.Duration
 	diagnostics     *DiagnosticWriter
-	console         *console.Hub // serial console fan-out; nil when the console is off
+	console         *console.Hub  // serial console fan-out; nil when the console is off
+	terminal        *os.File      // master of the VMM's pseudo-terminal; nil when its console rides pipes
+	consoleDone     chan struct{} // closes once the terminal's last output reached the hub
 	graceful        func(ctx context.Context, socket string) error
 	cleanup         func() error // Prepare's cleanup, or nil
 
@@ -178,6 +186,7 @@ func Start(ctx context.Context, l Launch) (*Machine, error) {
 	m := newMachine(l, socket, lock, dir, cleanup)
 	cmd.Stdout = io.Discard
 	cmd.Stderr = m.diagnostics
+	var slave *os.File // the VMM's end of its pseudo-terminal, until it holds its own
 	if l.Console {
 		// The guest's serial port rides the VMM's standard streams: the hub
 		// prints it, retains it, and serves Machine.Console sessions. The
@@ -190,17 +199,37 @@ func Start(ctx context.Context, l Launch) (*Machine, error) {
 		}
 		m.console = hub
 		cmd.Stdin, cmd.Stdout, cmd.Stderr = hub.Stdin(), hub, io.MultiWriter(m.diagnostics, serialized)
+		if l.ConsoleTerminal {
+			m.terminal, slave, err = openTerminal()
+			if err != nil {
+				_ = hub.Close()
+				rollback()
+				return nil, err
+			}
+			m.consoleDone = make(chan struct{})
+			cmd.Stdin, cmd.Stdout = slave, slave
+		}
 	}
 	logger.Info("starting "+l.Name, "binary", cmd.Args[0], "api_socket", socket)
 	m.process, err = (&executor.Runner{Logger: logger}).Start(cmd)
+	if slave != nil {
+		// Only the VMM's descriptors keep the terminal open now, so its exit
+		// ends the master's reads.
+		_ = slave.Close()
+	}
 	if err != nil {
 		if m.console != nil {
 			_ = m.console.Close()
 		}
+		if m.terminal != nil {
+			_ = m.terminal.Close()
+		}
 		rollback()
 		return nil, err
 	}
-	if m.console != nil {
+	if m.terminal != nil {
+		m.serveTerminal()
+	} else if m.console != nil {
 		m.console.Started()
 	}
 	// The graceful path is the VMM's API, never SIGTERM: Stop only ever
@@ -364,6 +393,16 @@ func (m *Machine) reap() {
 		cleanupErr = m.cleanup() // helpers stop while the state lock is still held
 	}
 	cleanupErr = errors.Join(cleanupErr, m.control.Close(), os.RemoveAll(m.runtimeDir), m.lock.Close())
+	if m.terminal != nil {
+		// The VMM's descriptors are gone: let the last of its output reach
+		// the hub before the console closes, bounded in case something it
+		// spawned inherited the terminal.
+		select {
+		case <-m.consoleDone:
+		case <-time.After(killWaitTimeout):
+		}
+		cleanupErr = errors.Join(cleanupErr, m.terminal.Close())
+	}
 	if m.console != nil {
 		cleanupErr = errors.Join(cleanupErr, m.console.Close())
 	}
@@ -379,6 +418,20 @@ func (m *Machine) reap() {
 	close(m.stopped)
 	m.control.WaitLifecycle() // as QEMU: a slow status client cannot hold up done
 	close(m.done)
+}
+
+// serveTerminal copies the guest's console between the pseudo-terminal and
+// the hub: output to the hub, and so to ConsoleOutput and attached Terms;
+// Term input to the VMM. The output copier ends once the VMM's side of the
+// terminal is gone, the input copier once the hub closes its pipe.
+func (m *Machine) serveTerminal() {
+	go func() {
+		defer close(m.consoleDone)
+		_, _ = io.Copy(m.console, m.terminal)
+	}()
+	go func() {
+		_, _ = io.Copy(m.terminal, m.console.Stdin())
+	}()
 }
 
 // Done closes after the machine exits and its runtime state is released.

@@ -3,6 +3,7 @@
 package cloudhypervisor
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -21,6 +22,7 @@ import (
 	"syscall"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/shazow/virtle/backend"
 	"github.com/shazow/virtle/backend/backendtest"
@@ -70,6 +72,11 @@ func fakeVMM(mode string) {
 		os.Exit(0)
 	}
 	socket := strings.TrimPrefix(os.Args[2], "path=")
+	// Like the real VMM, take console input only from a terminal; echo it,
+	// so a test can see its keystrokes cross the pseudo-terminal both ways.
+	if stdinIsTerminal() {
+		go func() { _, _ = io.Copy(os.Stdout, os.Stdin) }()
+	}
 	listener, err := net.Listen("unix", socket)
 	if err != nil {
 		panic(err)
@@ -518,9 +525,19 @@ func TestCreatesMissingDiskImages(t *testing.T) {
 	}
 }
 
+// stdinIsTerminal reports whether the fake VMM's standard input is a
+// terminal, the only kind of input the real one reads.
+func stdinIsTerminal() bool {
+	var termios syscall.Termios
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, 0, syscall.TCGETS, uintptr(unsafe.Pointer(&termios)))
+	return errno == 0
+}
+
 // TestConsoleFollowsTheMachine covers backend.ConsoleProvider on the fake
-// VMM: a print console can be attached and ends when the machine exits; no
-// console means errors.ErrUnsupported.
+// VMM: a print console can be attached, what is typed into it reaches the
+// VMM through the pseudo-terminal it insists on (the fake echoes it), the
+// console ends when the machine exits, and no console means
+// errors.ErrUnsupported.
 func TestConsoleFollowsTheMachine(t *testing.T) {
 	b, spec := helperBackend(t, "normal")
 	b.Console, b.ConsoleOutput = ConsolePrint, io.Discard
@@ -536,6 +553,22 @@ func TestConsoleFollowsTheMachine(t *testing.T) {
 	defer term.Close()
 	if err := term.Resize(80, 24); !errors.Is(err, errors.ErrUnsupported) {
 		t.Fatalf("Resize = %v, want ErrUnsupported", err)
+	}
+	if _, err := io.WriteString(term, "ping\n"); err != nil {
+		t.Fatalf("write to console: %v", err)
+	}
+	echoed := make(chan string, 1)
+	go func() {
+		line, err := bufio.NewReader(term).ReadString('\n')
+		echoed <- line + fmt.Sprint(err)
+	}()
+	select {
+	case line := <-echoed:
+		if line != "ping\n<nil>" {
+			t.Fatalf("console echoed %q", line)
+		}
+	case <-time.After(testTimeout):
+		t.Fatal("keystrokes did not come back through the terminal")
 	}
 	if err := m.Kill(); err != nil {
 		t.Fatal(err)

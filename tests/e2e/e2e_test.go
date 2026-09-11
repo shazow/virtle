@@ -20,6 +20,7 @@ import (
 
 	"github.com/shazow/virtle/backend"
 	"github.com/shazow/virtle/backend/backendtest"
+	"github.com/shazow/virtle/backend/cloudhypervisor"
 	"github.com/shazow/virtle/backend/firecracker"
 	"github.com/shazow/virtle/backend/qemu"
 	"github.com/shazow/virtle/manifest"
@@ -31,8 +32,11 @@ const (
 	// readyLine is what the fixture's init prints once its workload ran.
 	readyLine = "VIRTLE_READY:42"
 	// fixtureCmdline mirrors the fixture manifests' kernel.params; virtle adds
-	// the console and reboot/panic parameters itself on both backends.
-	fixtureCmdline = "pci=off rdinit=/init quiet i8042.noaux i8042.nomux i8042.dumbkbd i8042.nopnp"
+	// the console and reboot/panic parameters itself on every backend. The
+	// MMIO loaders skip the PCI probe; Cloud Hypervisor's devices are PCI, and
+	// so are virtio-fs shares on QEMU, hence pciCmdline.
+	pciCmdline     = "rdinit=/init quiet i8042.noaux i8042.nomux i8042.dumbkbd i8042.nopnp"
+	fixtureCmdline = "pci=off " + pciCmdline
 
 	readyTimeout = 30 * time.Second
 	testMemory   = 128 * units.Mebibyte
@@ -41,20 +45,22 @@ const (
 // fixture locates the fast fixture and the VMM binaries from the
 // environment the e2e-api flake check sets.
 type fixture struct {
-	dir         string
-	qemu        string
-	firecracker string
+	dir             string
+	qemu            string
+	firecracker     string
+	cloudHypervisor string
 }
 
 func loadFixture(t *testing.T) fixture {
 	t.Helper()
 	f := fixture{
-		dir:         os.Getenv("VIRTLE_E2E_FIXTURE"),
-		qemu:        os.Getenv("VIRTLE_E2E_QEMU"),
-		firecracker: os.Getenv("VIRTLE_E2E_FIRECRACKER"),
+		dir:             os.Getenv("VIRTLE_E2E_FIXTURE"),
+		qemu:            os.Getenv("VIRTLE_E2E_QEMU"),
+		firecracker:     os.Getenv("VIRTLE_E2E_FIRECRACKER"),
+		cloudHypervisor: os.Getenv("VIRTLE_E2E_CLOUD_HYPERVISOR"),
 	}
-	if f.dir == "" || f.qemu == "" || f.firecracker == "" {
-		skipOrFail(t, "requires VIRTLE_E2E_FIXTURE, VIRTLE_E2E_QEMU and VIRTLE_E2E_FIRECRACKER (Linux x86_64 with KVM)")
+	if f.dir == "" || f.qemu == "" || f.firecracker == "" || f.cloudHypervisor == "" {
+		skipOrFail(t, "requires VIRTLE_E2E_FIXTURE, VIRTLE_E2E_QEMU, VIRTLE_E2E_FIRECRACKER and VIRTLE_E2E_CLOUD_HYPERVISOR (Linux x86_64 with KVM)")
 	}
 	for _, name := range []string{"vmlinux", "bzImage", "initrd", "rootfs.ext4"} {
 		if _, err := os.Stat(filepath.Join(f.dir, name)); err != nil {
@@ -78,53 +84,77 @@ func skipOrFail(t *testing.T, reason string) {
 func (f fixture) path(name string) string { return filepath.Join(f.dir, name) }
 
 // guest is one backend under test: how to construct it with its console
-// wired to w, and the baseline Spec that boots the fixture on it.
+// wired to w, the kernel command line the fixture boots with on it, and the
+// baseline Spec that boots the fixture on it. shareBackend, when set,
+// constructs the backend for a virtio-fs share (QEMU's microvm needs ACPI
+// for its PCIe bus, which the plain guest turns off); nil means the backend
+// has no shares.
 type guest struct {
-	name       string
-	newBackend func(console io.Writer) backend.Backend
-	spec       func(t *testing.T) *vm.Spec
+	name         string
+	newBackend   func(console io.Writer) backend.Backend
+	shareBackend func(console io.Writer) backend.Backend
+	cmdline      string
+	spec         func(t *testing.T) *vm.Spec
 }
 
 func (f fixture) guests() []guest {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	spec := func(kernel string) func(t *testing.T) *vm.Spec {
+	spec := func(kernel, cmdline string) func(t *testing.T) *vm.Spec {
 		return func(t *testing.T) *vm.Spec {
 			return &vm.Spec{
 				CPUs:   1,
 				Memory: testMemory,
-				Kernel: vm.Kernel{Path: kernel, Initrd: f.path("initrd"), Cmdline: fixtureCmdline},
+				Kernel: vm.Kernel{Path: kernel, Initrd: f.path("initrd"), Cmdline: cmdline},
 				Dir:    t.TempDir(),
 			}
 		}
 	}
+	// QEMU's microvm with everything the fixture does not need turned off;
+	// acpi is the caller's, since the PCIe bus a share rides on needs it.
+	qemuBackend := func(acpi string) func(console io.Writer) backend.Backend {
+		return func(console io.Writer) backend.Backend {
+			accel := qemu.AccelKVM
+			options := map[string]string{
+				"acpi": acpi, "pit": "off", "pic": "off",
+				"rtc": "off", "usb": "off", "x-option-roms": "off",
+			}
+			if os.Getenv("VIRTLE_E2E_ACCEL") == "tcg" {
+				// Without KVM there is no kvm-clock, so the guest needs
+				// the PIT to calibrate its clock. Slow, for development
+				// on hosts without KVM; CI runs with KVM.
+				accel = qemu.AccelTCG
+				options = map[string]string{"acpi": acpi, "usb": "off", "x-option-roms": "off"}
+			}
+			if acpi == "off" {
+				options["pcie"] = "off" // with a share, virtle turns it on itself
+			}
+			return &qemu.Backend{
+				Binary:         f.qemu,
+				MachineType:    "microvm",
+				MachineOptions: options,
+				Accel:          accel,
+				Console:        qemu.ConsolePrint,
+				ConsoleOutput:  console,
+				DisableVSock:   true,
+				Logger:         logger,
+			}
+		}
+	}
+	cloudHypervisor := func(console io.Writer) backend.Backend {
+		return &cloudhypervisor.Backend{
+			Binary:        f.cloudHypervisor,
+			Console:       cloudhypervisor.ConsolePrint,
+			ConsoleOutput: console,
+			Logger:        logger,
+		}
+	}
 	return []guest{
 		{
-			name: "qemu",
-			newBackend: func(console io.Writer) backend.Backend {
-				accel := qemu.AccelKVM
-				options := map[string]string{
-					"acpi": "off", "pcie": "off", "pit": "off", "pic": "off",
-					"rtc": "off", "usb": "off", "x-option-roms": "off",
-				}
-				if os.Getenv("VIRTLE_E2E_ACCEL") == "tcg" {
-					// Without KVM there is no kvm-clock, so the guest needs
-					// the PIT to calibrate its clock. Slow, for development
-					// on hosts without KVM; CI runs with KVM.
-					accel = qemu.AccelTCG
-					options = map[string]string{"acpi": "off", "pcie": "off", "usb": "off", "x-option-roms": "off"}
-				}
-				return &qemu.Backend{
-					Binary:         f.qemu,
-					MachineType:    "microvm",
-					MachineOptions: options,
-					Accel:          accel,
-					Console:        qemu.ConsolePrint,
-					ConsoleOutput:  console,
-					DisableVSock:   true,
-					Logger:         logger,
-				}
-			},
-			spec: spec(f.path("bzImage")),
+			name:         "qemu",
+			newBackend:   qemuBackend("off"),
+			shareBackend: qemuBackend("on"),
+			cmdline:      fixtureCmdline,
+			spec:         spec(f.path("bzImage"), fixtureCmdline),
 		},
 		{
 			name: "firecracker",
@@ -136,7 +166,15 @@ func (f fixture) guests() []guest {
 					Logger:        logger,
 				}
 			},
-			spec: spec(f.path("vmlinux")),
+			cmdline: fixtureCmdline,
+			spec:    spec(f.path("vmlinux"), fixtureCmdline),
+		},
+		{
+			name:         "cloud-hypervisor",
+			newBackend:   cloudHypervisor,
+			shareBackend: cloudHypervisor,
+			cmdline:      pciCmdline,
+			spec:         spec(f.path("vmlinux"), pciCmdline),
 		},
 	}
 }
@@ -292,7 +330,7 @@ func TestRootDisk(t *testing.T) {
 	rootDisk := func(t *testing.T, g guest) *vm.Spec {
 		spec := g.spec(t)
 		spec.Kernel.Initrd = ""
-		spec.Kernel.Cmdline = strings.Replace(fixtureCmdline, "rdinit=/init", "init=/init", 1)
+		spec.Kernel.Cmdline = strings.Replace(g.cmdline, "rdinit=/init", "init=/init", 1)
 		spec.Disks = []vm.Disk{{Path: f.path("rootfs.ext4"), Format: "raw", ReadOnly: true, GuestPath: "/"}}
 		return spec
 	}
@@ -315,11 +353,12 @@ func TestRootDisk(t *testing.T) {
 	}
 }
 
-// manifest renders the manifest virtle launch would use for backend name:
-// the fixture's CLI settings with the raw root image mounted at "/" instead
-// of the initrd, working in dir.
-func (f fixture) manifest(name, dir string) string {
-	params := strings.Fields(strings.Replace(fixtureCmdline, "rdinit=/init", "init=/init", 1))
+// manifest renders the manifest virtle launch would use for guest g: the
+// fixture's CLI settings with the raw root image mounted at "/" instead of
+// the initrd, working in dir.
+func (f fixture) manifest(g guest, dir string) string {
+	name := g.name
+	params := strings.Fields(strings.Replace(g.cmdline, "rdinit=/init", "init=/init", 1))
 	for i, p := range params {
 		params[i] = fmt.Sprintf("%q", p)
 	}
@@ -338,6 +377,8 @@ func (f fixture) manifest(name, dir string) string {
 		b.WriteString(`machine_options = { accel = "kvm", acpi = "off", pcie = "off", pit = "off", pic = "off", rtc = "off", usb = "off", x-option-roms = "off" }` + "\n[vsock]\nenabled = false\n")
 	case "firecracker":
 		fmt.Fprintf(&b, "[firecracker]\nbinary = %q\n", f.firecracker)
+	case "cloud-hypervisor":
+		fmt.Fprintf(&b, "[cloud-hypervisor]\nbinary = %q\n", f.cloudHypervisor)
 	}
 	return b.String()
 }
@@ -350,7 +391,7 @@ func TestManifestRootDisk(t *testing.T) {
 	f := loadFixture(t)
 	for _, g := range f.guests() {
 		t.Run(g.name, func(t *testing.T) {
-			spec, b, err := manifest.Load(strings.NewReader(f.manifest(g.name, t.TempDir())))
+			spec, b, err := manifest.Load(strings.NewReader(f.manifest(g, t.TempDir())))
 			if err != nil {
 				t.Fatalf("load manifest: %v", err)
 			}
@@ -468,6 +509,55 @@ func TestDirContract(t *testing.T) {
 			waitExit(t, m)
 			if _, err := os.Stat(filepath.Join(spec.Dir, ".virtle", "virtle.lock")); err != nil {
 				t.Fatalf("state directory did not persist under Dir: %v", err)
+			}
+		})
+	}
+}
+
+// TestShares covers vm.Spec.Shares on real machines: virtle starts a
+// virtiofsd for the share, the guest mounts it by tag and reads the file the
+// host put there, and the daemon and its socket go away with the machine.
+// A backend without shares says so at Start instead of dropping them.
+func TestShares(t *testing.T) {
+	f := loadFixture(t)
+	if _, err := exec.LookPath("virtiofsd"); err != nil {
+		skipOrFail(t, "virtiofsd is required on PATH")
+	}
+	for _, g := range f.guests() {
+		t.Run(g.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "hello"), []byte("hello\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			spec := g.spec(t)
+			spec.Shares = []vm.Share{{Tag: "share", HostPath: dir, GuestPath: "/mnt"}}
+			if g.shareBackend == nil {
+				m, err := g.newBackend(io.Discard).Start(context.Background(), spec)
+				if err == nil {
+					_ = m.Kill()
+					t.Fatal("a backend without shares accepted one")
+				}
+				if !errors.Is(err, errors.ErrUnsupported) {
+					t.Fatalf("error = %v, want it to wrap errors.ErrUnsupported", err)
+				}
+				return
+			}
+			// The share is a PCI device on every backend, and the guest
+			// mounts it when told its tag.
+			spec.Kernel.Cmdline = pciCmdline + " virtle.share=share"
+			shared := g
+			shared.newBackend = g.shareBackend
+			m, log := startReady(t, shared, spec)
+			if !strings.Contains(log.String(), "VIRTLE_SHARE:hello") {
+				t.Fatalf("guest did not read the share\n--- console ---\n%s", log.String())
+			}
+			if err := m.Kill(); err != nil {
+				t.Fatalf("kill: %v", err)
+			}
+			waitExit(t, m)
+			socket := filepath.Join(spec.Dir, ".virtle", "share.sock")
+			if _, err := os.Lstat(socket); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("share socket %s after exit: %v", socket, err)
 			}
 		})
 	}

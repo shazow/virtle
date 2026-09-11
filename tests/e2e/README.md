@@ -49,7 +49,9 @@ built in. Modules are disabled. Gzip replaces tinyconfig's XZ kernel
 compression to reduce QEMU's decompression cost. The same kernel build
 supplies ELF `vmlinux` to Firecracker and Cloud Hypervisor and `bzImage` to
 QEMU; the formats differ because their loaders differ. The MMIO loaders boot
-with `pci=off`.
+with `pci=off acpi=off`: the ACPI is there for Cloud Hypervisor and for the
+QEMU share, and on Firecracker's hardware-reduced tables the Ctrl-Alt-Del
+shutdown stopped ending the VMM.
 
 Two package outputs keep capability scope explicit:
 

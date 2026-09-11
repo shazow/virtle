@@ -36,7 +36,6 @@ source = "."
 target = "/workspace"
 read_only = true
 virtiofs.socket = "src.sock"
-virtiofs.bin = "virtiofsd"
 
 [[mounts]]
 type = "image"

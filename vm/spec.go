@@ -68,7 +68,7 @@ type Share struct {
 	Tag       string // mount tag visible in the guest
 	HostPath  string
 	GuestPath string
-	ReadOnly  bool // the daemon refuses guest writes; a share whose daemon virtle does not start cannot be made read-only and fails Start
+	ReadOnly  bool // the virtiofsd virtle starts refuses guest writes (--readonly); a share served by another daemon relies on that daemon
 }
 
 // Disk is a block device or volume image attached to the guest.

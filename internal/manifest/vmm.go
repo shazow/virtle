@@ -161,11 +161,11 @@ func (d Document) rejectQEMUOnly(backend string) error {
 		return unsupportedBy(backend, "manifest.vsock: %s guests have no vsock device", backend)
 	case !unconfigured(d.QEMU, seeded.QEMU, defaults.QEMU):
 		return unsupportedBy(backend, "manifest.qemu configures QEMU; remove it or set backend = %q", BackendQEMU)
-	case len(d.WriteFiles) != 0 || d.Workspace != (WorkspaceInput{}):
-		return unsupportedBy(backend, "manifest.write_files and manifest.workspace need a guest control transport, which %s does not have yet", backend)
+	case len(d.WriteFiles) != 0 || d.Workspace.MountCWD:
+		return unsupportedBy(backend, "manifest.write_files and manifest.workspace.mount_cwd need a guest control transport, which %s does not have yet", backend)
 	case len(d.Notifications.Exec) != 0 || len(d.Notifications.States) != 0:
 		return unsupportedBy(backend, "manifest.notifications")
-	case d.Balloon != nil || d.Hotplug.Len() != 0:
+	case (d.Balloon != nil && d.Balloon.Enabled) || d.Hotplug.Len() != 0:
 		return unsupportedBy(backend, "manifest.balloon and manifest.hotplug")
 	case d.Graphics != nil && d.Graphics.Backend != "" && d.Graphics.Backend != defaultGraphicsBackend:
 		return unsupportedBy(backend, "manifest.graphics")
@@ -268,6 +268,9 @@ func (d Document) resolveVMM(p vmmProfile, in vmmInput) (*Manifest, *VMM, error)
 		Identity:    Identity{HostName: d.HostName},
 		Paths:       Paths{WorkingDir: d.WorkingDir},
 		Persistence: Persistence{BaseDir: d.StateDir, StateDir: d.StateDir},
+		// Workspace directories are template data for the [[run]] helpers
+		// here; mounting the launch directory needs a guest transport.
+		Workspace: resolveWorkspace(d.Workspace),
 	}
 	m.Paths.LockPath = filepath.Join(m.Persistence.StateDir, m.Identity.HostName+".lock")
 	m.Paths.RuntimeDir = RuntimeDir{Mode: RuntimeDirPath, Path: m.Persistence.StateDir}

@@ -177,35 +177,39 @@ func TestCloudHypervisorKernelParams(t *testing.T) {
 }
 
 // TestCloudHypervisorReadOnlyShares covers read_only on a virtiofs mount:
-// the daemon virtle starts gets --readonly, and a share whose daemon virtle
-// does not start, or starts with the mount's own arguments lacking the
-// flag, is rejected rather than attached writable.
+// every daemon virtle starts gets --readonly, whatever its arguments and
+// without doubling it, and a share served by another daemon is left to that
+// daemon.
 func TestCloudHypervisorReadOnlyShares(t *testing.T) {
 	const share = "working_dir = '/work'\n[kernel]\npath = 'vmlinux'\n[[mounts]]\ntype = 'virtiofs'\ntag = 'src'\nsource = '/src'\nread_only = true\n"
-	m, err := decodeCloudHypervisor(t, share).Manifest()
-	if err != nil {
-		t.Fatal(err)
-	}
-	runs, err := m.ResolvedRuns(0)
-	if err != nil || len(runs) != 1 {
-		t.Fatalf("runs = %+v, %v", runs, err)
-	}
-	if want := []string{"virtiofsd", "--socket-path=/work/.virtle/src.sock", "--shared-dir=/src", "--tag=src", "--readonly"}; !reflect.DeepEqual(runs[0].Exec, want) {
-		t.Fatalf("virtiofsd argv = %q, want %q", runs[0].Exec, want)
-	}
-	if _, err := decodeCloudHypervisor(t, share+"virtiofs.args = ['--socket-path={{.Socket}}', '--shared-dir={{.MountSource}}', '--tag={{.MountTag}}', '--readonly']\n").Manifest(); err != nil {
-		t.Fatalf("own arguments with the flag: %v", err)
-	}
-	for name, tc := range map[string]struct{ extra, want string }{
-		"socket served elsewhere":        {"virtiofs.socket = '/run/external.sock'\n", "run the daemon with --readonly"},
-		"own arguments without the flag": {"virtiofs.args = ['--socket-path={{.Socket}}', '--shared-dir={{.MountSource}}']\n", "must include --readonly"},
+	for name, tc := range map[string]struct {
+		extra string
+		want  []string
+	}{
+		"default arguments":              {"", []string{"virtiofsd", "--socket-path=/work/.virtle/src.sock", "--shared-dir=/src", "--tag=src", "--readonly"}},
+		"own arguments without the flag": {"virtiofs.args = ['--socket-path={{.Socket}}', '--shared-dir={{.MountSource}}']\n", []string{"virtiofsd", "--socket-path=/work/.virtle/src.sock", "--shared-dir=/src", "--readonly"}},
+		"own arguments with the flag":    {"virtiofs.args = ['--readonly', '--socket-path={{.Socket}}']\n", []string{"virtiofsd", "--readonly", "--socket-path=/work/.virtle/src.sock"}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, err := decodeCloudHypervisor(t, share+tc.extra).Manifest()
-			if err == nil || !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("error = %v, want %q", err, tc.want)
+			m, err := decodeCloudHypervisor(t, share+tc.extra).Manifest()
+			if err != nil {
+				t.Fatal(err)
+			}
+			runs, err := m.ResolvedRuns(0)
+			if err != nil || len(runs) != 1 {
+				t.Fatalf("runs = %+v, %v", runs, err)
+			}
+			if !reflect.DeepEqual(runs[0].Exec, tc.want) {
+				t.Fatalf("virtiofsd argv = %q, want %q", runs[0].Exec, tc.want)
 			}
 		})
+	}
+	m, err := decodeCloudHypervisor(t, share+"virtiofs.socket = '/run/external.sock'\n").Manifest()
+	if err != nil {
+		t.Fatalf("socket served elsewhere: %v", err)
+	}
+	if runs, err := m.ResolvedRuns(0); err != nil || len(runs) != 0 {
+		t.Fatalf("runs for a socket served elsewhere = %+v, %v", runs, err)
 	}
 }
 

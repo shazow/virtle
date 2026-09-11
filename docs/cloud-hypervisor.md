@@ -32,6 +32,8 @@ Everything the [Firecracker backend](firecracker.md) does, the same way:
   `backend.StatusReporter`; over the control socket, `virtle status` and
   `virtle rpc status|wait|kill|shutdown`.
 - A host TAP NIC (`[[networks]] type = "tap"` / `cloudhypervisor.TAP`).
+- `[[run]]` host helpers, started before the VMM and stopped after it exits,
+  with the same templates as on QEMU.
 - The same state directory and VM-name lock as the other backends.
 
 And what Firecracker cannot do:
@@ -122,7 +124,7 @@ features it cannot honor fail `Start` with an error wrapping
 | 9p shares, qcow2, disk cache/serial options | virtio-fs shares and raw images only. |
 | Interactive console (`serial = "console"`) | Only `off` and `print`. |
 | Suspend/resume, balloon, hotplug | Capability interfaces are not implemented. |
-| `[run]` helpers, `[notifications]`, `[qemu]`, `[firecracker]` settings | Other backends'. |
+| `[notifications]`, `[qemu]`, `[firecracker]` settings | Other backends'. |
 | Landlock, cgroups, namespaces | Cloud Hypervisor runs directly with its default seccomp filter; provide host isolation separately for multi-tenant use. |
 
 ## Parity with QEMU and Firecracker
@@ -144,7 +146,8 @@ capability but virtle does not wire it yet, what would close the gap:
 | Suspend and resume | yes | no (the VMM has a snapshot API) | no (`vm.snapshot` and `vm.restore` exist) |
 | Memory resize | balloon | no | no (a balloon, or `hotplug_size` with `vm.resize`, exist) |
 | Hotplug of disks, shares, forwards | yes, with ports reserved at boot | no | no (`vm.add-disk` and `vm.add-fs` exist and need no reserved ports) |
-| `[[run]]` helpers, `[notifications]` | yes | no | no |
+| `[[run]]` host helpers | yes | yes | yes |
+| `[notifications]` hooks | yes | no | no |
 | Graphics, CPU model, machine type, extra VMM arguments | yes | no | no |
 | Accelerators and hosts | KVM, HVF, TCG; Linux and macOS | KVM; Linux x86_64 and aarch64 | KVM; Linux x86_64 and aarch64 |
 | VMM sandboxing | optional seccomp | none (virtle does not run the jailer) | the VMM's own seccomp filter |

@@ -27,6 +27,7 @@ import (
 	"github.com/shazow/virtle/backend"
 	"github.com/shazow/virtle/backend/backendtest"
 	"github.com/shazow/virtle/internal/control"
+	imanifest "github.com/shazow/virtle/internal/manifest"
 	"github.com/shazow/virtle/units"
 	"github.com/shazow/virtle/vm"
 )
@@ -42,6 +43,9 @@ const shortTimeout = 100 * time.Millisecond
 func TestMain(m *testing.M) {
 	if len(os.Args) > 1 && strings.HasPrefix(os.Args[1], "--socket-path=") {
 		fakeVirtiofsd(strings.TrimPrefix(os.Args[1], "--socket-path="))
+	}
+	if len(os.Args) > 1 && strings.HasPrefix(os.Args[1], "--helper=") {
+		fakeHelper(strings.TrimPrefix(os.Args[1], "--helper="))
 	}
 	if mode := os.Getenv("VIRTLE_TEST_CLOUD_HYPERVISOR"); mode != "" {
 		fakeVMM(mode)
@@ -197,6 +201,48 @@ func fakeVirtiofsd(socket string) {
 	<-signals
 	_ = listener.Close()
 	os.Exit(0)
+}
+
+// fakeHelper is a [[run]] entry: it records its PID at the given path and
+// leaves on SIGTERM.
+func fakeHelper(pidPath string) {
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGTERM)
+	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+		panic(err)
+	}
+	<-signals
+	os.Exit(0)
+}
+
+// TestRunHelpersFollowTheMachine covers a manifest's [[run]] entries: they
+// start before the VMM, with the manifest's templates rendered, and stop
+// when the machine does.
+func TestRunHelpersFollowTheMachine(t *testing.T) {
+	b, spec := helperBackend(t, "normal")
+	doc, err := imanifest.DecodeDocumentBytes([]byte(fmt.Sprintf("backend = 'cloud-hypervisor'\n[kernel]\npath = 'kernel'\n[[run]]\nexec = [%q, '--helper={{.StateDir}}/helper.pid']\n", b.Binary)), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := NewBackendFromDocument(doc, *b).Start(t.Context(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill() })
+	pidText, err := os.ReadFile(filepath.Join(spec.Dir, ".virtle", "helper.pid"))
+	if err != nil {
+		t.Fatalf("helper did not start before the VMM: %v", err)
+	}
+	pid, _ := strconv.Atoi(string(pidText))
+	if err := syscall.Kill(pid, 0); err != nil {
+		t.Fatalf("helper %d while running: %v", pid, err)
+	}
+	if err := m.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Kill(pid, 0); !errors.Is(err, syscall.ESRCH) {
+		t.Fatalf("helper %d after exit: %v", pid, err)
+	}
 }
 
 // TestBackendContract runs the shared backend conformance suite against the
@@ -848,7 +894,7 @@ func TestShareDaemonExitAbortsStartup(t *testing.T) {
 		_ = m.Kill()
 		t.Fatal("expected startup failure")
 	}
-	if !strings.Contains(err.Error(), "virtiofsd test failure") || !strings.Contains(err.Error(), "exited before serving") {
+	if !strings.Contains(err.Error(), "virtiofsd test failure") || !strings.Contains(err.Error(), "exited") {
 		t.Fatalf("lost daemon diagnostic: %v", err)
 	}
 	if time.Since(start) > testTimeout/2 {

@@ -18,8 +18,9 @@ import (
 var ctrlAltDelSupported = runtime.GOARCH == "amd64"
 
 // Machine is a Firecracker microVM started by Backend: one VMM process, the
-// private directory holding its API socket, the control socket, and the
-// VM-name lock shared with QEMU. Done, Err, Wait, Kill, Status, Console, and
+// manifest's helpers, the private directory holding its API socket, the
+// control socket, and the VM-name lock shared with the other backends. Done,
+// Err, Wait, Kill, Status, Console, and
 // RemoteControl are the microVM lifecycle every API-driven VMM shares;
 // Shutdown is Firecracker's.
 type Machine struct{ *vmmhost.Machine }
@@ -39,7 +40,14 @@ func (b *Backend) start(ctx context.Context, mf *imanifest.Manifest, ephemeralSt
 		Logger:           logger,
 		Networks:         vmmhost.NetworkStatuses(cfg.Networks),
 		Prepare: func(context.Context) (func() error, error) {
-			return nil, vmmhost.CreateDisks(cfg.Disks, logger)
+			if err := vmmhost.CreateDisks(cfg.Disks, logger); err != nil {
+				return nil, err
+			}
+			helpers, err := vmmhost.StartHelpers(mf, logger)
+			if err != nil {
+				return nil, err
+			}
+			return helpers.Stop, nil
 		},
 		Command: func(socket string) *exec.Cmd {
 			return exec.Command(cfg.Binary, "--api-sock", socket)

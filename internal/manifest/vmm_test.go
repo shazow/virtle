@@ -25,7 +25,6 @@ var qemuOnlyRejections = []rejectedSetting{
 	{"tap without device", "[[networks]]\ntype = 'tap'", "tap is required"},
 	{"write files", "[[write_files]]\nguest_path = '/etc/motd'\ntext = 'hi'", "write_files"},
 	{"workspace", "[workspace]\nmount_cwd = true", "workspace"},
-	{"run", "[[run]]\nexec = ['true']", "run"},
 	{"notifications", "[notifications]\nexec = ['true']", "notifications"},
 	{"balloon", "[balloon]\nenabled = true", "balloon"},
 	{"hotplug", "[[hotplug.mounts]]\ntype = 'image'\nsource = 'disk.img'\nimage.serial = 'scratch'", "hotplug"},
@@ -46,6 +45,7 @@ var qemuOnlyRejections = []rejectedSetting{
 // microVMAccepted are QEMU defaults spelled out explicitly, and settings
 // both microVM backends honor.
 var microVMAccepted = []struct{ name, toml string }{
+	{"run helper", "[[run]]\nexec = ['true', '{{.StateDir}}']"},
 	{"ssh defaults spelled out", "[ssh]\nuser = 'agent'\nretry_delay = '500ms'"},
 	{"vsock disabled", "[vsock]\nenabled = false"},
 	{"qemu defaults spelled out", "[qemu]\nqmp_socket = 'qmp.sock'\nguest_agent_socket = 'qga.sock'"},

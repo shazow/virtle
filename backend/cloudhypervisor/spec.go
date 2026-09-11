@@ -21,9 +21,9 @@ func (b *Backend) resolveSpec(spec *vm.Spec, stateDir string) (*imanifest.Manife
 		spec = &vm.Spec{}
 	}
 	switch b.Console {
-	case "", ConsoleOff, ConsolePrint:
+	case "", ConsoleOff, ConsolePrint, ConsoleInteractive:
 	default:
-		return nil, fmt.Errorf("cloud-hypervisor: Console %q is not ConsoleOff or ConsolePrint: %w", b.Console, errors.ErrUnsupported)
+		return nil, fmt.Errorf("cloud-hypervisor: Console %q is not ConsoleOff, ConsolePrint, or ConsoleInteractive: %w", b.Console, errors.ErrUnsupported)
 	}
 	doc := imanifest.Document{Backend: imanifest.BackendCloudHypervisor}
 	if b.doc != nil {

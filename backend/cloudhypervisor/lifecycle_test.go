@@ -644,6 +644,40 @@ func TestKillOutlivesConsoleStraggler(t *testing.T) {
 	}
 }
 
+// TestInteractiveConsoleUsesTheTerminal covers ConsoleInteractive: the VMM
+// inherits the process's standard input and stays in its process group, as
+// QEMU's interactive console does, and no vm.Term is served.
+func TestInteractiveConsoleUsesTheTerminal(t *testing.T) {
+	b, spec := helperBackend(t, "normal")
+	b.Console, b.ConsoleOutput = ConsoleInteractive, io.Discard
+	m, err := b.Start(t.Context(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill() })
+	status, _ := m.(backend.StatusReporter).Status(t.Context())
+	ours, err := os.Readlink("/proc/self/fd/0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	theirs, err := os.Readlink(fmt.Sprintf("/proc/%d/fd/0", status.PID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ours != theirs {
+		t.Fatalf("VMM stdin = %s, want ours (%s)", theirs, ours)
+	}
+	if group, _ := syscall.Getpgid(status.PID); group != syscall.Getpgrp() {
+		t.Fatalf("VMM process group = %d, want ours (%d)", group, syscall.Getpgrp())
+	}
+	if _, err := m.(backend.ConsoleProvider).Console(t.Context()); !errors.Is(err, errors.ErrUnsupported) {
+		t.Fatalf("Console on an interactive console = %v, want ErrUnsupported", err)
+	}
+	if err := m.Kill(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestConsoleFollowsTheMachine(t *testing.T) {
 	b, spec := helperBackend(t, "normal")
 	b.Console, b.ConsoleOutput = ConsolePrint, io.Discard

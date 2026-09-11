@@ -29,17 +29,18 @@ func (b *Backend) start(ctx context.Context, mf *imanifest.Manifest, ephemeralSt
 	}
 	var helpers *vmmhost.Helpers
 	m, err := vmmhost.Start(ctx, vmmhost.Launch{
-		Name:             "cloud-hypervisor",
-		RuntimeDirPrefix: "virtle-ch-",
-		Manifest:         mf,
-		EphemeralState:   ephemeralState,
-		StartupTimeout:   cfg.StartupTimeout,
-		ShutdownTimeout:  cfg.ShutdownTimeout,
-		Console:          cfg.Console == imanifest.KernelSerialPrint,
-		ConsoleTerminal:  true, // Cloud Hypervisor reads serial input only from a terminal
-		ConsoleOutput:    b.consoleOutput(),
-		Logger:           logger,
-		Networks:         vmmhost.NetworkStatuses(cfg.Networks),
+		Name:               "cloud-hypervisor",
+		RuntimeDirPrefix:   "virtle-ch-",
+		Manifest:           mf,
+		EphemeralState:     ephemeralState,
+		StartupTimeout:     cfg.StartupTimeout,
+		ShutdownTimeout:    cfg.ShutdownTimeout,
+		Console:            cfg.Console == imanifest.KernelSerialPrint,
+		ConsoleTerminal:    true, // Cloud Hypervisor reads serial input only from a terminal
+		ConsoleInteractive: cfg.Console == imanifest.KernelSerialConsole,
+		ConsoleOutput:      b.consoleOutput(),
+		Logger:             logger,
+		Networks:           vmmhost.NetworkStatuses(cfg.Networks),
 		Prepare: func(context.Context) (func() error, error) {
 			if err := vmmhost.CreateDisks(cfg.Disks, logger); err != nil {
 				return nil, err

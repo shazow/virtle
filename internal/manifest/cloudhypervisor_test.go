@@ -148,6 +148,7 @@ func TestCloudHypervisorRejectsQEMUOnlySettings(t *testing.T) {
 		[]struct{ name, toml string }{
 			{"virtiofs share", "[[mounts]]\ntype = 'virtiofs'\ntag = 'src'\nsource = '/src'"},
 			{"qcow2 image with serial and direct io", "[[mounts]]\ntype = 'image'\nsource = 'disk.qcow2'\nimage.format = 'qcow2'\nimage.serial = 'data'\nimage.direct = true"},
+			{"interactive console", "[kernel]\npath = 'vmlinux'\nserial = 'console'"},
 			{"share with its own daemon", "[[mounts]]\ntype = 'virtiofs'\ntag = 'src'\nsource = '/src'\nvirtiofs.socket = 'src.sock'\nvirtiofs.args = ['--socket-path={{.Socket}}', '--shared-dir={{.MountSource}}']"},
 		})
 }
@@ -230,5 +231,18 @@ func TestCloudHypervisorDiskFormatsAndOptions(t *testing.T) {
 	}
 	if !reflect.DeepEqual(m.CloudHypervisor.Disks, want) {
 		t.Fatalf("disks = %+v, want %+v", m.CloudHypervisor.Disks, want)
+	}
+}
+
+// TestCloudHypervisorInteractiveConsole covers kernel.serial = "console":
+// the resolved console mode is interactive and the guest still gets its
+// console= parameter.
+func TestCloudHypervisorInteractiveConsole(t *testing.T) {
+	m, err := decodeCloudHypervisor(t, "[kernel]\npath = 'vmlinux'\nserial = 'console'\n").Manifest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.CloudHypervisor.Console != KernelSerialConsole || !strings.HasPrefix(m.CloudHypervisor.Kernel.Cmdline, "console=") {
+		t.Fatalf("console = %q, cmdline = %q", m.CloudHypervisor.Console, m.CloudHypervisor.Kernel.Cmdline)
 	}
 }

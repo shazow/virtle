@@ -117,6 +117,7 @@ func TestFirecrackerRejectsQEMUOnlySettings(t *testing.T) {
 		[]rejectedSetting{
 			{"virtiofs mount", "[[mounts]]\ntype = 'virtiofs'\ntag = 'src'\nsource = '/src'", "image mounts"},
 			{"qcow2", "[[mounts]]\ntype = 'image'\nsource = 'disk.qcow2'\nimage.format = 'qcow2'", "raw"},
+			{"interactive console", "[kernel]\nserial = 'console'", "serial"},
 			{"direct io", "[[mounts]]\ntype = 'image'\nsource = 'disk.img'\nimage.direct = true", "direct"},
 			{"disk serial", "[[mounts]]\ntype = 'image'\nsource = 'disk.img'\nimage.serial = 'scratch'", "serial"},
 			{"cloud-hypervisor section", "[cloud-hypervisor]\nbinary = 'ch'", "cloud-hypervisor"},

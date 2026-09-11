@@ -70,11 +70,12 @@ func (d Document) cloudHypervisorManifest(options ResolveOptions) (*Manifest, er
 		return nil, unsupportedBy(BackendCloudHypervisor, "manifest.mounts[%d].type %s; shares are virtiofs mounts", i, kind)
 	}
 	m, vmm, err := d.resolveVMM(vmmProfile{
-		backend:       BackendCloudHypervisor,
-		defaultBinary: defaultCloudHypervisorBinary,
-		maxCPUs:       MaxCloudHypervisorCPUs,
-		diskFormats:   []string{"raw", "qcow2"},
-		diskOptions:   true,
+		backend:            BackendCloudHypervisor,
+		defaultBinary:      defaultCloudHypervisorBinary,
+		maxCPUs:            MaxCloudHypervisorCPUs,
+		diskFormats:        []string{"raw", "qcow2"},
+		diskOptions:        true,
+		interactiveConsole: true,
 		cmdline: func(serialMode string, root, extra []string) string {
 			return cloudHypervisorKernelParams(runtime.GOARCH, serialMode, root, extra)
 		},

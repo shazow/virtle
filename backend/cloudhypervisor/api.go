@@ -173,8 +173,8 @@ func imageType(format string) string {
 
 // vmConfig lowers the resolved manifest to the vm.create body. The serial
 // port rides the process's standard streams (mode Tty) when the console is
-// printed, and the virtio-console is always off: it defaults to the same
-// streams and would garble them. Shares need the guest memory shared so the
+// printed or interactive, and the virtio-console is always off: it defaults
+// to the same streams and would garble them. Shares need the guest memory shared so the
 // virtiofsd processes can map it.
 func vmConfig(cfg *imanifest.CloudHypervisor) vmConfigBody {
 	body := vmConfigBody{
@@ -184,7 +184,7 @@ func vmConfig(cfg *imanifest.CloudHypervisor) vmConfigBody {
 		Serial:  consoleConfig{Mode: "Off"},
 		Console: consoleConfig{Mode: "Off"},
 	}
-	if cfg.Console == imanifest.KernelSerialPrint {
+	if cfg.Console != imanifest.KernelSerialOff {
 		body.Serial.Mode = "Tty"
 	}
 	for i, disk := range cfg.Disks {

@@ -22,6 +22,8 @@ compact before/after examples.
   rounds instead of pairs: `--pairs 10 --warmup-pairs 2` becomes `--rounds 9
   --warmup-rounds 3` (multiples of three), and `results.json` records
   `rounds` and `warmup_rounds`.
+- `kernel.serial = "console"` works on Cloud Hypervisor as it does on QEMU:
+  the guest console is the host terminal `virtle launch` runs in.
 - On Cloud Hypervisor, `[[mounts]] type = "image"` takes `image.format =
   "qcow2"` for an existing image (created images stay raw) and honors
   `image.serial` and `image.direct`; Firecracker keeps rejecting them.
@@ -43,7 +45,8 @@ compact before/after examples.
   as the other backends, its machines implement `backend.StatusReporter` and
   `backend.ConsoleProvider`, and `vm.Spec.Shares` become virtio-fs shares.
   `manifest.Load` returns it for `backend = "cloud-hypervisor"`.
-- `cloudhypervisor.Backend` accepts `vm.Disk.Format = "qcow2"`.
+- `cloudhypervisor.Backend` accepts `vm.Disk.Format = "qcow2"` and
+  `Console: cloudhypervisor.ConsoleInteractive`.
 - `vm.Share.ReadOnly` is enforced by the share's `virtiofsd`; `Start` fails
   when virtle does not start that daemon or its arguments lack `--readonly`.
 

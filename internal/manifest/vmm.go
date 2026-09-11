@@ -111,7 +111,10 @@ type vmmProfile struct {
 	maxCPUs       int
 	diskFormats   []string // image.format values the VMM reads; the first is the default
 	diskOptions   bool     // image.serial and image.direct reach the VMM
-	cmdline       func(serialMode string, root, extra []string) string
+	// interactiveConsole accepts kernel.serial = "console": the VMM puts
+	// the terminal it is given into raw mode itself, as QEMU does.
+	interactiveConsole bool
+	cmdline            func(serialMode string, root, extra []string) string
 }
 
 // seededDocument is the document DecodeDocumentBytes decodes into: every
@@ -238,7 +241,7 @@ func (d Document) resolveVMM(p vmmProfile, in vmmInput) (*Manifest, *VMM, error)
 	if err != nil {
 		return nil, nil, err
 	}
-	if serialMode == KernelSerialConsole {
+	if serialMode == KernelSerialConsole && !p.interactiveConsole {
 		return nil, nil, unsupportedBy(p.backend, "manifest.kernel.serial = %q; use %q or %q", KernelSerialConsole, KernelSerialOff, KernelSerialPrint)
 	}
 	if d.Machine.VCPU < 0 || d.Machine.VCPU > p.maxCPUs {

@@ -44,12 +44,12 @@ let
         ACPI_BUTTON = no;
         ACPI_TINY_POWER_BUTTON = yes;
         ACPI_TINY_POWER_BUTTON_SIGNAL = freeform "12";
-        # Nothing here has a battery, a fan, a thermal zone, or ACPI
-        # processor objects worth a driver.
+        # Nothing here has a battery, a fan, or a thermal zone worth a
+        # driver. (ACPI_PROCESSOR stays on: the build keeps it whatever
+        # this says.)
         ACPI_AC = option no;
         ACPI_BATTERY = option no;
         ACPI_FAN = option no;
-        ACPI_PROCESSOR = option no;
         ACPI_THERMAL = option no;
         ACPI_TABLE_UPGRADE = option no;
         PVH = yes;

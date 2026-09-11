@@ -202,7 +202,6 @@ class TrialCleanupTest(unittest.TestCase):
                 "threading.Thread": thread,
                 "os.read": mock.Mock(side_effect=[run.READY + b"\n", b""]),
                 "os.kill": mock.Mock(side_effect=[None, ProcessLookupError()]),
-                "os.killpg": mock.Mock(),
                 "wait_for_status": mock.Mock(return_value=status),
             }
             for name, value in patches.items():
@@ -309,9 +308,8 @@ class FakeProcesses:
 
     @contextlib.contextmanager
     def installed(self):
-        with mock.patch("run.Path", self.path), mock.patch("run.os.pidfd_open", self.open), mock.patch("run.signal.pidfd_send_signal", self.send), mock.patch("run.os.close", side_effect=lambda fd: self.handles.pop(fd)), mock.patch("run.os.killpg") as killpg:
+        with mock.patch("run.Path", self.path), mock.patch("run.os.pidfd_open", self.open), mock.patch("run.signal.pidfd_send_signal", self.send), mock.patch("run.os.close", side_effect=lambda fd: self.handles.pop(fd)):
             yield
-            killpg.assert_not_called()
 
 
 class OwnedVMMTest(unittest.TestCase):

@@ -224,9 +224,9 @@
               '';
           # The three backends driven through the Go API (vm.Spec,
           # backend.Machine) on the same tiny guest: the backend conformance
-          # suite plus the Spec.Dir, root disk, scratch disk, console, and
-          # share scenarios, and on QEMU the virtle network (lease, forwards,
-          # egress policy).
+          # suite plus the Spec.Dir, root disk, scratch disk, console, guest
+          # shutdown, and share scenarios, and on QEMU the virtle network
+          # (lease, forwards, egress policy).
           e2e-api =
             pkgs.runCommand "virtle-e2e-api"
               {

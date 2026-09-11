@@ -33,8 +33,8 @@ checks its API version; missing or denied KVM fails the run. QEMU explicitly
 uses `accel=kvm` with no TCG fallback. The flake check declares
 `requiredSystemFeatures = [ "kvm" ]`, so the Nix builder must advertise `kvm`
 and expose the device in its sandbox. An unsuitable builder cannot satisfy this
-check; it never returns a successful skip. The QEMU integration and Firecracker
-raw-disk recipe checks remain separate.
+check; it never returns a successful skip. The QEMU integration check and the
+Firecracker and Cloud Hypervisor recipe checks remain separate.
 
 ## What the fixture contains
 
@@ -73,7 +73,8 @@ containing `21`. Init mounts devtmpfs/proc/sysfs; the workload reads the input,
 doubles it, writes and reads back `/tmp/result`, verifies `42`, and prints the
 complete line `VIRTLE_READY:42`. When the guest has a NIC (the QEMU Go API
 guests have one, on QEMU's user network or, in the network scenarios, on a
-virtle network; the Firecracker guests and the CLI manifests have none), it
+virtle network; the Firecracker and Cloud Hypervisor guests and the CLI
+manifests have none), it
 first takes a DHCP
 lease with `udhcpc`, prints `VIRTLE_NET:<address>`, serves a TCP echo on port
 7, with `virtle.egress=PORT` on the command line connects to `allowed.test`
@@ -84,8 +85,8 @@ and `blocked.test` on that port and prints the outcome, and with
 mounts that virtio-fs share, prints `VIRTLE_SHARE:` followed by the `hello`
 file the host put there, and unmounts it. There
 is no modprobe, NixOS activation, service manager, SSH, or guest agent. No disk
-is attached in the CLI benchmark; the Firecracker recipe covers raw disk I/O and
-clean unmounting. The archive normalizes owner, timestamps, ordering, inode
+is attached in the CLI benchmark; the Firecracker and Cloud Hypervisor recipes
+cover raw disk I/O and clean unmounting. The archive normalizes owner, timestamps, ordering, inode
 numbering and gzip headers. All dependencies come from the root lock.
 
 QEMU runs its `microvm` machine with KVM, qboot, and PCIe, ACPI, PIT, PIC, RTC,
@@ -95,8 +96,8 @@ device or requiring `/dev/vhost-vsock` in the Nix sandbox. Firecracker and
 Cloud Hypervisor run through their normal API configuration. The share
 scenario turns ACPI on for QEMU, since the microvm's PCIe bus needs it, and
 virtle sets `pcie=on` itself; that machine boots through SeaBIOS instead of
-qboot, so it keeps the option ROMs (SeaBIOS loads `-kernel` through one) and
-the RTC. See QEMU's
+qboot, so it keeps the option ROMs (SeaBIOS loads `-kernel` through one). See
+QEMU's
 [microvm documentation](https://www.qemu.org/docs/master/system/i386/microvm.html).
 
 ## Timing and interpretation
@@ -167,9 +168,10 @@ The `e2e-api` flake check boots the same fixture through the public Go API
 instead of the CLI: the Go tests in this directory (build tag `integration`)
 run the backend conformance suite from `backend/backendtest` against all
 three backends and cover the `vm.Spec.Dir` contract, booting from the root
-disk, a scratch disk the host reads back, the serial console, and a virtio-fs
-share (a `virtiofsd` on `PATH` is required; Firecracker is expected to refuse
-it). They read `VIRTLE_E2E_FIXTURE`, `VIRTLE_E2E_QEMU`,
+disk (through the Go API and through a manifest), a scratch disk the host
+reads back, the serial console, the guest-driven shutdown of Firecracker and
+Cloud Hypervisor, and a virtio-fs share (a `virtiofsd` on `PATH` is required;
+Firecracker is expected to refuse it). They read `VIRTLE_E2E_FIXTURE`, `VIRTLE_E2E_QEMU`,
 `VIRTLE_E2E_FIRECRACKER`, and `VIRTLE_E2E_CLOUD_HYPERVISOR` and skip without
 them. Other E2E derivations can import
 `fixtures/fast` with `{ inherit pkgs; workload = ./my-ready-script; }` to run a

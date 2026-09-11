@@ -1,6 +1,6 @@
 # Firecracker appliance
 
-For a much smaller shared Firecracker/QEMU guest and a counterbalanced CLI
+For a much smaller guest shared by all three backends and a rotating CLI
 benchmark, see [the fast E2E fixture](../../../tests/e2e/README.md). This recipe
 continues to cover the distribution kernel, module loading and raw-disk I/O.
 
@@ -79,7 +79,7 @@ init mounts `/dev/vda` itself and no `root=` is passed. No networking, guest
 control, SSH, file sharing, hotplug, or suspend is enabled.
 
 Virtle creates `.virtle` and locks the manifest's VM name there, shared with
-QEMU, then serves `.virtle/virtle.sock`; a socket left behind by a crashed
+the other backends, then serves `.virtle/virtle.sock`; a socket left behind by a crashed
 launch is replaced once the lock proves nothing else owns the directory. The
 API socket lives in a fresh private `virtle-fc-*` directory under `TMPDIR`;
 shutdown removes only runtime paths owned by this launch.

@@ -32,7 +32,8 @@ const (
 	// readyLine is what the fixture's init prints once its workload ran.
 	readyLine = "VIRTLE_READY:42"
 	// fixtureCmdline mirrors the fixture manifests' kernel.params; virtle adds
-	// the console and reboot/panic parameters itself on every backend. The
+	// the console parameters itself on every backend, and its reboot/panic
+	// policy on QEMU and Firecracker (Cloud Hypervisor has none). The
 	// MMIO loaders skip the PCI probe and leave ACPI alone (on Firecracker's
 	// tables the Ctrl-Alt-Del shutdown stopped ending the VMM); Cloud
 	// Hypervisor's devices are PCI, and so are virtio-fs shares on QEMU,
@@ -86,7 +87,7 @@ func skipOrFail(t *testing.T, reason string) {
 func (f fixture) path(name string) string { return filepath.Join(f.dir, name) }
 
 // guest is one backend under test: how to construct it with its console
-// wired to w, the kernel command line the fixture boots with on it, and the
+// wired to a writer, the kernel command line the fixture boots with on it, and the
 // baseline Spec that boots the fixture on it. shareBackend, when set,
 // constructs the backend for a virtio-fs share (QEMU's microvm needs ACPI
 // for its PCIe bus, which the plain guest turns off); nil means the backend
@@ -128,15 +129,11 @@ func (f fixture) guests() []guest {
 			}
 			if acpi == "off" {
 				// qboot, the firmware of the ACPI-less microvm, takes
-				// -kernel from fw_cfg; with a share, virtle turns the
-				// PCIe bus on itself.
+				// -kernel from fw_cfg; with ACPI on the microvm boots
+				// through SeaBIOS, which needs the linuxboot option ROM
+				// for it. With a share, virtle turns the PCIe bus on itself.
 				options["x-option-roms"] = "off"
 				options["pcie"] = "off"
-			} else {
-				// With ACPI on the microvm boots through SeaBIOS, which
-				// loads -kernel from the linuxboot option ROM and reads
-				// the clock from CMOS: virtle's default microvm shape.
-				delete(options, "rtc")
 			}
 			return &qemu.Backend{
 				Binary:         f.qemu,
@@ -335,7 +332,7 @@ func TestConformance(t *testing.T) {
 }
 
 // TestRootDisk boots the fixture from a raw ext4 root image instead of the
-// initrd, on both backends from one Spec: the disk mounted at "/" is the
+// initrd, on every backend from one Spec: the disk mounted at "/" is the
 // root device and virtle passes root= for it.
 func TestRootDisk(t *testing.T) {
 	f := loadFixture(t)
@@ -421,7 +418,7 @@ func TestManifestRootDisk(t *testing.T) {
 }
 
 // TestScratchDisk attaches a disk that does not exist yet: virtle creates it
-// as an empty ext4 image on both backends, the guest leaves its result on
+// as an empty ext4 image on every backend, the guest leaves its result on
 // it, and the host reads that back after the machine exits.
 func TestScratchDisk(t *testing.T) {
 	f := loadFixture(t)
@@ -450,8 +447,8 @@ func TestScratchDisk(t *testing.T) {
 	}
 }
 
-// TestConsole drives the guest's shell over backend.ConsoleProvider on both
-// backends: a Term attached after boot replays the boot log, carries input
+// TestConsole drives the guest's shell over backend.ConsoleProvider on every
+// backend: a Term attached after boot replays the boot log, carries input
 // to the console, and has no window or exit status of its own.
 func TestConsole(t *testing.T) {
 	f := loadFixture(t)

@@ -129,8 +129,8 @@ func unconfigured[T any](section T, baselines ...T) bool {
 	return false
 }
 
-// rejectQEMUOnly fails on sections that configure QEMU devices, host
-// helpers, or guest-agent features, which neither microVM backend can honor,
+// rejectQEMUOnly fails on sections that configure QEMU devices, the QEMU
+// session's hooks, or guest-agent features, which neither microVM backend can honor,
 // rather than dropping them, so a QEMU manifest switched over fails loudly
 // instead of losing behavior. Values equal to what virtle itself defaults
 // QEMU-only sections to (the user network, the ssh command) never count as
@@ -147,8 +147,8 @@ func (d Document) rejectQEMUOnly(backend string) error {
 		return unsupportedBy(backend, "manifest.qemu configures QEMU; remove it or set backend = %q", BackendQEMU)
 	case len(d.WriteFiles) != 0 || d.Workspace != (WorkspaceInput{}):
 		return unsupportedBy(backend, "manifest.write_files and manifest.workspace need a guest control transport, which %s does not have yet", backend)
-	case len(d.Run) != 0 || len(d.Notifications.Exec) != 0 || len(d.Notifications.States) != 0:
-		return unsupportedBy(backend, "manifest.run and manifest.notifications")
+	case len(d.Notifications.Exec) != 0 || len(d.Notifications.States) != 0:
+		return unsupportedBy(backend, "manifest.notifications")
 	case d.Balloon != nil || d.Hotplug.Len() != 0:
 		return unsupportedBy(backend, "manifest.balloon and manifest.hotplug")
 	case d.Graphics != nil && d.Graphics.Backend != "" && d.Graphics.Backend != defaultGraphicsBackend:
@@ -209,8 +209,9 @@ func tapNetworks(backend string, networks, defaults []NetworkInput) ([]TapNetwor
 
 // resolveVMM resolves what the microVM backends share, once the caller has
 // rejected the sections its VMM cannot honor: the Manifest skeleton
-// (identity, paths, lock, state directory) and the machine size, boot
-// source, raw disks, TAP NICs, console mode, executable, and timeouts.
+// (identity, paths, lock, state directory, the [[run]] helpers) and the
+// machine size, boot source, raw disks, TAP NICs, console mode, executable,
+// and timeouts.
 func (d Document) resolveVMM(p vmmProfile, in vmmInput) (*Manifest, *VMM, error) {
 	networks, err := tapNetworks(p.backend, d.Networks, DefaultDocument().Networks)
 	if err != nil {
@@ -254,6 +255,8 @@ func (d Document) resolveVMM(p vmmProfile, in vmmInput) (*Manifest, *VMM, error)
 	}
 	m.Paths.LockPath = filepath.Join(m.Persistence.StateDir, m.Identity.HostName+".lock")
 	m.Paths.RuntimeDir = RuntimeDir{Mode: RuntimeDirPath, Path: m.Persistence.StateDir}
+	// Host helpers start before the VMM and stop after it, as on QEMU.
+	m.Run = resolveRun(d.Run)
 
 	vmm := &VMM{
 		Binary:          in.Binary,

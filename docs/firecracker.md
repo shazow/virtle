@@ -34,6 +34,8 @@ must match the host architecture: an ELF `vmlinux` on x86_64, an uncompressed
 - Lifecycle and status: `Start`, `Wait`, `Kill`, `Shutdown`, and
   `backend.StatusReporter`; over the control socket, `virtle status` and
   `virtle rpc status|wait|kill|shutdown`.
+- `[[run]]` host helpers, started before the VMM and stopped after it exits,
+  with the same templates as on QEMU.
 - The same state directory and VM-name lock as QEMU, so a QEMU and a
   Firecracker launch of one manifest exclude each other.
 
@@ -89,7 +91,7 @@ features it cannot honor fail `Start` with an error wrapping
 | virtiofs and 9p shares, qcow2, disk cache/serial options | Raw images only, created on demand as above. [Cloud Hypervisor](cloud-hypervisor.md) has virtio-fs shares. |
 | Interactive console (`serial = "console"`) | Only `off` and `print`. |
 | Suspend/resume, balloon, hotplug | Capability interfaces are not implemented. |
-| `[run]` helpers, `[notifications]`, `[qemu]`, `[cloud-hypervisor]` settings | Other backends'. |
+| `[notifications]`, `[qemu]`, `[cloud-hypervisor]` settings | Other backends'. |
 | Jailer, cgroups, namespaces | Firecracker runs directly with its default seccomp filter; provide host isolation separately for multi-tenant use. |
 
 ## Runtime files

@@ -25,6 +25,7 @@ import (
 	"github.com/shazow/virtle/backend"
 	"github.com/shazow/virtle/backend/backendtest"
 	"github.com/shazow/virtle/internal/control"
+	imanifest "github.com/shazow/virtle/internal/manifest"
 	"github.com/shazow/virtle/units"
 	"github.com/shazow/virtle/vm"
 )
@@ -35,6 +36,16 @@ const shortTimeout = 100 * time.Millisecond
 // TestMain doubles as a real child process speaking Firecracker's Unix HTTP
 // protocol. Filesystem use here exercises the actual socket/process boundary.
 func TestMain(m *testing.M) {
+	if len(os.Args) > 1 && strings.HasPrefix(os.Args[1], "--helper=") {
+		// A [[run]] entry: record the PID at the given path, leave on SIGTERM.
+		signals := make(chan os.Signal, 1)
+		signal.Notify(signals, syscall.SIGTERM)
+		if err := os.WriteFile(strings.TrimPrefix(os.Args[1], "--helper="), []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+			panic(err)
+		}
+		<-signals
+		os.Exit(0)
+	}
 	if mode := os.Getenv("VIRTLE_TEST_FIRECRACKER"); mode != "" {
 		if mode == "diagnostic" {
 			fmt.Fprintln(os.Stderr, "KVM unavailable test")
@@ -467,6 +478,36 @@ func TestConsoleFollowsTheMachine(t *testing.T) {
 	t.Cleanup(func() { _ = m.Kill() })
 	if _, err := m.(backend.ConsoleProvider).Console(t.Context()); !errors.Is(err, errors.ErrUnsupported) {
 		t.Fatalf("Console without a serial console = %v, want ErrUnsupported", err)
+	}
+}
+
+// TestRunHelpersFollowTheMachine covers a manifest's [[run]] entries: they
+// start before the VMM, with the manifest's templates rendered, and stop
+// when the machine does.
+func TestRunHelpersFollowTheMachine(t *testing.T) {
+	b, spec := helperBackend(t, "normal")
+	doc, err := imanifest.DecodeDocumentBytes([]byte(fmt.Sprintf("backend = 'firecracker'\n[kernel]\npath = 'kernel'\n[[run]]\nexec = [%q, '--helper={{.StateDir}}/helper.pid']\n", b.Binary)), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := NewBackendFromDocument(doc, *b).Start(t.Context(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill() })
+	pidText, err := os.ReadFile(filepath.Join(spec.Dir, ".virtle", "helper.pid"))
+	if err != nil {
+		t.Fatalf("helper did not start before the VMM: %v", err)
+	}
+	pid, _ := strconv.Atoi(string(pidText))
+	if err := syscall.Kill(pid, 0); err != nil {
+		t.Fatalf("helper %d while running: %v", pid, err)
+	}
+	if err := m.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Kill(pid, 0); !errors.Is(err, syscall.ESRCH) {
+		t.Fatalf("helper %d after exit: %v", pid, err)
 	}
 }
 

@@ -22,6 +22,9 @@ compact before/after examples.
   rounds instead of pairs: `--pairs 10 --warmup-pairs 2` becomes `--rounds 9
   --warmup-rounds 3` (multiples of three), and `results.json` records
   `rounds` and `warmup_rounds`.
+- `[[run]]` host helpers start before Firecracker and Cloud Hypervisor
+  microVMs and stop after them, as they do for QEMU; the sections used to
+  be rejected there. `[notifications]` stays QEMU-only.
 - `[[mounts]] type = "virtiofs"` with `read_only = true` now makes the
   `virtiofsd` virtle starts refuse guest writes (`--readonly`). A read-only
   share whose daemon virtle does not start, or whose own `virtiofs.args`

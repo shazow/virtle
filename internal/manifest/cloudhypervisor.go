@@ -115,7 +115,9 @@ func (m *Manifest) resolveCloudHypervisorShares(mounts []VirtioFSMountInput, opt
 	if err != nil {
 		return nil, err
 	}
-	m.Run = append(m.Run, runs...)
+	// The share daemons come first, ahead of the manifest's own helpers, as
+	// on QEMU.
+	m.Run = append(runs, m.Run...)
 	shares := make([]CloudHypervisorShare, 0, len(mounts))
 	for _, mount := range mounts {
 		socket, err := m.resolveSocketPath(mount.VirtioFS.Socket)

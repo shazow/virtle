@@ -32,7 +32,6 @@ var qemuOnlyRejections = []rejectedSetting{
 	{"machine cpu", "[machine]\ncpu = 'host'", "machine"},
 	{"machine type", "[machine]\ntype = 'q35'", "machine"},
 	{"kvm off", "[machine]\nkvm = false", "KVM"},
-	{"interactive console", "[kernel]\nserial = 'console'", "serial"},
 	{"9p mount", "[[mounts]]\ntype = '9p'\ntag = 'src'\nsource = '/src'", "mounts"},
 	{"image fs", "[[mounts]]\ntype = 'image'\nsource = 'disk.img'\nimage.create = true\nimage.size = 256\nimage.fs = 'xfs'", "fs"},
 	{"image too small to create", "[[mounts]]\ntype = 'image'\nsource = 'disk.img'\nimage.create = true\nimage.size = 8", "at least"},

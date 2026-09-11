@@ -99,3 +99,14 @@ func TestVMConfigDisks(t *testing.T) {
 		t.Fatalf("disks = %+v, want %+v", body.Disks, want)
 	}
 }
+
+// TestVMConfigConsoleModes covers the serial port wiring: off stays off,
+// print and interactive put it on the process's standard streams.
+func TestVMConfigConsoleModes(t *testing.T) {
+	for console, want := range map[string]string{imanifest.KernelSerialOff: "Off", imanifest.KernelSerialPrint: "Tty", imanifest.KernelSerialConsole: "Tty"} {
+		body := vmConfig(&imanifest.CloudHypervisor{VMM: imanifest.VMM{Console: console}})
+		if body.Serial.Mode != want || body.Console.Mode != "Off" {
+			t.Fatalf("%s: serial %s, console %s; want serial %s, console Off", console, body.Serial.Mode, body.Console.Mode, want)
+		}
+	}
+}

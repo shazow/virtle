@@ -42,6 +42,12 @@ type Launch struct {
 	// from a terminal (Cloud Hypervisor). Output still reaches ConsoleOutput
 	// and Machine.Console; the VMM's stderr stays a pipe.
 	ConsoleTerminal bool
+	// ConsoleInteractive puts the guest's serial port on the process's own
+	// terminal instead of the hub, as QEMU's interactive console does: the
+	// VMM reads the process's standard input, prints to ConsoleOutput, and
+	// stays in the caller's process group so it may read the terminal.
+	// Machine.Console is then unavailable. It takes precedence over Console.
+	ConsoleInteractive bool
 
 	// Command returns the VMM command serving its API on socket. Start sets
 	// its working directory, process group, and standard streams.
@@ -183,13 +189,20 @@ func Start(ctx context.Context, l Launch) (*Machine, error) {
 	cmd.Dir = mf.Paths.WorkingDir
 	cmd.WaitDelay = time.Second // inherited output descriptors cannot hold teardown open
 	// The VMM leads its own process group, so teardown signals reach anything
-	// it spawned, and the host's Ctrl-C does not reach it directly.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// it spawned, and the host's Ctrl-C does not reach it directly; an
+	// interactive console must stay in the foreground process group to read
+	// the terminal.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: !l.ConsoleInteractive}
 	m := newMachine(l, socket, lock, dir, cleanup)
 	cmd.Stdout = io.Discard
 	cmd.Stderr = m.diagnostics
 	var slave *os.File // the VMM's end of its pseudo-terminal, until it holds its own
-	if l.Console {
+	switch {
+	case l.ConsoleInteractive:
+		// The guest's serial port is the process's own terminal: the VMM
+		// reads what the user types and prints where ConsoleOutput points.
+		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, l.ConsoleOutput, io.MultiWriter(m.diagnostics, l.ConsoleOutput)
+	case l.Console:
 		// The guest's serial port rides the VMM's standard streams: the hub
 		// prints it, retains it, and serves Machine.Console sessions. The
 		// VMM's own stderr diagnostics share the output writer.

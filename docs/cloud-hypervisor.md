@@ -27,7 +27,10 @@ Everything the [Firecracker backend](firecracker.md) does, the same way:
   to the host and available as a `vm.Term` through `backend.ConsoleProvider`.
   Cloud Hypervisor reads serial input only from a terminal, so virtle gives
   it a pseudo-terminal for its standard streams rather than pipes; what the
-  guest prints and what a `Term` types cross it unchanged.
+  guest prints and what a `Term` types cross it unchanged. With
+  `kernel.serial = "console"` / `cloudhypervisor.ConsoleInteractive` the
+  console is the host terminal itself, as on QEMU: Cloud Hypervisor puts it
+  in raw mode and reads what you type, and there is no `vm.Term`.
 - Lifecycle and status: `Start`, `Wait`, `Kill`, `Shutdown`, and
   `backend.StatusReporter`; over the control socket, `virtle status` and
   `virtle rpc status|wait|kill|shutdown`.
@@ -125,7 +128,6 @@ features it cannot honor fail `Start` with an error wrapping
 | Guest control (`Machine.RemoteControl`), SSH, guest files, workspace mounts | No guest agent transport yet; see the [guest daemon design](https://github.com/shazow/virtle/pull/67). |
 | Port forwards, vsock, virtle networks | The NIC is a host TAP device; see above. |
 | 9p shares | Shares are virtio-fs. |
-| Interactive console (`serial = "console"`) | Only `off` and `print`. |
 | Suspend/resume, balloon, hotplug | Capability interfaces are not implemented. |
 | `[notifications]`, `[qemu]`, `[firecracker]` settings | Other backends'. |
 | Landlock, cgroups, namespaces | Cloud Hypervisor runs directly with its default seccomp filter; provide host isolation separately for multi-tenant use. |
@@ -141,7 +143,7 @@ capability but virtle does not wire it yet, what would close the gap:
 | Disk images | raw and qcow2, created on demand, `image.serial` and `image.direct` | raw, created on demand | raw and qcow2, created on demand (raw), `image.serial` and `image.direct` |
 | Shares | virtio-fs and 9p | no | virtio-fs |
 | Serial console printed and as a `vm.Term` | yes | yes | yes, over a pseudo-terminal |
-| Interactive console (`serial = "console"`) | yes | no | no |
+| Interactive console (`serial = "console"`) | yes | no | yes |
 | Networking | `user`, `virtle`, `tap` | `tap` | `tap` |
 | Port forwards, egress policy, host-side dialing | yes | no | no |
 | Guest control, SSH, guest files, workspace, `write_files` | yes (qemu-guest-agent) | no | no (the VMM has vsock for the guest daemon) |

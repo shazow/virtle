@@ -40,8 +40,9 @@ const DefaultMemory = 1024 * units.Mebibyte
 type Console string
 
 const (
-	ConsoleOff   Console = "off"   // no serial console output (default)
-	ConsolePrint Console = "print" // guest console output printed to ConsoleOutput
+	ConsoleOff         Console = "off"     // no serial console output (default)
+	ConsolePrint       Console = "print"   // guest console output printed to ConsoleOutput, and served as a vm.Term
+	ConsoleInteractive Console = "console" // the guest console on the process's own terminal, as on QEMU; no vm.Term
 )
 
 // Backend starts Cloud Hypervisor microVMs. The zero value works: it runs the
@@ -66,7 +67,7 @@ type Backend struct {
 	Logger *slog.Logger
 
 	// ConsoleOutput receives guest console output when Console is
-	// ConsolePrint. The default is os.Stderr.
+	// ConsolePrint or ConsoleInteractive. The default is os.Stderr.
 	ConsoleOutput io.Writer
 
 	doc *imanifest.Document // base document of a manifest.Load backend; nil when configured in Go

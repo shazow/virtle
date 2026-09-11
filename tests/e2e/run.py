@@ -19,8 +19,17 @@ import threading
 import time
 
 
+BACKENDS = ("firecracker", "qemu", "cloud-hypervisor")
 READY = b"VIRTLE_READY:42"
 SHUTDOWN = b"VIRTLE_SHUTDOWN:done"
+# How each backend's graceful shutdown reaches the guest. The microVM guests
+# print SHUTDOWN on their way out; QEMU's path never enters the guest here.
+SHUTDOWN_METHODS = {
+    "firecracker": "guest Ctrl-Alt-Del/reset",
+    "cloud-hypervisor": "guest ACPI power button",
+    "qemu": "absent QGA probe, then QMP quit",
+}
+GUEST_SHUTDOWN_MARKER_REQUIRED = ("firecracker", "cloud-hypervisor")
 TIMEOUT = 30
 STATUS_RETRY_INTERVAL = 0.05
 CLEANUP_RETRY_INTERVAL = 0.05
@@ -28,24 +37,34 @@ OUTPUT_LIMIT = 1024 * 1024
 LABEL = "Directional, non-publication-grade; includes virtle, host scheduling and guest boot."
 
 
-def schedule(pairs, warmup_pairs):
-    for warmup, count in ((True, warmup_pairs), (False, pairs)):
-        for pair in range(count):
-            order = (
-                ("firecracker", "qemu") if pair % 2 == 0 else ("qemu", "firecracker")
-            )
+def schedule(rounds, warmup_rounds):
+    """Every round boots each backend once; round r starts at BACKENDS[r % n]
+    and continues cyclically, so over whole cycles every backend takes every
+    position equally often."""
+    for warmup, count in ((True, warmup_rounds), (False, rounds)):
+        for round_ in range(count):
+            shift = round_ % len(BACKENDS)
+            order = BACKENDS[shift:] + BACKENDS[:shift]
             for position, backend in enumerate(order):
                 yield {
                     "backend": backend,
                     "warmup": warmup,
-                    "pair": pair,
+                    "round": round_,
                     "position": position,
                 }
 
 
+def rounds_error(rounds, warmup_rounds):
+    """The rotation is fair only over whole cycles of the backend list."""
+    n = len(BACKENDS)
+    if rounds < n or rounds % n or warmup_rounds < 0 or warmup_rounds % n:
+        return f"rounds must be a positive multiple of {n}; warmup-rounds a nonnegative multiple of {n}"
+    return None
+
+
 def summarize(rows):
     summary = {}
-    for backend in ("firecracker", "qemu"):
+    for backend in BACKENDS:
         measured = [
             r
             for r in rows
@@ -282,11 +301,7 @@ def trial(virtle, fixture, backend, artifacts, teardown):
         "shutdown_method": (
             "hard stop through lifecycle RPC"
             if teardown == "kill"
-            else (
-                "guest Ctrl-Alt-Del/reset"
-                if backend == "firecracker"
-                else "absent QGA probe, then QMP quit"
-            )
+            else SHUTDOWN_METHODS[backend]
         ),
     }
     output = bytearray()
@@ -396,10 +411,10 @@ def trial(virtle, fixture, backend, artifacts, teardown):
             result["guest_shutdown_marker"] = SHUTDOWN in output.splitlines()
             if (
                 teardown == "shutdown"
-                and backend == "firecracker"
+                and backend in GUEST_SHUTDOWN_MARKER_REQUIRED
                 and not result["guest_shutdown_marker"]
             ):
-                raise RuntimeError("Firecracker guest did not finish shutdown")
+                raise RuntimeError(f"{backend} guest did not finish shutdown")
             result["sockets_removed"] = all(not path.exists() for path in sockets)
             result["temporary_runtime_removed"] = not any(tmp.iterdir())
             remaining = [str(p) for p in work.rglob("*") if p.is_socket()]
@@ -465,16 +480,16 @@ def main():
     parser.add_argument("--fixture", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
-        "--pairs",
+        "--rounds",
         type=int,
-        default=10,
-        help="measured pairs, positive and even (default: 10)",
+        default=9,
+        help=f"measured rounds of every backend, a positive multiple of {len(BACKENDS)} (default: 9)",
     )
     parser.add_argument(
-        "--warmup-pairs",
+        "--warmup-rounds",
         type=int,
-        default=2,
-        help="unmeasured pairs, nonnegative and even (default: 2)",
+        default=3,
+        help=f"unmeasured rounds, a nonnegative multiple of {len(BACKENDS)} (default: 3)",
     )
     parser.add_argument(
         "--teardown",
@@ -483,15 +498,8 @@ def main():
         help="lifecycle RPC after readiness; kill keeps fast suites fast (default: kill)",
     )
     args = parser.parse_args()
-    if (
-        args.pairs < 2
-        or args.pairs % 2
-        or args.warmup_pairs < 0
-        or args.warmup_pairs % 2
-    ):
-        parser.error(
-            "pairs must be positive and even; warmup-pairs nonnegative and even"
-        )
+    if error := rounds_error(args.rounds, args.warmup_rounds):
+        parser.error(error)
     args.output.mkdir(parents=True, exist_ok=False)
     fixture = args.fixture.resolve()
     report = {
@@ -512,8 +520,8 @@ def main():
             "load_average": os.getloadavg(),
         },
         "fixture": str(fixture),
-        "pairs": args.pairs,
-        "warmup_pairs": args.warmup_pairs,
+        "rounds": args.rounds,
+        "warmup_rounds": args.warmup_rounds,
         "trials": [],
         "passed": False,
     }
@@ -530,6 +538,7 @@ def main():
                 "kernel.config",
                 "firecracker.toml",
                 "qemu.toml",
+                "cloud-hypervisor.toml",
             )
         }
         report["sha256"]["virtle"] = hashlib.sha256(
@@ -538,7 +547,7 @@ def main():
         report["virtle_version"] = subprocess.check_output(
             [args.virtle, "--version"], text=True, timeout=TIMEOUT
         ).strip()
-        for index, entry in enumerate(schedule(args.pairs, args.warmup_pairs)):
+        for index, entry in enumerate(schedule(args.rounds, args.warmup_rounds)):
             directory = args.output / f"{index:03d}-{entry['backend']}"
             # Announce each trial before it starts so a stalled run shows
             # which backend and phase it stopped in.

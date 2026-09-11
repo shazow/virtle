@@ -117,18 +117,26 @@ func (f fixture) guests() []guest {
 		return func(console io.Writer) backend.Backend {
 			accel := qemu.AccelKVM
 			options := map[string]string{
-				"acpi": acpi, "pit": "off", "pic": "off",
-				"rtc": "off", "usb": "off", "x-option-roms": "off",
+				"acpi": acpi, "pit": "off", "pic": "off", "rtc": "off", "usb": "off",
 			}
 			if os.Getenv("VIRTLE_E2E_ACCEL") == "tcg" {
 				// Without KVM there is no kvm-clock, so the guest needs
 				// the PIT to calibrate its clock. Slow, for development
 				// on hosts without KVM; CI runs with KVM.
 				accel = qemu.AccelTCG
-				options = map[string]string{"acpi": acpi, "usb": "off", "x-option-roms": "off"}
+				options = map[string]string{"acpi": acpi, "usb": "off"}
 			}
 			if acpi == "off" {
-				options["pcie"] = "off" // with a share, virtle turns it on itself
+				// qboot, the firmware of the ACPI-less microvm, takes
+				// -kernel from fw_cfg; with a share, virtle turns the
+				// PCIe bus on itself.
+				options["x-option-roms"] = "off"
+				options["pcie"] = "off"
+			} else {
+				// With ACPI on the microvm boots through SeaBIOS, which
+				// loads -kernel from the linuxboot option ROM and reads
+				// the clock from CMOS: virtle's default microvm shape.
+				delete(options, "rtc")
 			}
 			return &qemu.Backend{
 				Binary:         f.qemu,

@@ -94,7 +94,9 @@ device setup; `vsock.enabled = false` avoids attaching an unused vhost-vsock
 device or requiring `/dev/vhost-vsock` in the Nix sandbox. Firecracker and
 Cloud Hypervisor run through their normal API configuration. The share
 scenario turns ACPI on for QEMU, since the microvm's PCIe bus needs it, and
-virtle sets `pcie=on` itself. See QEMU's
+virtle sets `pcie=on` itself; that machine boots through SeaBIOS instead of
+qboot, so it keeps the option ROMs (SeaBIOS loads `-kernel` through one) and
+the RTC. See QEMU's
 [microvm documentation](https://www.qemu.org/docs/master/system/i386/microvm.html).
 
 ## Timing and interpretation

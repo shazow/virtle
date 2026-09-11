@@ -232,9 +232,17 @@ func TestRunHelpersFollowTheMachine(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = m.Kill() })
-	pidText, err := os.ReadFile(filepath.Join(spec.Dir, ".virtle", "helper.pid"))
-	if err != nil {
-		t.Fatalf("helper did not start before the VMM: %v", err)
+	// The helper is started before the VMM, but it records its PID only
+	// once it runs, and the fake VMM boots faster than a Go binary starts.
+	pidPath := filepath.Join(spec.Dir, ".virtle", "helper.pid")
+	var pidText []byte
+	for deadline := time.Now().Add(testTimeout); ; time.Sleep(10 * time.Millisecond) {
+		if pidText, err = os.ReadFile(pidPath); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("helper did not start: %v", err)
+		}
 	}
 	pid, _ := strconv.Atoi(string(pidText))
 	if err := syscall.Kill(pid, 0); err != nil {

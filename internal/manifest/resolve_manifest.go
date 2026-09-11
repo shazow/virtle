@@ -39,11 +39,16 @@ func (d Document) ManifestWithOptions(options ResolveOptions) (*Manifest, error)
 	case "", BackendQEMU:
 	case BackendFirecracker:
 		return d.firecrackerManifest()
+	case BackendCloudHypervisor:
+		return d.cloudHypervisorManifest(options)
 	default:
-		return nil, fmt.Errorf("manifest.backend must be %s or %s, got %q", BackendQEMU, BackendFirecracker, d.Backend)
+		return nil, fmt.Errorf("manifest.backend must be %s, %s or %s, got %q", BackendQEMU, BackendFirecracker, BackendCloudHypervisor, d.Backend)
 	}
 	if d.Firecracker != (FirecrackerInput{}) {
 		return nil, fmt.Errorf("manifest.firecracker requires backend = %q", BackendFirecracker)
+	}
+	if d.CloudHypervisor != (CloudHypervisorInput{}) {
+		return nil, fmt.Errorf("manifest.cloud-hypervisor requires backend = %q", BackendCloudHypervisor)
 	}
 	d = DocumentWithDefaults(d)
 	if err := validateHostName(d.HostName); err != nil {

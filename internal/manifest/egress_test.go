@@ -140,6 +140,7 @@ func TestResolveEgressRejects(t *testing.T) {
 		"secret without inspect": {egressBase + "[egress]\nreach = 'rules'\n[[egress.allow]]\nhost = 'api.test'\n[[egress.secrets]]\nname = 'A'\nfrom = '{{.Env.A}}'\nhosts = ['api.test']\n", "inspect = true"},
 		"duplicate secret":       {egressBase + inspecting + "[[egress.secrets]]\nname = 'A'\nfrom = '{{.Env.A}}'\nhosts = ['api.test']\n[[egress.secrets]]\nname = 'A'\nfrom = '{{.Env.B}}'\nhosts = ['api.test']\n", "twice"},
 		"firecracker":            {"backend = 'firecracker'\n[kernel]\npath = 'k'\n[egress]\n[[egress.allow]]\nhost = 'a.test'\n", "firecracker"},
+		"cloud-hypervisor":       {"backend = 'cloud-hypervisor'\n[kernel]\npath = 'k'\n[egress]\n[[egress.allow]]\nhost = 'a.test'\n", "cloud-hypervisor"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			doc, err := DecodeDocumentBytes([]byte(tc.body), "")

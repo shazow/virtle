@@ -50,6 +50,21 @@ params = ["quiet"]`+mounts)
 			t.Fatalf("disks = %+v, want only the second marked root", disks)
 		}
 	})
+	t.Run("cloud-hypervisor", func(t *testing.T) {
+		doc := decodeCloudHypervisor(t, `[kernel]
+path = "vmlinux"
+params = ["quiet"]`+mounts)
+		m, err := doc.Manifest()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := m.CloudHypervisor.Kernel.Cmdline; !strings.Contains(got, "root=/dev/vdb ro quiet") {
+			t.Fatalf("cmdline = %q, want root=/dev/vdb ro ahead of the manifest's own", got)
+		}
+		if disks := m.CloudHypervisor.Disks; len(disks) != 2 || disks[0].Root || !disks[1].Root {
+			t.Fatalf("disks = %+v, want only the second marked root", disks)
+		}
+	})
 	t.Run("writable root", func(t *testing.T) {
 		doc := decodeFirecracker(t, `[kernel]
 path = "vmlinux"
@@ -97,7 +112,7 @@ type = "image"
 source = "a.img"
 target = "/data"`, `only "/"`},
 	} {
-		for _, backend := range []string{"", `backend = "firecracker"`} {
+		for _, backend := range []string{"", `backend = "firecracker"`, `backend = "cloud-hypervisor"`} {
 			t.Run(tc.name+" "+backend, func(t *testing.T) {
 				doc, err := DecodeDocumentBytes([]byte(backend+"\n[kernel]\npath = \"kernel\"\ninitrd_path = \"initrd\"\n"+tc.body), "manifest.toml")
 				if err != nil {

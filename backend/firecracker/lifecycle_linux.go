@@ -64,7 +64,7 @@ func (b *Backend) start(ctx context.Context, mf *imanifest.Manifest, ephemeralSt
 
 // createDisks formats the images vm.Disk.Size asked for before launch, as
 // QEMU does; existing images are kept.
-func createDisks(disks []imanifest.FirecrackerDisk, logger *slog.Logger) error {
+func createDisks(disks []imanifest.RawDisk, logger *slog.Logger) error {
 	for _, disk := range disks {
 		if !disk.Create {
 			continue

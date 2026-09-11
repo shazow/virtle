@@ -3,11 +3,12 @@
   "properties": {
     "backend": {
       "type": "string",
-      "description": "Virtual machine backend: qemu (default) or firecracker.",
+      "description": "Virtual machine backend: qemu (default), firecracker or cloud-hypervisor.",
       "default": "qemu",
       "enum": [
         "qemu",
-        "firecracker"
+        "firecracker",
+        "cloud-hypervisor"
       ]
     },
     "firecracker": {
@@ -27,6 +28,25 @@
         }
       },
       "description": "Firecracker executable and lifecycle timeouts.",
+      "additionalProperties": false
+    },
+    "cloud_hypervisor": {
+      "type": "object",
+      "properties": {
+        "binary": {
+          "type": "string",
+          "description": "Cloud Hypervisor executable; default cloud-hypervisor. No shell expansion."
+        },
+        "startup_timeout": {
+          "type": "string",
+          "description": "Maximum time for API startup and configuration; zero uses 10s."
+        },
+        "shutdown_timeout": {
+          "type": "string",
+          "description": "Maximum graceful shutdown time; zero uses 10s."
+        }
+      },
+      "description": "Cloud Hypervisor executable and lifecycle timeouts.",
       "additionalProperties": false
     },
     "host_name": {

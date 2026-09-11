@@ -44,6 +44,7 @@ func (b *Backend) start(ctx context.Context, mf *imanifest.Manifest, ephemeralSt
 		StartupTimeout:   cfg.StartupTimeout,
 		ShutdownTimeout:  cfg.ShutdownTimeout,
 		Console:          cfg.Console == imanifest.KernelSerialPrint,
+		ConsoleTerminal:  true, // Cloud Hypervisor reads serial input only from a terminal
 		ConsoleOutput:    b.consoleOutput(),
 		Logger:           logger,
 		Networks:         vmmhost.NetworkStatuses(cfg.Networks),

@@ -25,6 +25,9 @@ Everything the [Firecracker backend](firecracker.md) does, the same way:
 - The serial console (`kernel.serial = "print"` /
   `cloudhypervisor.Backend{Console: cloudhypervisor.ConsolePrint}`), printed
   to the host and available as a `vm.Term` through `backend.ConsoleProvider`.
+  Cloud Hypervisor reads serial input only from a terminal, so virtle gives
+  it a pseudo-terminal for its standard streams rather than pipes; what the
+  guest prints and what a `Term` types cross it unchanged.
 - Lifecycle and status: `Start`, `Wait`, `Kill`, `Shutdown`, and
   `backend.StatusReporter`; over the control socket, `virtle status` and
   `virtle rpc status|wait|kill|shutdown`.

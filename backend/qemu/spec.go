@@ -277,10 +277,8 @@ func overlayShare(input imanifest.VirtioFSMountInput, share vm.Share) (imanifest
 	input.SourcePath = share.HostPath
 	input.ReadOnly = share.ReadOnly
 	input.Target = share.GuestPath
-	if input.VirtioFS.Socket == "" {
-		input.VirtioFS.Socket = share.Tag + ".sock"
-		input.VirtioFS.Bin = "virtiofsd"
-	}
+	// Manifest resolution defaults the socket and daemon of a share that
+	// names none, the same way on every backend.
 	return input, nil
 }
 

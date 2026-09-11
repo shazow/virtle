@@ -3,6 +3,7 @@ package manifest
 import (
 	"fmt"
 	"path/filepath"
+	"slices"
 
 	"github.com/shazow/virtle/internal/manifest/tagged"
 	"github.com/shazow/virtle/units"
@@ -28,7 +29,7 @@ const (
 type Document struct {
 	Backend         string               `json:"backend,omitempty" toml:"backend" default:"qemu" jsonschema:"Virtual machine backend: qemu (default), firecracker or cloud-hypervisor."`
 	Firecracker     FirecrackerInput     `json:"firecracker,omitempty" toml:"firecracker" jsonschema:"Firecracker executable and lifecycle timeouts."`
-	CloudHypervisor CloudHypervisorInput `json:"cloud_hypervisor,omitempty" toml:"cloud-hypervisor" jsonschema:"Cloud Hypervisor executable and lifecycle timeouts."`
+	CloudHypervisor CloudHypervisorInput `json:"cloud-hypervisor,omitempty" toml:"cloud-hypervisor" jsonschema:"Cloud Hypervisor executable and lifecycle timeouts."`
 	HostName        string               `json:"host_name,omitempty" toml:"host_name" default:"virtle" jsonschema:"Guest-visible VM name used for QEMU naming and derived runtime files."`
 	WorkingDir      string               `json:"working_dir,omitempty" toml:"working_dir" default:"." jsonschema:"Host working directory used to resolve relative paths in the manifest."`
 	StateDir        string               `json:"state_dir,omitempty" toml:"state_dir" default:".virtle" jsonschema:"Host directory used for runtime state such as locks sockets and generated files."`
@@ -178,6 +179,30 @@ func (m MountsInput) NineP() []NinePMountInput {
 
 func (m MountsInput) Image() []ImageMountInput {
 	return filterMounts[ImageMountInput](m)
+}
+
+// withVirtioFSDefaults returns the mounts with every virtiofs entry's daemon
+// defaulted (see defaultVirtioFSDaemon); the receiver is left alone.
+func (m MountsInput) withVirtioFSDefaults() MountsInput {
+	result := slices.Clone(m)
+	for i, entry := range result {
+		if mount, ok := entry.(VirtioFSMountInput); ok {
+			defaultVirtioFSDaemon(&mount)
+			result[i] = mount
+		}
+	}
+	return result
+}
+
+// firstMountNot reports the first mount whose kind is none of kinds, for a
+// backend that rejects the other kinds by name.
+func (m MountsInput) firstMountNot(kinds ...string) (index int, kind string, found bool) {
+	for i, mount := range m {
+		if !slices.Contains(kinds, mount.mountType()) {
+			return i, mount.mountType(), true
+		}
+	}
+	return 0, "", false
 }
 
 func (m *MountsInput) UnmarshalJSON(data []byte) error {

@@ -66,9 +66,10 @@ type BootSource struct {
 	Path       string `json:"path"`
 	InitrdPath string `json:"initrdPath,omitempty"`
 	// Cmdline is the complete guest command line virtle passes to the VMM:
-	// console parameters, the VMM's reboot/panic policy, root= for the disk
-	// mounted at "/", then the manifest's kernel.params. No drive is marked
-	// as the VMM's root device, so it appends nothing itself.
+	// console parameters, the reboot/panic policy virtle has for the VMM (if
+	// any), root= for the disk mounted at "/", then the manifest's
+	// kernel.params. No drive is marked as the VMM's root device, so it
+	// appends nothing itself.
 	Cmdline string `json:"cmdline"`
 }
 

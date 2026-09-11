@@ -34,11 +34,11 @@ func (d Document) firecrackerManifest() (*Manifest, error) {
 	if err := d.rejectQEMUOnly(BackendFirecracker); err != nil {
 		return nil, err
 	}
-	switch {
-	case d.CloudHypervisor != (CloudHypervisorInput{}):
+	if d.CloudHypervisor != (CloudHypervisorInput{}) {
 		return nil, unsupportedBy(BackendFirecracker, "manifest.cloud-hypervisor configures Cloud Hypervisor; remove it or set backend = %q", BackendCloudHypervisor)
-	case len(d.Mounts) != len(d.Mounts.Image()):
-		return nil, unsupportedBy(BackendFirecracker, "only image mounts are supported")
+	}
+	if i, kind, ok := d.Mounts.firstMountNot(MountTypeImage); ok {
+		return nil, unsupportedBy(BackendFirecracker, "manifest.mounts[%d].type %s; only image mounts are supported", i, kind)
 	}
 	m, vmm, err := d.resolveVMM(vmmProfile{
 		backend:       BackendFirecracker,

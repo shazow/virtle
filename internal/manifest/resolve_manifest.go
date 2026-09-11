@@ -45,10 +45,10 @@ func (d Document) ManifestWithOptions(options ResolveOptions) (*Manifest, error)
 	default:
 		return nil, fmt.Errorf("manifest.backend must be %s, %s or %s, got %q", BackendQEMU, BackendFirecracker, BackendCloudHypervisor, d.Backend)
 	}
-	if d.Firecracker != (FirecrackerInput{}) {
+	if !unconfigured(d.Firecracker) {
 		return nil, fmt.Errorf("manifest.firecracker requires backend = %q", BackendFirecracker)
 	}
-	if d.CloudHypervisor != (CloudHypervisorInput{}) {
+	if !unconfigured(d.CloudHypervisor) {
 		return nil, fmt.Errorf("manifest.cloud-hypervisor requires backend = %q", BackendCloudHypervisor)
 	}
 	d = DocumentWithDefaults(d)

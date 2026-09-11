@@ -246,3 +246,26 @@ func TestCloudHypervisorInteractiveConsole(t *testing.T) {
 		t.Fatalf("console = %q, cmdline = %q", m.CloudHypervisor.Console, m.CloudHypervisor.Kernel.Cmdline)
 	}
 }
+
+// TestVMMArgsResolve covers [cloud-hypervisor] args and [firecracker] args:
+// they reach the resolved configuration as given.
+func TestVMMArgsResolve(t *testing.T) {
+	ch, err := decodeCloudHypervisor(t, "[kernel]\npath = 'vmlinux'\n[cloud-hypervisor]\nargs = ['--seccomp', 'false']\n").Manifest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(ch.CloudHypervisor.Args, []string{"--seccomp", "false"}) {
+		t.Fatalf("cloud-hypervisor args = %q", ch.CloudHypervisor.Args)
+	}
+	fc, err := DecodeDocumentBytes([]byte("backend = 'firecracker'\n[kernel]\npath = 'vmlinux'\n[firecracker]\nargs = ['--log-path', '/dev/null']\n"), "manifest.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := fc.Manifest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(m.Firecracker.Args, []string{"--log-path", "/dev/null"}) {
+		t.Fatalf("firecracker args = %q", m.Firecracker.Args)
+	}
+}

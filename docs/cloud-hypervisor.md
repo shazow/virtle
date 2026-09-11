@@ -66,6 +66,10 @@ manifest default; the QEMU Go API defaults to 2048 MiB). Small guests should
 set both explicitly. `[cloud-hypervisor] binary`, `startup_timeout`, and
 `shutdown_timeout` (or the matching `Backend` fields) tune the VMM; the
 startup timeout also bounds the wait for the share daemons' sockets.
+`[cloud-hypervisor] args` / `Backend.ExtraArgs` append command-line
+arguments after virtle's own, for options virtle has no setting for
+(`--seccomp false`, `--log-file`); they are neither shell-expanded nor
+templated.
 
 `Start` returns once Cloud Hypervisor has accepted the boot request; it does
 not mean the guest workload is ready. Observe readiness inside the guest:
@@ -153,7 +157,8 @@ capability but virtle does not wire it yet, what would close the gap:
 | Hotplug of disks, shares, forwards | yes, with ports reserved at boot | no | no (`vm.add-disk` and `vm.add-fs` exist and need no reserved ports) |
 | `[[run]]` host helpers | yes | yes | yes |
 | `[notifications]` hooks | yes | no | no |
-| Graphics, CPU model, machine type, extra VMM arguments | yes | no | no |
+| Graphics, CPU model, machine type | yes | no | no |
+| Extra VMM arguments | `[qemu] exec`, `ExtraArgs` | `[firecracker] args`, `ExtraArgs` | `[cloud-hypervisor] args`, `ExtraArgs` |
 | Accelerators and hosts | KVM, HVF, TCG; Linux and macOS | KVM; Linux x86_64 and aarch64 | KVM; Linux x86_64 and aarch64 |
 | VMM sandboxing | optional seccomp | none (virtle does not run the jailer) | the VMM's own seccomp filter |
 

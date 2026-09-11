@@ -50,7 +50,7 @@ func (b *Backend) start(ctx context.Context, mf *imanifest.Manifest, ephemeralSt
 			return helpers.Stop, nil
 		},
 		Command: func(socket string) *exec.Cmd {
-			return exec.Command(cfg.Binary, "--api-sock", socket)
+			return exec.Command(cfg.Binary, append([]string{"--api-sock", socket}, cfg.Args...)...)
 		},
 		Configure: func(ctx context.Context, socket string) error {
 			return newAPIClient(socket).configure(ctx, cfg)

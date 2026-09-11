@@ -1,6 +1,7 @@
 package cloudhypervisor
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -78,5 +79,26 @@ image.size=256
 	}
 	if doc.Mounts.Image()[0].SourcePath != "original" || doc.Mounts.VirtioFS()[0].SourcePath != "original-src" || !strings.Contains(doc.CloudHypervisor.Binary, "./bin/") {
 		t.Fatal("source document was mutated")
+	}
+}
+
+// TestExtraArgsFollowTheManifestArgs covers a manifest.Load backend with
+// Backend.ExtraArgs: the manifest's args come first, the Backend's after.
+func TestExtraArgsFollowTheManifestArgs(t *testing.T) {
+	doc, err := imanifest.DecodeDocumentBytes([]byte("backend = 'cloud-hypervisor'\n[kernel]\npath = 'kernel'\n[cloud-hypervisor]\nargs = ['--seccomp', 'false']\n"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := NewBackendFromDocument(doc, Backend{ExtraArgs: []string{"-v"}}).(*Backend)
+	mf, err := b.resolveSpec(&vm.Spec{Dir: "/work"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"--seccomp", "false", "-v"}; !reflect.DeepEqual(mf.CloudHypervisor.Args, want) {
+		t.Fatalf("args = %q, want %q", mf.CloudHypervisor.Args, want)
+	}
+	// The stored document is not mutated by the overlay.
+	if len(doc.CloudHypervisor.Args) != 2 {
+		t.Fatalf("document args = %q", doc.CloudHypervisor.Args)
 	}
 }

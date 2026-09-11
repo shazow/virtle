@@ -47,6 +47,9 @@ func TestMain(m *testing.M) {
 		os.Exit(0)
 	}
 	if mode := os.Getenv("VIRTLE_TEST_FIRECRACKER"); mode != "" {
+		if path := os.Getenv("VIRTLE_TEST_VMM_ARGV"); path != "" {
+			_ = os.WriteFile(path, []byte(strings.Join(os.Args[1:], "\n")), 0o600)
+		}
 		if mode == "diagnostic" {
 			fmt.Fprintln(os.Stderr, "KVM unavailable test")
 			os.Exit(1)
@@ -478,6 +481,27 @@ func TestConsoleFollowsTheMachine(t *testing.T) {
 	t.Cleanup(func() { _ = m.Kill() })
 	if _, err := m.(backend.ConsoleProvider).Console(t.Context()); !errors.Is(err, errors.ErrUnsupported) {
 		t.Fatalf("Console without a serial console = %v, want ErrUnsupported", err)
+	}
+}
+
+// TestExtraArgsReachTheVMM covers Backend.ExtraArgs: they follow virtle's
+// own arguments on the VMM's command line.
+func TestExtraArgsReachTheVMM(t *testing.T) {
+	b, spec := helperBackend(t, "normal")
+	b.ExtraArgs = []string{"--log-path", "/dev/null"}
+	argv := filepath.Join(t.TempDir(), "argv")
+	t.Setenv("VIRTLE_TEST_VMM_ARGV", argv)
+	m, err := b.Start(t.Context(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = m.Kill() }()
+	got, err := os.ReadFile(argv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if args := strings.Split(string(got), "\n"); len(args) != 4 || args[0] != "--api-sock" || args[2] != "--log-path" || args[3] != "/dev/null" {
+		t.Fatalf("VMM argv = %q", args)
 	}
 }
 

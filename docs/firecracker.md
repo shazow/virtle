@@ -44,7 +44,9 @@ The vCPU default follows QEMU's: an omitted count means every host CPU
 (`firecracker.DefaultMemory`, the manifest default; the QEMU Go API defaults
 to 2048 MiB). Small guests should set both explicitly.
 `[firecracker] binary`, `startup_timeout`, and `shutdown_timeout` (or the
-matching `Backend` fields) tune the VMM.
+matching `Backend` fields) tune the VMM; `[firecracker] args` /
+`Backend.ExtraArgs` append command-line arguments after virtle's own,
+neither shell-expanded nor templated.
 
 `Start` returns once Firecracker has accepted `InstanceStart`; it does not
 mean the guest workload is ready. Observe readiness inside the guest: attach

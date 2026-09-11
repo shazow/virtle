@@ -42,7 +42,9 @@ func unsupportedBy(backend string, format string, args ...any) error {
 // raw disks, TAP NICs, and the console mode, with paths already resolved
 // against the working directory. Firecracker and CloudHypervisor embed it.
 type VMM struct {
-	Binary          string        `json:"binary"`
+	Binary string `json:"binary"`
+	// Args follow the arguments virtle passes on the VMM's command line.
+	Args            []string      `json:"args,omitempty"`
 	StartupTimeout  time.Duration `json:"startupTimeout"`
 	ShutdownTimeout time.Duration `json:"shutdownTimeout"`
 	CPUs            int           `json:"cpus"`
@@ -100,6 +102,7 @@ type vmmInput struct {
 	Binary          string
 	StartupTimeout  units.Duration
 	ShutdownTimeout units.Duration
+	Args            []string
 }
 
 // vmmProfile is what distinguishes one microVM backend's resolution from the
@@ -273,6 +276,7 @@ func (d Document) resolveVMM(p vmmProfile, in vmmInput) (*Manifest, *VMM, error)
 
 	vmm := &VMM{
 		Binary:          in.Binary,
+		Args:            slices.Clone(in.Args),
 		StartupTimeout:  in.StartupTimeout.Duration(),
 		ShutdownTimeout: in.ShutdownTimeout.Duration(),
 		CPUs:            d.Machine.VCPU,

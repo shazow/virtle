@@ -62,6 +62,9 @@ func TestMain(m *testing.M) {
 // --api-socket path=<socket> argument, or misbehaves as mode says. A power
 // button press ends it the way a guest power-off ends the real VMM.
 func fakeVMM(mode string) {
+	if path := os.Getenv("VIRTLE_TEST_VMM_ARGV"); path != "" {
+		_ = os.WriteFile(path, []byte(strings.Join(os.Args[1:], "\n")), 0o600)
+	}
 	switch mode {
 	case "diagnostic":
 		fmt.Fprintln(os.Stderr, "KVM unavailable test")
@@ -641,6 +644,27 @@ func TestKillOutlivesConsoleStraggler(t *testing.T) {
 	}
 	if status, _ := m.(backend.StatusReporter).Status(context.Background()); status.State != backend.StateStopped {
 		t.Fatalf("state after Kill = %q, want stopped", status.State)
+	}
+}
+
+// TestExtraArgsReachTheVMM covers Backend.ExtraArgs: they follow virtle's
+// own arguments on the VMM's command line.
+func TestExtraArgsReachTheVMM(t *testing.T) {
+	b, spec := helperBackend(t, "normal")
+	b.ExtraArgs = []string{"--seccomp", "false"}
+	argv := filepath.Join(t.TempDir(), "argv")
+	t.Setenv("VIRTLE_TEST_VMM_ARGV", argv)
+	m, err := b.Start(t.Context(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = m.Kill() }()
+	got, err := os.ReadFile(argv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if args := strings.Split(string(got), "\n"); len(args) != 4 || args[0] != "--api-socket" || !strings.HasPrefix(args[1], "path=") || args[2] != "--seccomp" || args[3] != "false" {
+		t.Fatalf("VMM argv = %q", args)
 	}
 }
 

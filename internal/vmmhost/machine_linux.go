@@ -82,6 +82,7 @@ type Machine struct {
 	consoleDone     chan struct{} // closes once the terminal's last output reached the hub
 	graceful        func(ctx context.Context, socket string) error
 	cleanup         func() error // Prepare's cleanup, or nil
+	logger          *slog.Logger
 
 	// stopped closes once the VMM has exited and its runtime files are
 	// released; done closes after the control server has also delivered the
@@ -112,6 +113,7 @@ func newMachine(l Launch, socket string, lock io.Closer, runtimeDir string, clea
 		diagnostics:     &DiagnosticWriter{},
 		graceful:        l.Graceful,
 		cleanup:         cleanup,
+		logger:          l.logger(),
 		stopped:         make(chan struct{}),
 		done:            make(chan struct{}),
 		shutdownDone:    make(chan struct{}),
@@ -218,12 +220,7 @@ func Start(ctx context.Context, l Launch) (*Machine, error) {
 		_ = slave.Close()
 	}
 	if err != nil {
-		if m.console != nil {
-			_ = m.console.Close()
-		}
-		if m.terminal != nil {
-			_ = m.terminal.Close()
-		}
+		m.closeConsole()
 		rollback()
 		return nil, err
 	}
@@ -245,12 +242,14 @@ func Start(ctx context.Context, l Launch) (*Machine, error) {
 	router, err := control.NewMachineRouter(controlMachine{m})
 	if err != nil {
 		_ = m.process.KillAndWait()
+		m.closeConsole()
 		rollback()
 		return nil, err
 	}
 	m.control, err = control.NewServer(router)
 	if err != nil {
 		_ = m.process.KillAndWait()
+		m.closeConsole()
 		rollback()
 		return nil, err
 	}
@@ -268,10 +267,12 @@ func Start(ctx context.Context, l Launch) (*Machine, error) {
 	started = true // the reaper now owns all cleanup, including failed startup
 	startupCtx, cancel := context.WithTimeout(ctx, l.StartupTimeout)
 	defer cancel()
-	// Process exit interrupts both API startup and in-flight configuration.
+	// Process exit interrupts both API startup and in-flight configuration,
+	// before the reaper's cleanup stops Prepare's helpers, so a Configure
+	// still waiting on them sees the VMM's exit as the cause, not theirs.
 	go func() {
 		select {
-		case <-m.done:
+		case <-m.process.Done():
 			cancel()
 		case <-startupCtx.Done():
 		}
@@ -427,11 +428,34 @@ func (m *Machine) reap() {
 func (m *Machine) serveTerminal() {
 	go func() {
 		defer close(m.consoleDone)
-		_, _ = io.Copy(m.console, m.terminal)
+		if _, err := io.Copy(m.console, m.terminal); err != nil && !consoleClosed(err) {
+			m.logger.Warn("console output stopped", "err", err)
+		}
 	}()
 	go func() {
-		_, _ = io.Copy(m.terminal, m.console.Stdin())
+		if _, err := io.Copy(m.terminal, m.console.Stdin()); err != nil && !consoleClosed(err) {
+			m.logger.Warn("console input stopped", "err", err)
+		}
 	}()
+}
+
+// consoleClosed reports the errors that end a console copier in the normal
+// course of teardown: the VMM's side of the terminal gone, or the master and
+// the hub's pipe closed by the reaper.
+func consoleClosed(err error) bool {
+	return terminalClosed(err) || errors.Is(err, os.ErrClosed) || errors.Is(err, io.ErrClosedPipe)
+}
+
+// closeConsole releases the hub and the pseudo-terminal of a launch that
+// failed before the reaper existed to do it; closing the master ends the
+// copiers serveTerminal may have started.
+func (m *Machine) closeConsole() {
+	if m.terminal != nil {
+		_ = m.terminal.Close()
+	}
+	if m.console != nil {
+		_ = m.console.Close()
+	}
 }
 
 // Done closes after the machine exits and its runtime state is released.
@@ -460,10 +484,20 @@ func (m *Machine) Kill() error { return m.finish(m.kill()) }
 
 func (m *Machine) kill() error {
 	// Stop with an expired context skips the graceful rungs: it SIGKILLs the
-	// process group and bounds its own wait for the reaper.
+	// process group and bounds its own wait for the process.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	err := m.process.Stop(ctx)
+	if exited, _ := m.process.PollExit(); exited {
+		// What the reaper still does after the exit (Prepare's cleanup,
+		// the console drain, the runtime files) is bounded on its own, so
+		// wait it out rather than report a teardown that is completing.
+		<-m.stopped
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return errors.Join(err, m.cleanupErr)
+	}
+	// A process wedged past SIGKILL keeps the caller bounded instead.
 	waitCtx, stop := context.WithTimeout(context.Background(), killWaitTimeout)
 	defer stop()
 	select {
@@ -517,8 +551,9 @@ func (m *Machine) gracefulShutdown() error {
 	m.mu.Unlock()
 	if err := m.graceful(ctx, m.socket); err != nil {
 		// A guest that powered off on its own while the request was in
-		// flight reached the state shutdown wanted; only a live VMM is killed.
-		if exited, _ := m.process.PollExit(); !exited {
+		// flight reached the state shutdown wanted; only a live VMM is
+		// killed. A request the VMM cannot make at all kills regardless.
+		if exited, _ := m.process.PollExit(); !exited || errors.Is(err, errors.ErrUnsupported) {
 			return errors.Join(err, m.kill())
 		}
 	}
@@ -547,8 +582,8 @@ func (m *Machine) waitStopped(ctx context.Context) error {
 }
 
 // finish returns err after the control server has drained, once the VMM is
-// known to have stopped; a process wedged during kill keeps the caller bounded
-// by kill's own timeout instead.
+// known to have stopped; a process wedged past kill's SIGKILL keeps the
+// caller bounded by kill's own timeout instead.
 func (m *Machine) finish(err error) error {
 	select {
 	case <-m.stopped:

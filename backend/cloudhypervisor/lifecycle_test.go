@@ -70,6 +70,19 @@ func fakeVMM(mode string) {
 		fmt.Println("WAIT")
 		<-signals
 		os.Exit(0)
+	case "sleep":
+		time.Sleep(3 * time.Second)
+		os.Exit(0)
+	case "straggler":
+		// Something the VMM spawned inherits its console and outlives it,
+		// in a process group of its own so the VMM's kill does not reach it.
+		child := exec.Command(os.Args[0])
+		child.Env = append(os.Environ(), "VIRTLE_TEST_CLOUD_HYPERVISOR=sleep")
+		child.Stdin, child.Stdout = os.Stdin, os.Stdout
+		child.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		if err := child.Start(); err != nil {
+			panic(err)
+		}
 	}
 	socket := strings.TrimPrefix(os.Args[2], "path=")
 	// Like the real VMM, take console input only from a terminal; echo it,
@@ -538,6 +551,30 @@ func stdinIsTerminal() bool {
 // VMM through the pseudo-terminal it insists on (the fake echoes it), the
 // console ends when the machine exits, and no console means
 // errors.ErrUnsupported.
+// TestKillOutlivesConsoleStraggler covers a process that inherited the VMM's
+// console and outlives it: the reaper's bounded wait for the console to
+// drain is teardown work, not a wedged VMM, so Kill waits it out and reports
+// success rather than a teardown deadline.
+func TestKillOutlivesConsoleStraggler(t *testing.T) {
+	b, spec := helperBackend(t, "straggler")
+	b.Console, b.ConsoleOutput = ConsolePrint, io.Discard
+	m, err := b.Start(t.Context(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Kill(); err != nil {
+		t.Fatalf("Kill with a console straggler: %v", err)
+	}
+	select {
+	case <-m.Done():
+	default:
+		t.Fatal("Kill returned before the machine was done")
+	}
+	if status, _ := m.(backend.StatusReporter).Status(context.Background()); status.State != backend.StateStopped {
+		t.Fatalf("state after Kill = %q, want stopped", status.State)
+	}
+}
+
 func TestConsoleFollowsTheMachine(t *testing.T) {
 	b, spec := helperBackend(t, "normal")
 	b.Console, b.ConsoleOutput = ConsolePrint, io.Discard

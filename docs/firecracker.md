@@ -7,7 +7,8 @@ control socket, and `virtle launch` / `status` / `rpc` commands are the same
 for every backend; the differences are in what the guest gets.
 
 For the same shape of backend with virtio-fs shares, see the
-[Cloud Hypervisor backend](cloud-hypervisor.md).
+[Cloud Hypervisor backend](cloud-hypervisor.md); its guide compares the three
+backends feature by feature.
 
 The backend is early. Firecracker requires Linux on x86_64 or aarch64 with an
 accessible `/dev/kvm`; there is no software-emulation fallback. Guest kernels
@@ -88,7 +89,7 @@ features it cannot honor fail `Start` with an error wrapping
 | virtiofs and 9p shares, qcow2, disk cache/serial options | Raw images only, created on demand as above. [Cloud Hypervisor](cloud-hypervisor.md) has virtio-fs shares. |
 | Interactive console (`serial = "console"`) | Only `off` and `print`. |
 | Suspend/resume, balloon, hotplug | Capability interfaces are not implemented. |
-| `[run]` helpers, `[notifications]`, `[qemu]` settings | QEMU-only. |
+| `[run]` helpers, `[notifications]`, `[qemu]`, `[cloud-hypervisor]` settings | Other backends'. |
 | Jailer, cgroups, namespaces | Firecracker runs directly with its default seccomp filter; provide host isolation separately for multi-tenant use. |
 
 ## Runtime files

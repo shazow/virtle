@@ -38,16 +38,21 @@ And what Firecracker cannot do:
 
 - virtio-fs shares (`[[mounts]] type = "virtiofs"` / `vm.Share`). virtle
   starts a [`virtiofsd`](https://gitlab.com/virtio-fs/virtiofsd) per share
-  before the VMM, as it does for QEMU: the socket defaults to
-  `<state_dir>/<tag>.sock` and the daemon to `virtiofsd` from `PATH`, or
-  `virtiofs.socket`, `virtiofs.bin`, and `virtiofs.args` name them; a socket
-  that is already live is used as it is. The guest memory is shared with
-  the daemons (`memory.shared` in Cloud Hypervisor's terms) whenever there
-  is a share. The guest mounts a share itself, with
+  before the VMM, as it does for QEMU: a mount that names no socket gets
+  `<state_dir>/<tag>.sock` and `virtiofsd` from `PATH`; `virtiofs.bin` and
+  `virtiofs.args` choose another daemon; a mount that names only
+  `virtiofs.socket` is served by something else, which virtle waits for but
+  does not start. `read_only` / `vm.Share.ReadOnly` makes the daemon refuse
+  guest writes (`--readonly`), so it needs a daemon virtle starts, or
+  `virtiofs.args` that carry the flag; otherwise the manifest fails
+  validation rather than attaching the share writable. The guest memory is
+  shared with the daemons (`memory.shared` in Cloud Hypervisor's terms)
+  whenever there is a share. The guest mounts a share itself, with
   `mount -t virtiofs <tag> <dir>`; `target` / `vm.Share.GuestPath` is
-  recorded but nothing in the guest acts on it yet.
+  accepted but nothing in the guest acts on it.
 
-The vCPU default follows QEMU's: an omitted count means every host CPU. An
+The vCPU default follows QEMU's: an omitted count means every host CPU, and
+the bound is Cloud Hypervisor's own (8192 on x86_64, 255 on aarch64). An
 omitted memory size means 1024 MiB (`cloudhypervisor.DefaultMemory`, the
 manifest default; the QEMU Go API defaults to 2048 MiB). Small guests should
 set both explicitly. `[cloud-hypervisor] binary`, `startup_timeout`, and
@@ -97,8 +102,10 @@ The guest NIC, when there is one, is a host TAP device (`[[networks]] type =
 "tap"` with `tap = "tap0"`, or `cloudhypervisor.TAP{Name: "tap0"}`) that the
 host kernel networks; the operator owns its addressing and forwards, so
 `Spec.Ports` and `[[networks.forward]]` are rejected. Cloud Hypervisor opens
-the device itself, which needs `CAP_NET_ADMIN` unless the device already
-exists and is owned by the user running virtle. Frames over vsock into a
+the device itself and brings it up, which needs `CAP_NET_ADMIN` unless the
+device already exists, is owned by the user running virtle, and is already
+up; a device it creates gets `192.168.249.1/24` on the host side, an existing
+one keeps its addresses. Frames over vsock into a
 virtle network follow with the guest daemon, as on Firecracker; see
 [docs/networking.md](networking.md).
 
@@ -117,6 +124,30 @@ features it cannot honor fail `Start` with an error wrapping
 | Suspend/resume, balloon, hotplug | Capability interfaces are not implemented. |
 | `[run]` helpers, `[notifications]`, `[qemu]`, `[firecracker]` settings | Other backends'. |
 | Landlock, cgroups, namespaces | Cloud Hypervisor runs directly with its default seccomp filter; provide host isolation separately for multi-tenant use. |
+
+## Parity with QEMU and Firecracker
+
+What each backend offers today, and, where Cloud Hypervisor has the
+capability but virtle does not wire it yet, what would close the gap:
+
+| Feature | QEMU | Firecracker | Cloud Hypervisor |
+| --- | --- | --- | --- |
+| Direct kernel boot, initrd, root device at `/` | yes | yes | yes |
+| Disk images | raw and qcow2, created on demand, `image.serial` and `image.direct` | raw, created on demand | raw, created on demand (the VMM reads qcow2 and honors serial and direct; not wired) |
+| Shares | virtio-fs and 9p | no | virtio-fs |
+| Serial console printed and as a `vm.Term` | yes | yes | yes, over a pseudo-terminal |
+| Interactive console (`serial = "console"`) | yes | no | no |
+| Networking | `user`, `virtle`, `tap` | `tap` | `tap` |
+| Port forwards, egress policy, host-side dialing | yes | no | no |
+| Guest control, SSH, guest files, workspace, `write_files` | yes (qemu-guest-agent) | no | no (the VMM has vsock for the guest daemon) |
+| Graceful shutdown | guest agent, then QMP quit | Ctrl-Alt-Del (x86_64 only) | ACPI power button |
+| Suspend and resume | yes | no (the VMM has a snapshot API) | no (`vm.snapshot` and `vm.restore` exist) |
+| Memory resize | balloon | no | no (a balloon, or `hotplug_size` with `vm.resize`, exist) |
+| Hotplug of disks, shares, forwards | yes, with ports reserved at boot | no | no (`vm.add-disk` and `vm.add-fs` exist and need no reserved ports) |
+| `[[run]]` helpers, `[notifications]` | yes | no | no |
+| Graphics, CPU model, machine type, extra VMM arguments | yes | no | no |
+| Accelerators and hosts | KVM, HVF, TCG; Linux and macOS | KVM; Linux x86_64 and aarch64 | KVM; Linux x86_64 and aarch64 |
+| VMM sandboxing | optional seccomp | none (virtle does not run the jailer) | the VMM's own seccomp filter |
 
 ## Runtime files
 

@@ -54,10 +54,10 @@ And what Firecracker cannot do:
   `<state_dir>/<tag>.sock` and `virtiofsd` from `PATH`; `virtiofs.bin` and
   `virtiofs.args` choose another daemon; a mount that names only
   `virtiofs.socket` is served by something else, which virtle waits for but
-  does not start. `read_only` / `vm.Share.ReadOnly` makes the daemon refuse
-  guest writes (`--readonly`), so it needs a daemon virtle starts, or
-  `virtiofs.args` that carry the flag; otherwise the manifest fails
-  validation rather than attaching the share writable. The guest memory is
+  does not start. `read_only` / `vm.Share.ReadOnly` adds `--readonly` to
+  the daemon virtle starts, whatever its `virtiofs.args`; a share served by
+  something else is read-only only if that daemon was started so, which
+  virtle logs rather than checks. The guest memory is
   shared with the daemons (`memory.shared` in Cloud Hypervisor's terms)
   whenever there is a share. The guest mounts a share itself, with
   `mount -t virtiofs <tag> <dir>`; `target` / `vm.Share.GuestPath` is

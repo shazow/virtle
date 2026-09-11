@@ -42,6 +42,8 @@ var qemuOnlyRejections = []rejectedSetting{
 // microVMAccepted are QEMU defaults spelled out explicitly, and settings
 // both microVM backends honor.
 var microVMAccepted = []struct{ name, toml string }{
+	{"disabled balloon", "[balloon]\nenabled = false"},
+	{"workspace directories", "[workspace]\nguest_dir = '/home/agent/workspace'\nhost_dir = 'workspace'"},
 	{"run helper", "[[run]]\nexec = ['true', '{{.StateDir}}']"},
 	{"ssh defaults spelled out", "[ssh]\nuser = 'agent'\nretry_delay = '500ms'"},
 	{"vsock disabled", "[vsock]\nenabled = false"},

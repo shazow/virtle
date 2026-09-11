@@ -36,12 +36,17 @@ compact before/after examples.
   microVMs and stop after them, as they do for QEMU; the sections used to
   be rejected there. `[notifications]` stays QEMU-only.
 - `[[mounts]] type = "virtiofs"` with `read_only = true` now makes the
-  `virtiofsd` virtle starts refuse guest writes (`--readonly`). A read-only
-  share whose daemon virtle does not start, or whose own `virtiofs.args`
-  lack the flag, fails validation instead of attaching writable, which is
-  what `read_only` did before on every backend. A QEMU manifest's virtiofs
-  mount that names no `virtiofs.socket` now gets `<tag>.sock` and virtle's
-  `virtiofsd`, as it already did through the Go API.
+  `virtiofsd` virtle starts refuse guest writes: `--readonly` is added to
+  its arguments, `virtiofs.args` or the defaults, unless already there.
+  Before, `read_only` did nothing for virtiofs shares on any backend. A
+  share served by another daemon (`virtiofs.socket` alone) still relies on
+  that daemon. A QEMU manifest's virtiofs mount that names no
+  `virtiofs.socket` now gets `<tag>.sock` and virtle's `virtiofsd`, as it
+  already did through the Go API.
+- Firecracker and Cloud Hypervisor manifests accept `[balloon] enabled =
+  false` and `[workspace]` `guest_dir` / `host_dir` (template data for
+  `[[run]]`); `mount_cwd`, `write_files`, and an enabled balloon stay
+  rejected there.
 
 ### Library changes
 
@@ -55,8 +60,7 @@ compact before/after examples.
   and `firecracker.Backend` gain `ExtraArgs`, as `qemu.Backend` has. With
   that slice field `firecracker.Backend` values are no longer comparable
   with `==`, like `qemu.Backend`.
-- `vm.Share.ReadOnly` is enforced by the share's `virtiofsd`; `Start` fails
-  when virtle does not start that daemon or its arguments lack `--readonly`.
+- `vm.Share.ReadOnly` reaches the `virtiofsd` virtle starts as `--readonly`.
 
 ## 2026-09-10
 

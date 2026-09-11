@@ -33,10 +33,12 @@ const (
 	readyLine = "VIRTLE_READY:42"
 	// fixtureCmdline mirrors the fixture manifests' kernel.params; virtle adds
 	// the console and reboot/panic parameters itself on every backend. The
-	// MMIO loaders skip the PCI probe; Cloud Hypervisor's devices are PCI, and
-	// so are virtio-fs shares on QEMU, hence pciCmdline.
+	// MMIO loaders skip the PCI probe and leave ACPI alone (on Firecracker's
+	// tables the Ctrl-Alt-Del shutdown stopped ending the VMM); Cloud
+	// Hypervisor's devices are PCI, and so are virtio-fs shares on QEMU,
+	// hence pciCmdline.
 	pciCmdline     = "rdinit=/init quiet i8042.noaux i8042.nomux i8042.dumbkbd i8042.nopnp"
-	fixtureCmdline = "pci=off " + pciCmdline
+	fixtureCmdline = "pci=off acpi=off " + pciCmdline
 
 	readyTimeout = 30 * time.Second
 	testMemory   = 128 * units.Mebibyte
@@ -192,10 +194,12 @@ func (c *consoleLog) Write(p []byte) (int, error) {
 	return c.buf.Write(p)
 }
 
+// String returns the console so far with the serial line's carriage returns
+// removed: the CI log renderer blanks a line that ends in one.
 func (c *consoleLog) String() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.buf.String()
+	return strings.ReplaceAll(c.buf.String(), "\r", "")
 }
 
 // waitForLine reads console lines from term until one equals want. It gives
@@ -514,6 +518,31 @@ func TestDirContract(t *testing.T) {
 	}
 }
 
+// TestGuestShutdown covers Shutdown where the request goes through the
+// guest: Firecracker's Ctrl-Alt-Del and Cloud Hypervisor's power button both
+// reach the fixture's shutdown script, which prints a marker before the
+// machine ends. QEMU's Shutdown quits the VMM from the host and has no
+// marker to check.
+func TestGuestShutdown(t *testing.T) {
+	f := loadFixture(t)
+	for _, g := range f.guests() {
+		if g.name == "qemu" {
+			continue
+		}
+		t.Run(g.name, func(t *testing.T) {
+			m, log := startReady(t, g, g.spec(t))
+			ctx, cancel := context.WithTimeout(context.Background(), readyTimeout)
+			defer cancel()
+			if err := m.Shutdown(ctx); err != nil {
+				t.Fatalf("shutdown: %v\n--- console ---\n%s", err, log.String())
+			}
+			if !strings.Contains(log.String(), "VIRTLE_SHUTDOWN:done") {
+				t.Fatalf("guest did not run its shutdown script\n--- console ---\n%s", log.String())
+			}
+		})
+	}
+}
+
 // TestShares covers vm.Spec.Shares on real machines: virtle starts a
 // virtiofsd for the share, the guest mounts it by tag and reads the file the
 // host put there, and the daemon and its socket go away with the machine.
@@ -543,8 +572,9 @@ func TestShares(t *testing.T) {
 				return
 			}
 			// The share is a PCI device on every backend, and the guest
-			// mounts it when told its tag.
-			spec.Kernel.Cmdline = pciCmdline + " virtle.share=share"
+			// mounts it when told its tag. The kernel log stays on: this is
+			// the one boot whose PCI bus differs per VMM.
+			spec.Kernel.Cmdline = strings.ReplaceAll(pciCmdline, " quiet", "") + " virtle.share=share"
 			shared := g
 			shared.newBackend = g.shareBackend
 			m, log := startReady(t, shared, spec)

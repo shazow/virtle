@@ -68,7 +68,10 @@ let
     "i8042.dumbkbd"
     "i8042.nopnp"
   ];
-  # The MMIO loaders skip the PCI probe; Cloud Hypervisor's devices are PCI.
+  # The MMIO loaders skip the PCI probe and leave ACPI alone: the kernel has
+  # both for Cloud Hypervisor's PCI devices, and on Firecracker's
+  # hardware-reduced ACPI tables the Ctrl-Alt-Del shutdown stopped ending
+  # the VMM. Cloud Hypervisor boots with both on.
   common =
     {
       isQemu ? false,
@@ -86,7 +89,15 @@ let
       [kernel]
       initrd_path = "${initrd}/initrd"
       serial = "print"
-      params = ${builtins.toJSON (pkgs.lib.optional (!pci) "pci=off" ++ params)}
+      params = ${
+        builtins.toJSON (
+          pkgs.lib.optionals (!pci) [
+            "pci=off"
+            "acpi=off"
+          ]
+          ++ params
+        )
+      }
     '';
   firecracker = pkgs.writeText "virtle-fast-firecracker.toml" ''
     backend = "firecracker"

@@ -37,7 +37,7 @@ let
         # ACPI, and its shutdown request is the ACPI power button; the tiny
         # power button driver turns that into SIGUSR2 for init (BusyBox
         # init's power-off), so the guest runs no acpid. The MMIO loaders
-        # boot with pci=off and skip all of this.
+        # boot with pci=off acpi=off and skip all of this.
         PCI = yes;
         PCI_MSI = yes;
         ACPI = yes;

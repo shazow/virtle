@@ -1,0 +1,30 @@
+# A Cloud Hypervisor microVM: direct boot of a PVH-capable kernel with a raw
+# root disk and a virtio-fs share. Guest control and SSH are QEMU-only for
+# now, and the only NIC is a host TAP device; see docs/cloud-hypervisor.md for
+# what the backend supports.
+backend = "cloud-hypervisor"
+
+[machine]
+vcpu = 2
+memory = 512
+
+[kernel]
+path = "/tmp/vmlinux"
+# virtle adds console=ttyS0 (for serial = "print") and root=/dev/vda ro for
+# the image mounted at "/". Every device is virtio-PCI: no pci=off here.
+serial = "print"
+
+# The image mounted at "/" is the root device on every backend.
+[[mounts]]
+type = "image"
+source = "/tmp/rootfs.ext4"
+target = "/"
+read_only = true
+
+# virtle starts a virtiofsd (from PATH, on .virtle/src.sock) for the share;
+# the guest mounts it with: mount -t virtiofs src /mnt
+[[mounts]]
+type = "virtiofs"
+tag = "src"
+source = "."
+target = "/mnt"

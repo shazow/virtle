@@ -3,6 +3,7 @@
 If you're a nix user, check out these declarative flake examples, see:
 
 - [Firecracker appliance](firecracker/README.md) (raw disk computation, verified readiness and clean shutdown; Linux x86_64/KVM)
+- [Cloud Hypervisor appliance](cloud-hypervisor/README.md) (the same on Cloud Hypervisor, shut down through the ACPI power button; Linux x86_64/KVM)
 - [NixOS with SSH provisioning](nixos/README.md) (similar to what [agentspace](https://github.com/shazow/agentspace) does)
 - [Alpine VM](nix-alpine/README.md) (boots super fast, under 400ms)
 - [Prototype: Tiny NixOS](nixos-tiny/README.md) (messy flake trying to replicate some of Alpine's tiny VM properties, for fun!)

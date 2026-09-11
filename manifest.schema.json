@@ -3,7 +3,7 @@
   "properties": {
     "backend": {
       "type": "string",
-      "description": "Virtual machine backend: qemu (default), firecracker or cloud-hypervisor.",
+      "description": "Virtual machine backend: qemu (default), or the experimental firecracker or cloud-hypervisor.",
       "default": "qemu",
       "enum": [
         "qemu",

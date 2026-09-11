@@ -9,7 +9,10 @@ compact before/after examples.
 
 ## 2026-09-11
 
-- `backend = "cloud-hypervisor"` launches a
+- The Firecracker and Cloud Hypervisor backends are experimental: they stay
+  out of the README's feature list, and their manifest sections and Go
+  packages may change.
+- `backend = "cloud-hypervisor"` (experimental) launches a
   [Cloud Hypervisor](https://www.cloudhypervisor.org/) microVM: everything
   the Firecracker backend does (direct kernel boot, raw disks, serial output,
   a host TAP NIC, the usual `virtle launch`, `status`, and `rpc` lifecycle)
@@ -42,7 +45,7 @@ compact before/after examples.
 
 ### Library changes
 
-- New `backend/cloudhypervisor` package: `&cloudhypervisor.Backend{}`
+- New experimental `backend/cloudhypervisor` package: `&cloudhypervisor.Backend{}`
   implements `backend.Backend` with the same `vm.Spec` and `backend.Machine`
   as the other backends, its machines implement `backend.StatusReporter` and
   `backend.ConsoleProvider`, and `vm.Spec.Shares` become virtio-fs shares.

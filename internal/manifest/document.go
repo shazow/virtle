@@ -27,7 +27,7 @@ const (
 )
 
 type Document struct {
-	Backend         string               `json:"backend,omitempty" toml:"backend" default:"qemu" jsonschema:"Virtual machine backend: qemu (default), firecracker or cloud-hypervisor."`
+	Backend         string               `json:"backend,omitempty" toml:"backend" default:"qemu" jsonschema:"Virtual machine backend: qemu (default), or the experimental firecracker or cloud-hypervisor."`
 	Firecracker     FirecrackerInput     `json:"firecracker,omitempty" toml:"firecracker" jsonschema:"Firecracker executable and lifecycle timeouts."`
 	CloudHypervisor CloudHypervisorInput `json:"cloud-hypervisor,omitempty" toml:"cloud-hypervisor" jsonschema:"Cloud Hypervisor executable and lifecycle timeouts."`
 	HostName        string               `json:"host_name,omitempty" toml:"host_name" default:"virtle" jsonschema:"Guest-visible VM name used for QEMU naming and derived runtime files."`

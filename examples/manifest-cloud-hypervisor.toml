@@ -1,4 +1,4 @@
-# A Cloud Hypervisor microVM: direct boot of a PVH-capable kernel with a raw
+# A Cloud Hypervisor microVM (experimental backend): direct boot of a PVH-capable kernel with a raw
 # root disk and a virtio-fs share. Guest control and SSH are QEMU-only for
 # now, and the only NIC is a host TAP device; see docs/cloud-hypervisor.md for
 # what the backend supports.

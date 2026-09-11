@@ -1,5 +1,5 @@
-// Package firecracker implements a virtle backend that launches microVMs with
-// Firecracker. It boots a kernel (with an optional initrd) and raw disk
+// Package firecracker implements an experimental virtle backend that launches
+// microVMs with Firecracker; its surface may change between releases. It boots a kernel (with an optional initrd) and raw disk
 // images (creating missing ones from vm.Disk.Size), prints the guest serial
 // console on request or serves it as a vm.Term, and offers the same lifecycle
 // and status contract as backend/qemu.

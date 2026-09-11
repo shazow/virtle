@@ -9,6 +9,19 @@ compact before/after examples.
 
 ## 2026-09-10
 
+- `backend = "cloud-hypervisor"` launches a
+  [Cloud Hypervisor](https://www.cloudhypervisor.org/) microVM: everything
+  the Firecracker backend does (direct kernel boot, raw disks, serial output,
+  a host TAP NIC, the usual `virtle launch`, `status`, and `rpc` lifecycle)
+  plus `[[mounts]] type = "virtiofs"` shares served by a `virtiofsd` virtle
+  starts. `rpc shutdown` presses the guest's ACPI power button. Linux with
+  KVM only; the guest kernel needs PCI, ACPI, and (for an ELF `vmlinux`) the
+  PVH entry point. See [docs/cloud-hypervisor.md](docs/cloud-hypervisor.md)
+  and the [recipe](docs/recipes/cloud-hypervisor/README.md).
+- `nix run .#benchmark-backends` rotates over three backends and takes
+  rounds instead of pairs: `--pairs 10 --warmup-pairs 2` becomes `--rounds 9
+  --warmup-rounds 3` (multiples of three), and `results.json` records
+  `rounds` and `warmup_rounds`.
 - Manifest templates gain `fromFile "path"`, the file's contents without a
   trailing newline, on every surface; relative paths are the manifest's.
 - `[[networks]] type = "virtle"` puts the guest on a network virtle runs in
@@ -38,6 +51,11 @@ compact before/after examples.
 
 ### Library changes
 
+- New `backend/cloudhypervisor` package: `&cloudhypervisor.Backend{}`
+  implements `backend.Backend` with the same `vm.Spec` and `backend.Machine`
+  as the other backends, its machines implement `backend.StatusReporter` and
+  `backend.ConsoleProvider`, and `vm.Spec.Shares` become virtio-fs shares.
+  `manifest.Load` returns it for `backend = "cloud-hypervisor"`.
 - New `vmnet` package: the networking contracts (`Link`, `Network`, `Port`,
   `Egress`, `Flow`, `ErrDenied`) and frame adapters, with the in-process
   gVisor network in `vmnet/userspace` (`userspace.New`, `Network.DialContext`

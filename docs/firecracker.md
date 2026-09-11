@@ -4,7 +4,10 @@ virtle can launch microVMs with [Firecracker](https://firecracker-microvm.github
 instead of QEMU. Select it with `backend = "firecracker"` in a manifest, or
 construct `&firecracker.Backend{}` in Go. The `vm.Spec`, `backend.Machine`,
 control socket, and `virtle launch` / `status` / `rpc` commands are the same
-for both backends; the differences are in what the guest gets.
+for every backend; the differences are in what the guest gets.
+
+For the same shape of backend with virtio-fs shares, see the
+[Cloud Hypervisor backend](cloud-hypervisor.md).
 
 The backend is early. Firecracker requires Linux on x86_64 or aarch64 with an
 accessible `/dev/kvm`; there is no software-emulation fallback. Guest kernels
@@ -82,7 +85,7 @@ features it cannot honor fail `Start` with an error wrapping
 | --- | --- |
 | Guest control (`Machine.RemoteControl`), SSH, guest files, workspace mounts | No guest agent transport yet; see the [guest daemon design](https://github.com/shazow/virtle/pull/67). |
 | Port forwards, vsock, virtle networks | The guest NIC is a host TAP device (`[[networks]] type = "tap"`, `firecracker.TAP`) that the host kernel networks; the operator owns its addressing and forwards. Frames over vsock into a virtle network follow with the guest daemon. |
-| virtiofs and 9p shares, qcow2, disk cache/serial options | Raw images only, created on demand as above. |
+| virtiofs and 9p shares, qcow2, disk cache/serial options | Raw images only, created on demand as above. [Cloud Hypervisor](cloud-hypervisor.md) has virtio-fs shares. |
 | Interactive console (`serial = "console"`) | Only `off` and `print`. |
 | Suspend/resume, balloon, hotplug | Capability interfaces are not implemented. |
 | `[run]` helpers, `[notifications]`, `[qemu]` settings | QEMU-only. |

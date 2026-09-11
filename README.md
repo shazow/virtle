@@ -13,14 +13,15 @@ Background: Originally designed to be used with [`agentspace`](https://github.co
 ## How does it work?
 
 `virtle` reads a manifest, starts the required host processes, and launches
-the VM backend (QEMU by default, or Firecracker). For QEMU guests it also
+the VM backend (QEMU by default, Firecracker, or Cloud Hypervisor). For QEMU guests it also
 waits for SSH readiness and attaches an active session with `--ssh`.
 
 It also handles teardown, QMP-based shutdown, disk-backed suspend/resume, runtime vsock CID allocation, QGA-based remote commands, and more.
 
 ### Features
 
-- Runs QEMU or Firecracker microVMs through the same CLI and Go interfaces.
+- Runs QEMU, Firecracker, or Cloud Hypervisor microVMs through the same CLI
+  and Go interfaces.
 - Networks guests in userspace with an egress policy: the internet and nothing
   on the host or its LAN by default, allow and deny by name, record every
   connection, and let the guest use secrets it never holds (see
@@ -40,10 +41,13 @@ It also handles teardown, QMP-based shutdown, disk-backed suspend/resume, runtim
 
 QEMU is the default. Set `backend = "firecracker"` to launch a Firecracker
 microVM instead (Linux with KVM; direct kernel boot, raw disks, serial output,
-a host TAP NIC, and the same lifecycle commands). Guest control, SSH, shares,
-the virtle network, suspend, ballooning, and hotplug are QEMU-only today. See
-[docs/firecracker.md](docs/firecracker.md) and the
-[Firecracker recipe](docs/recipes/firecracker/README.md).
+a host TAP NIC, and the same lifecycle commands), or `backend =
+"cloud-hypervisor"` for Cloud Hypervisor, which adds virtio-fs shares to that
+list. Guest control, SSH, the virtle network, suspend, ballooning, and hotplug
+are QEMU-only today. See [docs/firecracker.md](docs/firecracker.md),
+[docs/cloud-hypervisor.md](docs/cloud-hypervisor.md), and the
+[Firecracker](docs/recipes/firecracker/README.md) and
+[Cloud Hypervisor](docs/recipes/cloud-hypervisor/README.md) recipes.
 
 ```toml
 backend = "firecracker"
@@ -132,9 +136,10 @@ if err != nil {
 err = g.Run(ctx, &vm.GuestCmd{Path: "make", Dir: "/workspace", Stdout: os.Stdout})
 ```
 
-`&firecracker.Backend{}` takes the same `vm.Spec` and returns the same
-`backend.Machine`; see [docs/firecracker.md](docs/firecracker.md) for what it
-supports.
+`&firecracker.Backend{}` and `&cloudhypervisor.Backend{}` take the same
+`vm.Spec` and return the same `backend.Machine`; see
+[docs/firecracker.md](docs/firecracker.md) and
+[docs/cloud-hypervisor.md](docs/cloud-hypervisor.md) for what they support.
 
 Put the guest on a network virtle runs, with a policy on what it may reach
 (see [docs/networking.md](docs/networking.md)):

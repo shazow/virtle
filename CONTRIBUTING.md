@@ -20,8 +20,8 @@ $ nix flake check
 ```
 
 `nix flake check` runs the `integration`-tagged tests inside a small VM. On
-x86_64 it also boots both backends on real KVM (`e2e-fast`, `e2e-api`, and
-`firecracker`);
+x86_64 it also boots all three backends on real KVM (`e2e-fast`, `e2e-api`,
+`firecracker`, and `cloud-hypervisor`);
 those checks need a builder that advertises the `kvm` system feature and
 exposes `/dev/kvm` in the sandbox, and they never pass by skipping. Build a
 single check with `nix build .#checks.x86_64-linux.<name>` when the host cannot

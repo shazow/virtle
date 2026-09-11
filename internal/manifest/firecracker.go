@@ -44,6 +44,7 @@ func (d Document) firecrackerManifest() (*Manifest, error) {
 		backend:       BackendFirecracker,
 		defaultBinary: defaultFirecrackerBinary,
 		maxCPUs:       MaxFirecrackerCPUs,
+		diskFormats:   []string{"raw"},
 		cmdline:       firecrackerKernelParams,
 	}, vmmInput(d.Firecracker))
 	if err != nil {

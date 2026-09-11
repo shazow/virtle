@@ -34,10 +34,8 @@ var qemuOnlyRejections = []rejectedSetting{
 	{"kvm off", "[machine]\nkvm = false", "KVM"},
 	{"interactive console", "[kernel]\nserial = 'console'", "serial"},
 	{"9p mount", "[[mounts]]\ntype = '9p'\ntag = 'src'\nsource = '/src'", "mounts"},
-	{"qcow2", "[[mounts]]\ntype = 'image'\nsource = 'disk.qcow2'\nimage.format = 'qcow2'", "raw"},
 	{"image fs", "[[mounts]]\ntype = 'image'\nsource = 'disk.img'\nimage.create = true\nimage.size = 256\nimage.fs = 'xfs'", "fs"},
 	{"image too small to create", "[[mounts]]\ntype = 'image'\nsource = 'disk.img'\nimage.create = true\nimage.size = 8", "at least"},
-	{"direct io", "[[mounts]]\ntype = 'image'\nsource = 'disk.img'\nimage.direct = true", "direct"},
 	{"negative cpus", "[machine]\nvcpu = -1", "vcpu"},
 	{"egress", "[egress]\nreach = 'rules'", "egress"},
 }

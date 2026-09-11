@@ -22,6 +22,9 @@ compact before/after examples.
   rounds instead of pairs: `--pairs 10 --warmup-pairs 2` becomes `--rounds 9
   --warmup-rounds 3` (multiples of three), and `results.json` records
   `rounds` and `warmup_rounds`.
+- On Cloud Hypervisor, `[[mounts]] type = "image"` takes `image.format =
+  "qcow2"` for an existing image (created images stay raw) and honors
+  `image.serial` and `image.direct`; Firecracker keeps rejecting them.
 - `[[run]]` host helpers start before Firecracker and Cloud Hypervisor
   microVMs and stop after them, as they do for QEMU; the sections used to
   be rejected there. `[notifications]` stays QEMU-only.
@@ -40,6 +43,7 @@ compact before/after examples.
   as the other backends, its machines implement `backend.StatusReporter` and
   `backend.ConsoleProvider`, and `vm.Spec.Shares` become virtio-fs shares.
   `manifest.Load` returns it for `backend = "cloud-hypervisor"`.
+- `cloudhypervisor.Backend` accepts `vm.Disk.Format = "qcow2"`.
 - `vm.Share.ReadOnly` is enforced by the share's `virtiofsd`; `Start` fails
   when virtle does not start that daemon or its arguments lack `--readonly`.
 

@@ -1,12 +1,14 @@
 package manifest
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"net"
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -46,7 +48,7 @@ type VMM struct {
 	CPUs            int           `json:"cpus"`
 	MemoryMiB       units.MiB     `json:"memoryMiB"`
 	Kernel          BootSource    `json:"kernel"`
-	Disks           []RawDisk     `json:"disks,omitempty"`
+	Disks           []VMMDisk     `json:"disks,omitempty"`
 	// Networks are the guest NICs, each a host TAP device.
 	Networks []TapNetwork `json:"networks,omitempty"`
 	// Console is KernelSerialOff or KernelSerialPrint.
@@ -73,18 +75,23 @@ type BootSource struct {
 	Cmdline string `json:"cmdline"`
 }
 
-// RawDisk is a resolved raw block device. Root marks the image mounted at
-// "/"; virtle passes root= for it itself, so the VMM's own root-device boot
-// arguments stay off. Create asks the backend to format a missing image as
-// an empty ext4 filesystem of SizeMiB before launch, as QEMU does for
-// image.create.
-type RawDisk struct {
+// VMMDisk is a resolved block device: a raw image, or a qcow2 one where the
+// VMM reads that format. Root marks the image mounted at "/"; virtle passes
+// root= for it itself, so the VMM's own root-device boot arguments stay off.
+// Create asks the backend to format a missing image as an empty ext4
+// filesystem of SizeMiB before launch, as QEMU does for image.create; only
+// raw images are created. Serial and Direct are honored where the VMM has
+// them.
+type VMMDisk struct {
 	Path     string    `json:"path"`
+	Format   string    `json:"format"`
 	ReadOnly bool      `json:"readOnly,omitempty"`
 	Root     bool      `json:"root,omitempty"`
 	Create   bool      `json:"create,omitempty"`
 	SizeMiB  units.MiB `json:"sizeMiB,omitempty"`
 	Label    string    `json:"label,omitempty"`
+	Serial   string    `json:"serial,omitempty"`
+	Direct   bool      `json:"direct,omitempty"`
 }
 
 // vmmInput is the shape FirecrackerInput and CloudHypervisorInput share;
@@ -96,11 +103,14 @@ type vmmInput struct {
 }
 
 // vmmProfile is what distinguishes one microVM backend's resolution from the
-// other's: its name, executable, vCPU bound, and kernel command line policy.
+// other's: its name, executable, vCPU bound, the image formats and disk
+// options its VMM takes, and its kernel command line policy.
 type vmmProfile struct {
 	backend       string
 	defaultBinary string
 	maxCPUs       int
+	diskFormats   []string // image.format values the VMM reads; the first is the default
+	diskOptions   bool     // image.serial and image.direct reach the VMM
 	cmdline       func(serialMode string, root, extra []string) string
 }
 
@@ -292,25 +302,31 @@ func (d Document) resolveVMM(p vmmProfile, in vmmInput) (*Manifest, *VMM, error)
 		vmm.ShutdownTimeout = defaultVMMTimeout
 	}
 	for i, mount := range d.Mounts.Image() {
+		format := cmp.Or(mount.Image.Format, p.diskFormats[0])
 		switch {
 		case mount.SourcePath == "":
 			return nil, nil, fmt.Errorf("manifest.mounts[%d].source is required", i)
-		case mount.Image.Format != "" && mount.Image.Format != "raw":
-			return nil, nil, unsupportedBy(p.backend, "manifest.mounts[%d].image.format %q; only raw images are supported", i, mount.Image.Format)
+		case !slices.Contains(p.diskFormats, format):
+			return nil, nil, unsupportedBy(p.backend, "manifest.mounts[%d].image.format %q; %s attaches %s images", i, format, p.backend, strings.Join(p.diskFormats, " and "))
+		case mount.Image.AutoCreate && format != "raw":
+			return nil, nil, fmt.Errorf("manifest.mounts[%d].image.create makes a raw image; drop image.format %q or create the image yourself", i, format)
 		case mount.Image.FSType != "" && mount.Image.FSType != defaultVolumeFSType:
 			return nil, nil, unsupportedBy(p.backend, "manifest.mounts[%d].image.fs %q; created images are %s", i, mount.Image.FSType, defaultVolumeFSType)
 		case mount.Image.AutoCreate && mount.Image.Size < minAutoVolumeSize:
 			return nil, nil, fmt.Errorf("manifest.mounts[%d].image.size must be at least %d when image.create is true, got %d", i, minAutoVolumeSize, mount.Image.Size)
-		case mount.Image.Serial != nil || mount.Image.Direct:
+		case !p.diskOptions && (mount.Image.Serial != nil || mount.Image.Direct):
 			return nil, nil, unsupportedBy(p.backend, "manifest.mounts[%d] image.serial and image.direct", i)
 		}
-		vmm.Disks = append(vmm.Disks, RawDisk{
+		vmm.Disks = append(vmm.Disks, VMMDisk{
 			Path:     m.resolvePath(mount.SourcePath),
+			Format:   format,
 			ReadOnly: mount.ReadOnly,
 			Root:     i == rootIndex,
 			Create:   mount.Image.AutoCreate,
 			SizeMiB:  mount.Image.Size,
 			Label:    stringValue(mount.Image.Label),
+			Serial:   stringValue(mount.Image.Serial),
+			Direct:   mount.Image.Direct,
 		})
 	}
 	return m, vmm, nil

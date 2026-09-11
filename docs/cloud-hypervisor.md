@@ -38,6 +38,9 @@ Everything the [Firecracker backend](firecracker.md) does, the same way:
 
 And what Firecracker cannot do:
 
+- qcow2 images (`image.format = "qcow2"` / `vm.Disk.Format`), and
+  `image.serial` and `image.direct` on any image. Created images stay raw:
+  `image.create` with another format is an error.
 - virtio-fs shares (`[[mounts]] type = "virtiofs"` / `vm.Share`). virtle
   starts a [`virtiofsd`](https://gitlab.com/virtio-fs/virtiofsd) per share
   before the VMM, as it does for QEMU: a mount that names no socket gets
@@ -121,7 +124,7 @@ features it cannot honor fail `Start` with an error wrapping
 | --- | --- |
 | Guest control (`Machine.RemoteControl`), SSH, guest files, workspace mounts | No guest agent transport yet; see the [guest daemon design](https://github.com/shazow/virtle/pull/67). |
 | Port forwards, vsock, virtle networks | The NIC is a host TAP device; see above. |
-| 9p shares, qcow2, disk cache/serial options | virtio-fs shares and raw images only. |
+| 9p shares | Shares are virtio-fs. |
 | Interactive console (`serial = "console"`) | Only `off` and `print`. |
 | Suspend/resume, balloon, hotplug | Capability interfaces are not implemented. |
 | `[notifications]`, `[qemu]`, `[firecracker]` settings | Other backends'. |
@@ -135,7 +138,7 @@ capability but virtle does not wire it yet, what would close the gap:
 | Feature | QEMU | Firecracker | Cloud Hypervisor |
 | --- | --- | --- | --- |
 | Direct kernel boot, initrd, root device at `/` | yes | yes | yes |
-| Disk images | raw and qcow2, created on demand, `image.serial` and `image.direct` | raw, created on demand | raw, created on demand (the VMM reads qcow2 and honors serial and direct; not wired) |
+| Disk images | raw and qcow2, created on demand, `image.serial` and `image.direct` | raw, created on demand | raw and qcow2, created on demand (raw), `image.serial` and `image.direct` |
 | Shares | virtio-fs and 9p | no | virtio-fs |
 | Serial console printed and as a `vm.Term` | yes | yes | yes, over a pseudo-terminal |
 | Interactive console (`serial = "console"`) | yes | no | no |

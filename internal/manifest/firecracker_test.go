@@ -65,9 +65,9 @@ image.format = "raw"
 			InitrdPath: "/work/initrd",
 			Cmdline:    "console=ttyS0 reboot=k panic=-1 quiet init=/bin/init",
 		},
-		Disks: []RawDisk{
-			{Path: "/work/rootfs.ext4", ReadOnly: true},
-			{Path: "/data/scratch.img"},
+		Disks: []VMMDisk{
+			{Path: "/work/rootfs.ext4", Format: "raw", ReadOnly: true},
+			{Path: "/data/scratch.img", Format: "raw"},
 		},
 		Console: KernelSerialPrint,
 	}}
@@ -116,6 +116,9 @@ func TestFirecrackerRejectsQEMUOnlySettings(t *testing.T) {
 	testRejectsQEMUOnlySettings(t, decodeFirecracker,
 		[]rejectedSetting{
 			{"virtiofs mount", "[[mounts]]\ntype = 'virtiofs'\ntag = 'src'\nsource = '/src'", "image mounts"},
+			{"qcow2", "[[mounts]]\ntype = 'image'\nsource = 'disk.qcow2'\nimage.format = 'qcow2'", "raw"},
+			{"direct io", "[[mounts]]\ntype = 'image'\nsource = 'disk.img'\nimage.direct = true", "direct"},
+			{"disk serial", "[[mounts]]\ntype = 'image'\nsource = 'disk.img'\nimage.serial = 'scratch'", "serial"},
 			{"cloud-hypervisor section", "[cloud-hypervisor]\nbinary = 'ch'", "cloud-hypervisor"},
 		}, nil)
 	t.Run("json", func(t *testing.T) {

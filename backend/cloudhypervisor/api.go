@@ -141,6 +141,8 @@ type (
 	diskConfig struct {
 		Path      string `json:"path"`
 		ReadOnly  bool   `json:"readonly"`
+		Direct    bool   `json:"direct"`
+		Serial    string `json:"serial,omitempty"`
 		ID        string `json:"id"`
 		ImageType string `json:"image_type"`
 	}
@@ -161,6 +163,14 @@ type (
 	}
 )
 
+// imageType is Cloud Hypervisor's spelling of a resolved image format.
+func imageType(format string) string {
+	if format == "qcow2" {
+		return "Qcow2"
+	}
+	return "Raw"
+}
+
 // vmConfig lowers the resolved manifest to the vm.create body. The serial
 // port rides the process's standard streams (mode Tty) when the console is
 // printed, and the virtio-console is always off: it defaults to the same
@@ -178,7 +188,7 @@ func vmConfig(cfg *imanifest.CloudHypervisor) vmConfigBody {
 		body.Serial.Mode = "Tty"
 	}
 	for i, disk := range cfg.Disks {
-		body.Disks = append(body.Disks, diskConfig{Path: disk.Path, ReadOnly: disk.ReadOnly, ID: "disk" + strconv.Itoa(i), ImageType: "Raw"})
+		body.Disks = append(body.Disks, diskConfig{Path: disk.Path, ReadOnly: disk.ReadOnly, Direct: disk.Direct, Serial: disk.Serial, ID: "disk" + strconv.Itoa(i), ImageType: imageType(disk.Format)})
 	}
 	for _, network := range cfg.Networks {
 		body.Net = append(body.Net, netConfig{Tap: network.Tap, MAC: network.MAC, ID: network.ID})

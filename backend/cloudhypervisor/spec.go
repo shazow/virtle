@@ -35,6 +35,7 @@ func (b *Backend) resolveSpec(spec *vm.Spec, stateDir string) (*imanifest.Manife
 		DefaultMemory: DefaultMemory,
 		Loaded:        b.doc != nil,
 		Shares:        true,
+		DiskFormats:   []string{"raw", "qcow2"},
 		HostName:      b.HostName,
 		StateDir:      stateDir,
 	}); err != nil {

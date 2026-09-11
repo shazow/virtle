@@ -168,12 +168,14 @@ The `e2e-api` flake check boots the same fixture through the public Go API
 instead of the CLI: the Go tests in this directory (build tag `integration`)
 run the backend conformance suite from `backend/backendtest` against all
 three backends and cover the `vm.Spec.Dir` contract, booting from the root
-disk (through the Go API and through a manifest), a scratch disk the host
+disk (through the Go API and through a manifest, and as a qcow2 image on the
+backends whose VMM reads one), a scratch disk the host
 reads back, the serial console, the guest-driven shutdown of Firecracker and
 Cloud Hypervisor, and a virtio-fs share (a `virtiofsd` on `PATH` is required;
 Firecracker is expected to refuse it). They read `VIRTLE_E2E_FIXTURE`, `VIRTLE_E2E_QEMU`,
-`VIRTLE_E2E_FIRECRACKER`, and `VIRTLE_E2E_CLOUD_HYPERVISOR` and skip without
-them. Other E2E derivations can import
+`VIRTLE_E2E_FIRECRACKER`, and `VIRTLE_E2E_CLOUD_HYPERVISOR` (and
+`VIRTLE_E2E_QEMU_IMG`, which converts the root image for the qcow2
+scenario) and skip without them. Other E2E derivations can import
 `fixtures/fast` with `{ inherit pkgs; workload = ./my-ready-script; }` to run a
 different BusyBox workload on the same kernel. Keep the readiness protocol
 when reusing this runner. Tests needing disks or guest agents can reuse the

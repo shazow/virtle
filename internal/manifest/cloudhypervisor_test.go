@@ -72,9 +72,9 @@ image.format = "raw"
 			InitrdPath: "/work/initrd",
 			Cmdline:    "console=" + console + " quiet init=/bin/init",
 		},
-		Disks: []RawDisk{
-			{Path: "/work/rootfs.ext4", ReadOnly: true},
-			{Path: "/data/scratch.img"},
+		Disks: []VMMDisk{
+			{Path: "/work/rootfs.ext4", Format: "raw", ReadOnly: true},
+			{Path: "/data/scratch.img", Format: "raw"},
 		},
 		Console: KernelSerialPrint,
 	}, Shares: []CloudHypervisorShare{
@@ -142,9 +142,12 @@ func TestCloudHypervisorRejectsQEMUOnlySettings(t *testing.T) {
 			{"share without source", "[[mounts]]\ntype = 'virtiofs'\ntag = 'src'", "source is required"},
 			{"duplicate share tag", "[[mounts]]\ntype = 'virtiofs'\ntag = 'src'\nsource = '/a'\n[[mounts]]\ntype = 'virtiofs'\ntag = 'src'\nsource = '/b'", "used twice"},
 			{"too many cpus", "[machine]\nvcpu = 8193", "vcpu"},
+			{"created qcow2", "[[mounts]]\ntype = 'image'\nsource = 'disk.qcow2'\nimage.format = 'qcow2'\nimage.create = true\nimage.size = 256", "raw image"},
+			{"unknown format", "[[mounts]]\ntype = 'image'\nsource = 'disk.vmdk'\nimage.format = 'vmdk'", "raw and qcow2"},
 		},
 		[]struct{ name, toml string }{
 			{"virtiofs share", "[[mounts]]\ntype = 'virtiofs'\ntag = 'src'\nsource = '/src'"},
+			{"qcow2 image with serial and direct io", "[[mounts]]\ntype = 'image'\nsource = 'disk.qcow2'\nimage.format = 'qcow2'\nimage.serial = 'data'\nimage.direct = true"},
 			{"share with its own daemon", "[[mounts]]\ntype = 'virtiofs'\ntag = 'src'\nsource = '/src'\nvirtiofs.socket = 'src.sock'\nvirtiofs.args = ['--socket-path={{.Socket}}', '--shared-dir={{.MountSource}}']"},
 		})
 }
@@ -211,5 +214,21 @@ func TestMaxCloudHypervisorCPUsByArchitecture(t *testing.T) {
 	}
 	if got := maxCloudHypervisorCPUs("arm64"); got != 255 {
 		t.Fatalf("arm64 = %d, want 255", got)
+	}
+}
+
+// TestCloudHypervisorDiskFormatsAndOptions covers what the VMM reads beyond
+// raw images: qcow2, a serial number, and direct I/O reach the resolved disk.
+func TestCloudHypervisorDiskFormatsAndOptions(t *testing.T) {
+	m, err := decodeCloudHypervisor(t, "working_dir = '/work'\n[kernel]\npath = 'vmlinux'\ninitrd_path = 'initrd'\n[[mounts]]\ntype = 'image'\nsource = 'disk.qcow2'\nimage.format = 'qcow2'\nimage.serial = 'data'\nimage.direct = true\n[[mounts]]\ntype = 'image'\nsource = 'plain.img'\n").Manifest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []VMMDisk{
+		{Path: "/work/disk.qcow2", Format: "qcow2", Serial: "data", Direct: true},
+		{Path: "/work/plain.img", Format: "raw"},
+	}
+	if !reflect.DeepEqual(m.CloudHypervisor.Disks, want) {
+		t.Fatalf("disks = %+v, want %+v", m.CloudHypervisor.Disks, want)
 	}
 }

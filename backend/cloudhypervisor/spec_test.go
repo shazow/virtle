@@ -44,7 +44,7 @@ func recordingClient(t *testing.T, status int, body string) (*apiClient, *[]stri
 }
 
 func TestConfiguration(t *testing.T) {
-	spec := &vm.Spec{Dir: "/work", CPUs: 2, Memory: 256 * units.Mebibyte, Kernel: vm.Kernel{Path: "kernel", Initrd: "initrd", Cmdline: `init="a b"`}, Disks: []vm.Disk{{Path: "disk", Format: "raw", ReadOnly: true, GuestPath: "/"}}}
+	spec := &vm.Spec{Dir: "/work", CPUs: 2, Memory: 256 * units.Mebibyte, Kernel: vm.Kernel{Path: "kernel", Initrd: "initrd", Cmdline: `init="a b"`}, Disks: []vm.Disk{{Path: "disk", Format: "raw", ReadOnly: true, GuestPath: "/"}, {Path: "scratch.qcow2", Format: "qcow2"}}}
 	mf, err := (&Backend{}).resolveSpec(spec, "")
 	if err != nil {
 		t.Fatal(err)
@@ -71,7 +71,10 @@ func TestConfiguration(t *testing.T) {
 		t.Fatal(payload)
 	}
 	disks := create["disks"].([]any)
-	if disk := disks[0].(map[string]any); len(disks) != 1 || disk["path"] != "/work/disk" || disk["readonly"] != true || disk["id"] != "disk0" || disk["image_type"] != "Raw" {
+	if disk := disks[0].(map[string]any); len(disks) != 2 || disk["path"] != "/work/disk" || disk["readonly"] != true || disk["id"] != "disk0" || disk["image_type"] != "Raw" || disk["direct"] != false {
+		t.Fatal(disks)
+	}
+	if disk := disks[1].(map[string]any); disk["path"] != "/work/scratch.qcow2" || disk["image_type"] != "Qcow2" || disk["readonly"] != false {
 		t.Fatal(disks)
 	}
 	// Both consoles are named explicitly: the VMM's defaults put the
@@ -135,7 +138,7 @@ func TestSpecValidation(t *testing.T) {
 		{"kernel", "Kernel.Path", func(s *vm.Spec) { s.Kernel.Path = "" }},
 		{"cpu", "CPUs", func(s *vm.Spec) { s.CPUs = imanifest.MaxCloudHypervisorCPUs + 1 }},
 		{"memory", "MiB", func(s *vm.Spec) { s.Memory = 1 }},
-		{"disk", "raw", func(s *vm.Spec) { s.Disks = []vm.Disk{{Path: "disk", Format: "qcow2"}} }},
+		{"disk", "raw and qcow2", func(s *vm.Spec) { s.Disks = []vm.Disk{{Path: "disk", Format: "vmdk"}} }},
 		{"file", "unsupported", func(s *vm.Spec) { s.Files = []vm.File{{GuestPath: "/file", Content: strings.NewReader("x")}} }},
 		{"share without tag", "Tag is required", func(s *vm.Spec) { s.Shares = []vm.Share{{HostPath: "/work"}} }},
 		{"share without source", "source is required", func(s *vm.Spec) { s.Shares = []vm.Share{{Tag: "src"}} }},

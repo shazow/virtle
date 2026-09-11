@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 
 	"github.com/shazow/virtle/backend"
 	"github.com/shazow/virtle/internal/diskimage"
@@ -20,6 +21,7 @@ type SpecOptions struct {
 	DefaultMemory units.Bytes // guest memory for a document built from the Spec alone when it sets none
 	Loaded        bool        // doc came from a manifest: its kernel and memory stand where the Spec is silent
 	Shares        bool        // Spec.Shares become virtiofs mounts instead of failing with errors.ErrUnsupported
+	DiskFormats   []string    // vm.Disk.Format values the VMM reads; empty means the backend's default
 	HostName      string      // replaces the document's VM name, when set
 	StateDir      string      // replaces the document's state directory, when set
 }
@@ -80,7 +82,7 @@ func ApplySpec(doc *imanifest.Document, spec *vm.Spec, o SpecOptions) error {
 			doc.Kernel.Params = []string{spec.Kernel.Cmdline}
 		}
 	}
-	mounts, err := overlayMounts(o.Backend, doc.Mounts, spec.Shares, spec.Disks)
+	mounts, err := overlayMounts(o, doc.Mounts, spec.Shares, spec.Disks)
 	if err != nil {
 		return err
 	}
@@ -92,7 +94,7 @@ func ApplySpec(doc *imanifest.Document, spec *vm.Spec, o SpecOptions) error {
 // Spec's shares and disks, each kind in slice order: extra Spec entries
 // append, omitted ones are removed, other kinds stay for manifest resolution
 // to judge.
-func overlayMounts(backend string, mounts imanifest.MountsInput, shares []vm.Share, disks []vm.Disk) (imanifest.MountsInput, error) {
+func overlayMounts(o SpecOptions, mounts imanifest.MountsInput, shares []vm.Share, disks []vm.Disk) (imanifest.MountsInput, error) {
 	result := make(imanifest.MountsInput, 0, len(mounts)+len(shares)+len(disks))
 	shareIndex, diskIndex := 0, 0
 	for _, mount := range mounts {
@@ -108,7 +110,7 @@ func overlayMounts(backend string, mounts imanifest.MountsInput, shares []vm.Sha
 			shareIndex++
 		case imanifest.ImageMountInput:
 			if diskIndex < len(disks) {
-				overlaid, err := overlayDisk(backend, input, disks[diskIndex])
+				overlaid, err := overlayDisk(o, input, disks[diskIndex])
 				if err != nil {
 					return nil, err
 				}
@@ -127,7 +129,7 @@ func overlayMounts(backend string, mounts imanifest.MountsInput, shares []vm.Sha
 		result = append(result, overlaid)
 	}
 	for ; diskIndex < len(disks); diskIndex++ {
-		overlaid, err := overlayDisk(backend, imanifest.ImageMountInput{}, disks[diskIndex])
+		overlaid, err := overlayDisk(o, imanifest.ImageMountInput{}, disks[diskIndex])
 		if err != nil {
 			return nil, err
 		}
@@ -147,17 +149,17 @@ func overlayShare(input imanifest.VirtioFSMountInput, share vm.Share) (imanifest
 	return input, nil
 }
 
-func overlayDisk(backend string, input imanifest.ImageMountInput, disk vm.Disk) (imanifest.ImageMountInput, error) {
+func overlayDisk(o SpecOptions, input imanifest.ImageMountInput, disk vm.Disk) (imanifest.ImageMountInput, error) {
 	// "/" names the root device, which the kernel mounts itself; any other
 	// mount point needs an agent in the guest.
 	if disk.GuestPath != "" && disk.GuestPath != "/" {
-		return imanifest.ImageMountInput{}, fmt.Errorf("%s: disk %q: guest mounting at %q (vm.Disk.GuestPath) needs a guest control transport: %w", backend, disk.Path, disk.GuestPath, errors.ErrUnsupported)
+		return imanifest.ImageMountInput{}, fmt.Errorf("%s: disk %q: guest mounting at %q (vm.Disk.GuestPath) needs a guest control transport: %w", o.Backend, disk.Path, disk.GuestPath, errors.ErrUnsupported)
 	}
-	if disk.Format != "" && disk.Format != "raw" {
-		return imanifest.ImageMountInput{}, fmt.Errorf("%s: disk %q: Format %q is not supported, only raw images are: %w", backend, disk.Path, disk.Format, errors.ErrUnsupported)
+	if disk.Format != "" && !slices.Contains(o.DiskFormats, disk.Format) {
+		return imanifest.ImageMountInput{}, fmt.Errorf("%s: disk %q: Format %q is not supported; %s attaches %s images: %w", o.Backend, disk.Path, disk.Format, o.Backend, strings.Join(o.DiskFormats, " and "), errors.ErrUnsupported)
 	}
 	if disk.Size%units.Mebibyte != 0 {
-		return imanifest.ImageMountInput{}, fmt.Errorf("%s: disk %q: size %s is not MiB-aligned", backend, disk.Path, disk.Size)
+		return imanifest.ImageMountInput{}, fmt.Errorf("%s: disk %q: size %s is not MiB-aligned", o.Backend, disk.Path, disk.Size)
 	}
 	input.Type = imanifest.MountTypeImage
 	input.SourcePath, input.Target, input.ReadOnly = disk.Path, disk.GuestPath, disk.ReadOnly
@@ -183,7 +185,7 @@ func ApplyTAP(doc *imanifest.Document, device string) {
 
 // CreateDisks formats the images vm.Disk.Size asked for before launch, as
 // QEMU does; existing images are kept.
-func CreateDisks(disks []imanifest.RawDisk, logger *slog.Logger) error {
+func CreateDisks(disks []imanifest.VMMDisk, logger *slog.Logger) error {
 	for _, disk := range disks {
 		if !disk.Create {
 			continue

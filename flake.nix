@@ -224,8 +224,8 @@
               '';
           # The three backends driven through the Go API (vm.Spec,
           # backend.Machine) on the same tiny guest: the backend conformance
-          # suite plus the Spec.Dir, root disk, scratch disk, console, guest
-          # shutdown, and share scenarios, and on QEMU the virtle network
+          # suite plus the Spec.Dir, root disk (raw and qcow2), scratch disk,
+          # console, guest shutdown, and share scenarios, and on QEMU the virtle network
           # (lease, forwards, egress policy).
           e2e-api =
             pkgs.runCommand "virtle-e2e-api"
@@ -241,6 +241,7 @@
               ''
                 export VIRTLE_E2E_FIXTURE=${self.packages.${system}.e2e-fast-fixture}
                 export VIRTLE_E2E_QEMU=${pkgs.qemu_kvm}/bin/qemu-system-x86_64
+                export VIRTLE_E2E_QEMU_IMG=${pkgs.qemu_kvm}/bin/qemu-img
                 export VIRTLE_E2E_FIRECRACKER=${pkgs.firecracker}/bin/firecracker
                 export VIRTLE_E2E_CLOUD_HYPERVISOR=${pkgs.cloud-hypervisor}/bin/cloud-hypervisor
                 # A scenario that cannot run fails the check instead of skipping.

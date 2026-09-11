@@ -73,6 +73,8 @@ func (d Document) cloudHypervisorManifest(options ResolveOptions) (*Manifest, er
 		backend:       BackendCloudHypervisor,
 		defaultBinary: defaultCloudHypervisorBinary,
 		maxCPUs:       MaxCloudHypervisorCPUs,
+		diskFormats:   []string{"raw", "qcow2"},
+		diskOptions:   true,
 		cmdline: func(serialMode string, root, extra []string) string {
 			return cloudHypervisorKernelParams(runtime.GOARCH, serialMode, root, extra)
 		},

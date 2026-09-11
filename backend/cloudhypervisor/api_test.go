@@ -3,8 +3,10 @@ package cloudhypervisor
 import (
 	"context"
 	"errors"
+	imanifest "github.com/shazow/virtle/internal/manifest"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -79,5 +81,21 @@ func TestAPIContext(t *testing.T) {
 	client := &apiClient{http: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) { return nil, r.Context().Err() })}}
 	if err := client.call(ctx, http.MethodPut, "vm.boot", nil, nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("got %v", err)
+	}
+}
+
+// TestVMConfigDisks covers the disk lowering: the format as Cloud Hypervisor
+// spells it, and the serial and direct I/O options.
+func TestVMConfigDisks(t *testing.T) {
+	body := vmConfig(&imanifest.CloudHypervisor{VMM: imanifest.VMM{Disks: []imanifest.VMMDisk{
+		{Path: "/a.img", Format: "raw"},
+		{Path: "/b.qcow2", Format: "qcow2", ReadOnly: true, Serial: "data", Direct: true},
+	}}})
+	want := []diskConfig{
+		{Path: "/a.img", ID: "disk0", ImageType: "Raw"},
+		{Path: "/b.qcow2", ReadOnly: true, Direct: true, Serial: "data", ID: "disk1", ImageType: "Qcow2"},
+	}
+	if !reflect.DeepEqual(body.Disks, want) {
+		t.Fatalf("disks = %+v, want %+v", body.Disks, want)
 	}
 }

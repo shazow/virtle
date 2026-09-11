@@ -33,6 +33,7 @@ func (b *Backend) resolveSpec(spec *vm.Spec, stateDir string) (*imanifest.Manife
 		Backend:       "firecracker",
 		MaxCPUs:       imanifest.MaxFirecrackerCPUs,
 		DefaultMemory: DefaultMemory,
+		DiskFormats:   []string{"raw"},
 		Loaded:        b.doc != nil,
 		HostName:      b.HostName,
 		StateDir:      stateDir,

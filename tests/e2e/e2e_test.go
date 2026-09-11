@@ -52,6 +52,7 @@ type fixture struct {
 	qemu            string
 	firecracker     string
 	cloudHypervisor string
+	qemuImg         string // qemu-img, for the qcow2 scenario; optional
 }
 
 func loadFixture(t *testing.T) fixture {
@@ -61,6 +62,7 @@ func loadFixture(t *testing.T) fixture {
 		qemu:            os.Getenv("VIRTLE_E2E_QEMU"),
 		firecracker:     os.Getenv("VIRTLE_E2E_FIRECRACKER"),
 		cloudHypervisor: os.Getenv("VIRTLE_E2E_CLOUD_HYPERVISOR"),
+		qemuImg:         os.Getenv("VIRTLE_E2E_QEMU_IMG"),
 	}
 	if f.dir == "" || f.qemu == "" || f.firecracker == "" || f.cloudHypervisor == "" {
 		skipOrFail(t, "requires VIRTLE_E2E_FIXTURE, VIRTLE_E2E_QEMU, VIRTLE_E2E_FIRECRACKER and VIRTLE_E2E_CLOUD_HYPERVISOR (Linux x86_64 with KVM)")
@@ -413,6 +415,40 @@ func TestManifestRootDisk(t *testing.T) {
 				t.Fatalf("start %s from its manifest: %v", g.name, err)
 			}
 			t.Cleanup(func() { _ = m.Kill() })
+		})
+	}
+}
+
+// TestQcow2RootDisk boots the root image converted to qcow2 on the backends
+// whose VMM reads that format (QEMU, Cloud Hypervisor); Firecracker refuses
+// it before starting anything.
+func TestQcow2RootDisk(t *testing.T) {
+	f := loadFixture(t)
+	if f.qemuImg == "" {
+		skipOrFail(t, "requires VIRTLE_E2E_QEMU_IMG (qemu-img) to convert the root image")
+	}
+	image := filepath.Join(t.TempDir(), "rootfs.qcow2")
+	if out, err := exec.Command(f.qemuImg, "convert", "-f", "raw", "-O", "qcow2", f.path("rootfs.ext4"), image).CombinedOutput(); err != nil {
+		t.Fatalf("qemu-img convert: %v\n%s", err, out)
+	}
+	for _, g := range f.guests() {
+		t.Run(g.name, func(t *testing.T) {
+			spec := g.spec(t)
+			spec.Kernel.Initrd = ""
+			spec.Kernel.Cmdline = strings.Replace(g.cmdline, "rdinit=/init", "init=/init", 1)
+			spec.Disks = []vm.Disk{{Path: image, Format: "qcow2", ReadOnly: true, GuestPath: "/"}}
+			if g.name == "firecracker" {
+				m, err := g.newBackend(io.Discard).Start(context.Background(), spec)
+				if err == nil {
+					_ = m.Kill()
+					t.Fatal("Firecracker accepted a qcow2 image")
+				}
+				if !errors.Is(err, errors.ErrUnsupported) {
+					t.Fatalf("error = %v, want ErrUnsupported", err)
+				}
+				return
+			}
+			startReady(t, g, spec)
 		})
 	}
 }

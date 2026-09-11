@@ -49,7 +49,9 @@ compact before/after examples.
   `manifest.Load` returns it for `backend = "cloud-hypervisor"`.
 - `cloudhypervisor.Backend` accepts `vm.Disk.Format = "qcow2"` and
   `Console: cloudhypervisor.ConsoleInteractive`; `cloudhypervisor.Backend`
-  and `firecracker.Backend` gain `ExtraArgs`, as `qemu.Backend` has.
+  and `firecracker.Backend` gain `ExtraArgs`, as `qemu.Backend` has. With
+  that slice field `firecracker.Backend` values are no longer comparable
+  with `==`, like `qemu.Backend`.
 - `vm.Share.ReadOnly` is enforced by the share's `virtiofsd`; `Start` fails
   when virtle does not start that daemon or its arguments lack `--readonly`.
 

@@ -120,6 +120,23 @@ func fakeVMM(mode string) {
 				http.Error(w, `["Error creating VM: test rejection","inner cause"]`, http.StatusBadRequest)
 				return
 			}
+			// Like the real VMM, connect to every share's vhost-user socket
+			// now and refuse the VM when one does not answer.
+			var config struct {
+				FS []struct {
+					Socket string `json:"socket"`
+				} `json:"fs"`
+			}
+			_ = json.Unmarshal(body, &config)
+			for _, share := range config.FS {
+				conn, err := net.DialTimeout("unix", share.Socket, time.Second)
+				if err != nil {
+					messages, _ := json.Marshal([]string{"Error creating VM: vhost-user-fs " + share.Socket, err.Error()})
+					http.Error(w, string(messages), http.StatusBadRequest)
+					return
+				}
+				_ = conn.Close()
+			}
 			w.WriteHeader(http.StatusNoContent)
 		case "PUT /api/v1/vm.boot":
 			w.WriteHeader(http.StatusNoContent)
@@ -170,6 +187,12 @@ func fakeVirtiofsd(socket string) {
 	}
 	if err := os.WriteFile(socket+".pid", []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
 		panic(err)
+	}
+	if os.Getenv("VIRTLE_TEST_VIRTIOFSD") == "exit-after-bind" {
+		// Dies the way a daemon does that fails after binding (a shared
+		// directory it cannot serve), leaving its socket file behind.
+		fmt.Fprintln(os.Stderr, "virtiofsd shared-dir test failure")
+		os.Exit(4)
 	}
 	<-signals
 	_ = listener.Close()
@@ -761,6 +784,54 @@ func TestSharesStartVirtiofsd(t *testing.T) {
 				t.Fatalf("virtiofsd %d still exists: %v", pid, err)
 			}
 		})
+	}
+}
+
+// TestStaleShareSocketIsReplaced covers a share socket left behind by a
+// crashed launch: it is removed before the daemon starts, so the daemon can
+// bind it and the VMM connects to a live socket rather than the dead file.
+func TestStaleShareSocketIsReplaced(t *testing.T) {
+	b, spec := helperBackend(t, "normal")
+	installFakeVirtiofsd(t, "prompt")
+	spec.Shares = []vm.Share{{Tag: "share", HostPath: t.TempDir()}}
+	state := filepath.Join(spec.Dir, ".virtle")
+	if err := os.MkdirAll(state, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	stale, err := net.Listen("unix", filepath.Join(state, "share.sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale.(*net.UnixListener).SetUnlinkOnClose(false)
+	_ = stale.Close()
+	m, err := b.Start(t.Context(), spec)
+	if err != nil {
+		t.Fatalf("Start over a stale share socket: %v", err)
+	}
+	if err := m.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(state, "share.sock")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("share socket after exit: %v", err)
+	}
+}
+
+// TestShareDaemonDeathAfterBindIsDiagnosed covers a virtiofsd that binds its
+// socket and then dies: the VMM refuses the VM over the dead socket, and the
+// failure carries the daemon's last words rather than the VMM's alone.
+func TestShareDaemonDeathAfterBindIsDiagnosed(t *testing.T) {
+	b, spec := helperBackend(t, "normal")
+	installFakeVirtiofsd(t, "exit-after-bind")
+	spec.Shares = []vm.Share{{Tag: "share", HostPath: t.TempDir()}}
+	m, err := b.Start(t.Context(), spec)
+	if err == nil {
+		_ = m.Kill()
+		t.Fatal("expected startup failure")
+	}
+	for _, want := range []string{"vm.create", "virtiofsd shared-dir test failure"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q lacks %q", err, want)
+		}
 	}
 }
 

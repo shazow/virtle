@@ -63,11 +63,16 @@ func (b *Backend) start(ctx context.Context, mf *imanifest.Manifest, ephemeralSt
 		},
 		Configure: func(ctx context.Context, socket string) error {
 			// vm.create fails outright when a share's socket is not there
-			// yet, so wait for every daemon to bind first.
+			// yet, so wait for every daemon to bind first. A daemon that
+			// dies afterwards shows as a connection failure on the VMM's
+			// side; its own last words explain it.
 			if err := daemons.waitSockets(ctx); err != nil {
 				return err
 			}
-			return newAPIClient(socket).configure(ctx, cfg)
+			if err := newAPIClient(socket).configure(ctx, cfg); err != nil {
+				return errors.Join(err, daemons.exited())
+			}
+			return nil
 		},
 		Graceful: func(ctx context.Context, socket string) error {
 			return newAPIClient(socket).call(ctx, http.MethodPut, "vm.power-button", nil, nil)
@@ -114,9 +119,18 @@ func startShareDaemons(mf *imanifest.Manifest, logger *slog.Logger) (*shareDaemo
 	if d.cleanup, err = mf.ResolvedCleanupFiles(); err != nil {
 		return nil, err
 	}
+	// Resolution judged these sockets missing or dead and virtle's to bind;
+	// one left by a crashed launch would satisfy waitSockets before its
+	// daemon rebinds it, so clear them first, as the QEMU backend does.
+	for _, path := range d.cleanup {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("remove stale share socket %q: %w", path, err)
+		}
+	}
 	for _, run := range runs {
 		cmd := executor.Command(run.Exec[0], run.Exec[1:], run.Env)
 		cmd.Dir = run.Dir
+		cmd.WaitDelay = time.Second // a sandbox child holding the pipes cannot hold teardown open
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		stderr := &vmmhost.DiagnosticWriter{}
 		cmd.Stdout, cmd.Stderr = io.Discard, stderr
@@ -153,6 +167,11 @@ func (d *shareDaemons) waitSockets(ctx context.Context) error {
 		}
 		if missing == "" {
 			return nil
+		}
+		// The VMM's exit ends this context and then stops the daemons; check
+		// it first so their termination is not taken for the cause.
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("wait for share socket %q: %w", missing, err)
 		}
 		if err := d.exited(); err != nil {
 			return err

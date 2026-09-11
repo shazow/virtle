@@ -66,7 +66,7 @@
           benchmark-backends = {
             type = "app";
             program = "${self.packages.${system}.benchmark-backends}/bin/virtle-benchmark-backends";
-            meta.description = "Directional Firecracker vs QEMU/KVM comparison";
+            meta.description = "Directional comparison of the Firecracker, QEMU/KVM, and Cloud Hypervisor backends";
           };
         }
       );
@@ -214,7 +214,7 @@
                 timeout --kill-after=30 600 python ${./tests/e2e/run.py} \
                   --virtle ${self.packages.${system}.virtle}/bin/virtle \
                   --fixture ${self.packages.${system}.e2e-fast-fixture} \
-                  --pairs 2 --warmup-pairs 0 \
+                  --rounds 3 --warmup-rounds 0 \
                   --output "$output/results"
                 touch $out
               '';

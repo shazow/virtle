@@ -1,12 +1,12 @@
 # Fast shared guest and backend comparison
 
-From the repository root, build and exercise **both real KVM backends through
-the public virtle CLI**:
+From the repository root, build and exercise **all three real KVM backends
+through the public virtle CLI**:
 
 ```sh
 nix build path:.#checks.x86_64-linux.e2e-fast --no-link -L
 nix run path:.#benchmark-backends -- --output benchmark-results/fast \
-  --pairs 10 --warmup-pairs 2
+  --rounds 9 --warmup-rounds 3
 ```
 
 `path:.` includes untracked working-tree files. These commands use the root
@@ -15,14 +15,16 @@ compiles a custom Linux kernel and can take several minutes. Build the runner
 before timing on an otherwise idle host.
 
 Use a new output directory for every run; the runner refuses to overwrite one.
-Each pair runs both backends, alternating FC/QEMU then QEMU/FC. Pair counts must
-be even so each backend starts equally often. Warmups use the same alternating
-order, remain in the raw data, and are excluded from summaries. The default is
-two warmup trials and ten measured trials **per backend**. The flake check uses
-two measured trials per backend and no warmups; it checks correctness without
-any performance ratio or timing threshold beyond a generous hang timeout.
-Both default to `--teardown kill`, applying the same fast lifecycle RPC to both
-backends so test cleanup does not wait for an unavailable guest agent. Pass
+Each round runs every backend once, starting one backend further along the
+list (Firecracker, QEMU, Cloud Hypervisor) than the round before, so over
+whole cycles each backend takes each position equally often. Round counts must
+be multiples of three for that reason. Warmups use the same rotation, remain in
+the raw data, and are excluded from summaries. The default is three warmup
+trials and nine measured trials **per backend**. The flake check uses three
+measured trials per backend and no warmups; it checks correctness without any
+performance ratio or timing threshold beyond a generous hang timeout. Both
+default to `--teardown kill`, applying the same fast lifecycle RPC to every
+backend so test cleanup does not wait for an unavailable guest agent. Pass
 `--teardown shutdown` when specifically studying each backend's graceful
 shutdown policy; that mode is intentionally not latency-equivalent.
 
@@ -109,19 +111,22 @@ experience, not a pure VMM hardware boot time:
   the foreground launch process is reaped. Includes the backend's existing
   shutdown policy and cleanup; it is reported separately.
 
-With the default `kill` teardown, both backends take the same hard-stop path and
-the suite avoids QEMU's guest-agent timeout. Shutdown policies differ when
+With the default `kill` teardown, every backend takes the same hard-stop path
+and the suite avoids QEMU's guest-agent timeout. Shutdown policies differ when
 `--teardown shutdown` is selected: Firecracker injects Ctrl-Alt-Del; BusyBox
 init runs the shutdown script, prints `VIRTLE_SHUTDOWN:done` and resets the
-guest. QEMU's CLI backend first probes for QGA, which this fixture does not
-run, then quits through QMP, so its guest-agent timeout is included and a QEMU
-guest shutdown marker is not required. These numbers do not compare equivalent
-guest shutdown protocols.
+guest. Cloud Hypervisor presses the ACPI power button; the kernel's tiny power
+button driver signals init, which runs the same script on its way to a
+power-off that ends the VMM. QEMU's CLI backend first probes for QGA, which
+this fixture does not run, then quits through QMP, so its guest-agent timeout
+is included and a QEMU guest shutdown marker is not required. These numbers do
+not compare equivalent guest shutdown protocols.
 
 Trials require a ready status, live VMM PID and control/monitor sockets,
 successful status/lifecycle commands and the expected launch exit, a gone VMM
 PID, and removal of all runtime sockets and temporary runtime directories. In
-`shutdown` mode, Firecracker must also emit its guest shutdown marker.
+`shutdown` mode, Firecracker and Cloud Hypervisor must also emit the guest
+shutdown marker.
 Validation occurs before deleting each trial's working directory. Persistent
 lock files are allowed. Failures abort the run and retain diagnostics; no
 failed trial can produce an overall success.
@@ -147,19 +152,22 @@ nix run path:. -- --manifest "$PWD/result-fast-fixture/firecracker.toml" status
 nix run path:. -- --manifest "$PWD/result-fast-fixture/firecracker.toml" rpc shutdown
 ```
 
-Use `qemu.toml` for QEMU, or `e2e-fast-userspace-fixture` for the
-userspace-capable kernel. The fixture output also exposes `vmlinux`, `bzImage`,
-`kernel.config`, `initrd`, `rootfs.ext4` (the same guest tree as a raw root
-disk, for boots without an initrd), and `fixture.json`. Its Nix passthru
-attributes are `kernel`, `initrd`, `rootfs`, `firecracker`, and `qemu`.
+Use `qemu.toml` for QEMU, `cloud-hypervisor.toml` for Cloud Hypervisor, or
+`e2e-fast-userspace-fixture` for the userspace-capable kernel. The fixture
+output also exposes `vmlinux`, `bzImage`, `kernel.config`, `initrd`,
+`rootfs.ext4` (the same guest tree as a raw root disk, for boots without an
+initrd), and `fixture.json`. Its Nix passthru attributes are `kernel`,
+`initrd`, `rootfs`, `firecracker`, `cloudHypervisor`, and `qemu`.
 
 The `e2e-api` flake check boots the same fixture through the public Go API
 instead of the CLI: the Go tests in this directory (build tag `integration`)
-run the backend conformance suite from `backend/backendtest` against both
-backends and cover the `vm.Spec.Dir` contract, booting from the root disk, a
-scratch disk the host reads back, and the serial console. They read
-`VIRTLE_E2E_FIXTURE`, `VIRTLE_E2E_QEMU`, and `VIRTLE_E2E_FIRECRACKER` and skip
-without them. Other E2E derivations can import
+run the backend conformance suite from `backend/backendtest` against all
+three backends and cover the `vm.Spec.Dir` contract, booting from the root
+disk, a scratch disk the host reads back, the serial console, and a virtio-fs
+share (a `virtiofsd` on `PATH` is required; Firecracker is expected to refuse
+it). They read `VIRTLE_E2E_FIXTURE`, `VIRTLE_E2E_QEMU`,
+`VIRTLE_E2E_FIRECRACKER`, and `VIRTLE_E2E_CLOUD_HYPERVISOR` and skip without
+them. Other E2E derivations can import
 `fixtures/fast` with `{ inherit pkgs; workload = ./my-ready-script; }` to run a
 different BusyBox workload on the same kernel. Keep the readiness protocol
 when reusing this runner. Tests needing disks or guest agents can reuse the

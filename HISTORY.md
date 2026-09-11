@@ -7,7 +7,7 @@ Keep entries terse. When a day includes both CLI and library changes, group
 them by type, CLI first. For compatibility-breaking usage migrations, include
 compact before/after examples.
 
-## 2026-09-10
+## 2026-09-11
 
 - `backend = "cloud-hypervisor"` launches a
   [Cloud Hypervisor](https://www.cloudhypervisor.org/) microVM: everything
@@ -22,6 +22,26 @@ compact before/after examples.
   rounds instead of pairs: `--pairs 10 --warmup-pairs 2` becomes `--rounds 9
   --warmup-rounds 3` (multiples of three), and `results.json` records
   `rounds` and `warmup_rounds`.
+- `[[mounts]] type = "virtiofs"` with `read_only = true` now makes the
+  `virtiofsd` virtle starts refuse guest writes (`--readonly`). A read-only
+  share whose daemon virtle does not start, or whose own `virtiofs.args`
+  lack the flag, fails validation instead of attaching writable, which is
+  what `read_only` did before on every backend. A QEMU manifest's virtiofs
+  mount that names no `virtiofs.socket` now gets `<tag>.sock` and virtle's
+  `virtiofsd`, as it already did through the Go API.
+
+### Library changes
+
+- New `backend/cloudhypervisor` package: `&cloudhypervisor.Backend{}`
+  implements `backend.Backend` with the same `vm.Spec` and `backend.Machine`
+  as the other backends, its machines implement `backend.StatusReporter` and
+  `backend.ConsoleProvider`, and `vm.Spec.Shares` become virtio-fs shares.
+  `manifest.Load` returns it for `backend = "cloud-hypervisor"`.
+- `vm.Share.ReadOnly` is enforced by the share's `virtiofsd`; `Start` fails
+  when virtle does not start that daemon or its arguments lack `--readonly`.
+
+## 2026-09-10
+
 - Manifest templates gain `fromFile "path"`, the file's contents without a
   trailing newline, on every surface; relative paths are the manifest's.
 - `[[networks]] type = "virtle"` puts the guest on a network virtle runs in
@@ -51,11 +71,6 @@ compact before/after examples.
 
 ### Library changes
 
-- New `backend/cloudhypervisor` package: `&cloudhypervisor.Backend{}`
-  implements `backend.Backend` with the same `vm.Spec` and `backend.Machine`
-  as the other backends, its machines implement `backend.StatusReporter` and
-  `backend.ConsoleProvider`, and `vm.Spec.Shares` become virtio-fs shares.
-  `manifest.Load` returns it for `backend = "cloud-hypervisor"`.
 - New `vmnet` package: the networking contracts (`Link`, `Network`, `Port`,
   `Egress`, `Flow`, `ErrDenied`) and frame adapters, with the in-process
   gVisor network in `vmnet/userspace` (`userspace.New`, `Network.DialContext`

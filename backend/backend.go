@@ -95,7 +95,7 @@ type StatusPaths struct {
 	// ControlSocket is virtle's own control socket for this machine.
 	ControlSocket string `json:"controlSocket"`
 	// MonitorSocket is the VMM's control endpoint: the QMP socket for QEMU,
-	// the HTTP API socket for Firecracker.
+	// the HTTP API socket for Firecracker and Cloud Hypervisor.
 	MonitorSocket string `json:"qmpSocket"`
 	// GuestControlSocket is the host end of the guest-control transport
 	// (the guest-agent socket for QEMU), when the machine has one.
@@ -162,7 +162,7 @@ type DeviceAttacher interface {
 }
 
 // ConsoleProvider is implemented by machines that expose the guest's serial
-// console as a vm.Term — the no-daemon path to a guest. QEMU and Firecracker
+// console as a vm.Term — the no-daemon path to a guest. Every backend's
 // machines offer it when their console is set to print; without one Console
 // returns an error wrapping errors.ErrUnsupported. The Term replays the
 // recent console output before live output, so a session attached after

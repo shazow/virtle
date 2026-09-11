@@ -193,8 +193,10 @@ Injections other than secrets, and `Admit`, have no manifest form yet.
 
 `type = "tap"` with `tap = "tap0"` (or `qemu.TAP{Name: "tap0"}`,
 `firecracker.TAP{Name: "tap0"}`, `cloudhypervisor.TAP{Name: "tap0"}`) hands
-an existing host TAP device to the VMM (Cloud Hypervisor can also create it,
-given `CAP_NET_ADMIN`). The host kernel provides the network: bridging, NAT,
+an existing host TAP device to the VMM. Cloud Hypervisor opens it and brings
+it up itself, which needs `CAP_NET_ADMIN` unless the device exists, is the
+user's, and is already up; with that capability it also creates a missing
+device. The host kernel provides the network: bridging, NAT,
 addressing, and forwards are the operator's, so `Spec.Ports` and
 `[[networks.forward]]` are rejected, and `Status.Networks` reports the NIC's
 MAC with no address. It is how Firecracker and Cloud Hypervisor are deployed

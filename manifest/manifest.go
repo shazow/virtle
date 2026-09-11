@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/shazow/virtle/backend"
+	"github.com/shazow/virtle/backend/cloudhypervisor"
 	"github.com/shazow/virtle/backend/firecracker"
 	"github.com/shazow/virtle/backend/qemu"
 	imanifest "github.com/shazow/virtle/internal/manifest"
@@ -80,8 +81,11 @@ func LoadDocument(doc imanifest.Document) (*vm.Spec, backend.Backend, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	if doc.Backend == imanifest.BackendFirecracker {
+	switch doc.Backend {
+	case imanifest.BackendFirecracker:
 		return spec, firecracker.NewBackendFromDocument(doc, firecracker.Backend{}), nil
+	case imanifest.BackendCloudHypervisor:
+		return spec, cloudhypervisor.NewBackendFromDocument(doc, cloudhypervisor.Backend{}), nil
 	}
 	var cfg qemu.Backend
 	// The backend is built after the network, so the network's logger looks

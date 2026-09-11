@@ -5,12 +5,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/shazow/virtle/backend/cloudhypervisor"
 	"github.com/shazow/virtle/backend/firecracker"
 	"github.com/shazow/virtle/backend/qemu"
 )
 
 func TestLoadBackend(t *testing.T) {
-	for _, name := range []string{"qemu", "firecracker"} {
+	for _, name := range []string{"qemu", "firecracker", "cloud-hypervisor"} {
 		for _, format := range []string{"toml", "json"} {
 			t.Run(name+"/"+format, func(t *testing.T) {
 				input := fmt.Sprintf("backend = %q\n[kernel]\npath = 'kernel'\n[[mounts]]\ntype = 'image'\nsource = 'disk'\ntarget = '/'\nread_only = true\n", name)
@@ -28,6 +29,10 @@ func TestLoadBackend(t *testing.T) {
 					}
 				case "firecracker":
 					if _, ok := b.(*firecracker.Backend); !ok {
+						t.Fatalf("backend %T", b)
+					}
+				case "cloud-hypervisor":
+					if _, ok := b.(*cloudhypervisor.Backend); !ok {
 						t.Fatalf("backend %T", b)
 					}
 				}

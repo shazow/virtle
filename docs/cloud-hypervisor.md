@@ -7,6 +7,10 @@ construct `&cloudhypervisor.Backend{}` in Go. The `vm.Spec`, `backend.Machine`,
 control socket, and `virtle launch` / `status` / `rpc` commands are the same
 for every backend; the differences are in what the guest gets.
 
+The backend is experimental, like Firecracker's: it covers much less than
+QEMU (see the parity table below), it is not promoted in the README yet, and
+its manifest section and Go package may change.
+
 Cloud Hypervisor requires Linux on x86_64 or aarch64 with an accessible
 `/dev/kvm`; there is no software-emulation fallback. Every device is
 virtio-PCI, so guest kernels need PCI and ACPI support besides the usual

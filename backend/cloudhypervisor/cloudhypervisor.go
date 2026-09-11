@@ -1,5 +1,6 @@
-// Package cloudhypervisor implements a virtle backend that launches microVMs
-// with Cloud Hypervisor. It boots a kernel (with an optional initrd) and raw
+// Package cloudhypervisor implements an experimental virtle backend that
+// launches microVMs with Cloud Hypervisor; its surface may change between
+// releases. It boots a kernel (with an optional initrd) and raw
 // disk images (creating missing ones from vm.Disk.Size), shares host
 // directories over virtio-fs (starting a virtiofsd per share), prints the
 // guest serial console on request or serves it as a vm.Term, and offers the

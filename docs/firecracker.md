@@ -10,7 +10,10 @@ For the same shape of backend with virtio-fs shares, see the
 [Cloud Hypervisor backend](cloud-hypervisor.md); its guide compares the three
 backends feature by feature.
 
-The backend is early. Firecracker requires Linux on x86_64 or aarch64 with an
+The backend is experimental: it covers much less than QEMU (the Cloud
+Hypervisor guide has the table), it is not promoted in the README yet, and
+its manifest section and Go package may change. Firecracker requires Linux
+on x86_64 or aarch64 with an
 accessible `/dev/kvm`; there is no software-emulation fallback. Guest kernels
 must match the host architecture: an ELF `vmlinux` on x86_64, an uncompressed
 `Image` on aarch64.

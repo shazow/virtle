@@ -28,8 +28,8 @@ import (
 )
 
 // The network scenarios run on QEMU only: a virtle network needs frames from
-// the guest NIC, which Firecracker hands to a host TAP device instead (the
-// guest daemon will carry them over vsock).
+// the guest NIC, which Firecracker and Cloud Hypervisor hand to a host TAP
+// device instead (the guest daemon will carry them over vsock).
 
 // networkGuest is the QEMU guest with its NIC on network.
 func (f fixture) networkGuest(t *testing.T, network vmnet.Network) guest {

@@ -37,17 +37,23 @@ raw-disk recipe checks remain separate.
 ## What the fixture contains
 
 `fixtures/fast/kernel.nix` starts from `tinyconfig` in the root-pinned nixpkgs
-Linux source. Serial console, KVM guest support, virtio MMIO/block/console/net,
-IPv4 (no IPv6), packet sockets, ext4, and the i8042 keyboard shutdown path are
-built in. Modules, PCI and ACPI are disabled. Gzip replaces tinyconfig's XZ kernel compression to reduce
-QEMU's decompression cost. The same kernel build supplies ELF `vmlinux` to
-Firecracker and `bzImage` to QEMU; the formats differ because their loaders
-differ.
+Linux source. Serial console, KVM guest support, virtio
+MMIO/PCI/block/console/net/fs, PCI and ACPI (Cloud Hypervisor's devices are
+virtio-PCI enumerated through ACPI, and QEMU's virtio-fs share rides its PCIe
+bus), the PVH entry point, IPv4 (no IPv6), packet sockets, ext4, FUSE, the
+i8042 keyboard shutdown path, and the tiny ACPI power button driver (Cloud
+Hypervisor's shutdown request reaches init as SIGUSR2, so no acpid runs) are
+built in. Modules are disabled. Gzip replaces tinyconfig's XZ kernel
+compression to reduce QEMU's decompression cost. The same kernel build
+supplies ELF `vmlinux` to Firecracker and Cloud Hypervisor and `bzImage` to
+QEMU; the formats differ because their loaders differ. The MMIO loaders boot
+with `pci=off`.
 
 Two package outputs keep capability scope explicit:
 
 - `e2e-fast-fixture` is the minimal backend benchmark. Its kernel gained the
-  virtio-net NIC and IPv4 with the virtle network, so timings before that
+  virtio-net NIC and IPv4 with the virtle network, then PCI, ACPI, and
+  virtio-fs with the Cloud Hypervisor backend; timings from before either
   change are not comparable with timings after it.
 - `e2e-fast-userspace-fixture` adds built-in eventfd, inotify, file locking and
   Unix-domain sockets. These common primitives support Go, libuv and similar
@@ -70,7 +76,9 @@ lease with `udhcpc`, prints `VIRTLE_NET:<address>`, serves a TCP echo on port
 and `blocked.test` on that port and prints the outcome, and with
 `virtle.inject=PORT` fetches `http://inject.test:PORT/echo` with
 `$VIRTLE_RANDOM$` in a header and the query, then with `$VIRTLE_REJECT$`, then
-`/forbidden`, and prints what came back each time. There
+`/forbidden`, and prints what came back each time. With `virtle.share=TAG` it
+mounts that virtio-fs share, prints `VIRTLE_SHARE:` followed by the `hello`
+file the host put there, and unmounts it. There
 is no modprobe, NixOS activation, service manager, SSH, or guest agent. No disk
 is attached in the CLI benchmark; the Firecracker recipe covers raw disk I/O and
 clean unmounting. The archive normalizes owner, timestamps, ordering, inode
@@ -79,8 +87,10 @@ numbering and gzip headers. All dependencies come from the root lock.
 QEMU runs its `microvm` machine with KVM, qboot, and PCIe, ACPI, PIT, PIC, RTC,
 USB and option ROMs disabled. It retains virtle's normal console and control
 device setup; `vsock.enabled = false` avoids attaching an unused vhost-vsock
-device or requiring `/dev/vhost-vsock` in the Nix sandbox. Firecracker runs
-through its normal API configuration. See QEMU's
+device or requiring `/dev/vhost-vsock` in the Nix sandbox. Firecracker and
+Cloud Hypervisor run through their normal API configuration. The share
+scenario turns ACPI on for QEMU, since the microvm's PCIe bus needs it, and
+virtle sets `pcie=on` itself. See QEMU's
 [microvm documentation](https://www.qemu.org/docs/master/system/i386/microvm.html).
 
 ## Timing and interpretation

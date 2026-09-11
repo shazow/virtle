@@ -1,5 +1,8 @@
 #!/bin/sh
+# Run by init: for Firecracker's Ctrl-Alt-Del with "reboot", and as the
+# shutdown action while init powers off for Cloud Hypervisor's power button
+# (the kernel's tiny power button driver sends init SIGUSR2).
 set -eu
 echo VIRTLE_SHUTDOWN:done
 # Firecracker exits on an i8042 reset; poweroff alone leaves it running.
-reboot -f
+[ "${1:-}" != reboot ] || reboot -f

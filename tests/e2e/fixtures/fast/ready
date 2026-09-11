@@ -54,4 +54,13 @@ if [ -e /sys/class/net/eth0 ]; then
     echo "VIRTLE_ADMIT:$forbidden"
   fi
 fi
+# A share named on the command line (virtle.share=TAG) is a virtio-fs
+# filesystem: mount it, report the file the host put there, unmount.
+tag=$(sed -n 's/.*virtle\.share=\([^ ]*\).*/\1/p' /proc/cmdline)
+if [ -n "$tag" ]; then
+  mount -t virtiofs "$tag" /mnt
+  read -r hello < /mnt/hello
+  echo "VIRTLE_SHARE:$hello"
+  umount /mnt
+fi
 echo "VIRTLE_READY:$result"

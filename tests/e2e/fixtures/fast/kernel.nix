@@ -1,4 +1,5 @@
-# One kernel build for both loaders: ELF vmlinux (Firecracker), bzImage (QEMU).
+# One kernel build for three loaders: ELF vmlinux (Firecracker, and Cloud
+# Hypervisor through its PVH entry point), bzImage (QEMU).
 {
   pkgs,
   userspace ? false,
@@ -32,8 +33,31 @@ let
         BINFMT_SCRIPT = yes;
         COREDUMP = no;
         MODULES = no;
-        PCI = no;
-        ACPI = no;
+        # Cloud Hypervisor's devices are virtio-PCI, enumerated through
+        # ACPI, and its shutdown request is the ACPI power button; the tiny
+        # power button driver turns that into SIGUSR2 for init (BusyBox
+        # init's power-off), so the guest runs no acpid. The MMIO loaders
+        # boot with pci=off and skip all of this.
+        PCI = yes;
+        PCI_MSI = yes;
+        ACPI = yes;
+        ACPI_BUTTON = no;
+        ACPI_TINY_POWER_BUTTON = yes;
+        ACPI_TINY_POWER_BUTTON_SIGNAL = freeform "12";
+        # Nothing here has a battery, a fan, a thermal zone, or ACPI
+        # processor objects worth a driver.
+        ACPI_AC = option no;
+        ACPI_BATTERY = option no;
+        ACPI_FAN = option no;
+        ACPI_PROCESSOR = option no;
+        ACPI_THERMAL = option no;
+        ACPI_TABLE_UPGRADE = option no;
+        PVH = yes;
+        VIRTIO_PCI = yes;
+        VIRTIO_PCI_LEGACY = no;
+        # virtio-fs shares on Cloud Hypervisor and QEMU.
+        FUSE_FS = yes;
+        VIRTIO_FS = yes;
         BLK_DEV_INITRD = yes;
         RD_GZIP = yes;
         BLOCK = yes;

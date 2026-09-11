@@ -118,6 +118,30 @@ func TestLoadRejectsTrailingData(t *testing.T) {
 	}
 }
 
+// TestDocumentVirtioFSMountDefaultsItsDaemon covers a QEMU manifest share
+// that names no socket: it gets <tag>.sock and virtle's virtiofsd, as on
+// the other backends and the Go API.
+func TestDocumentVirtioFSMountDefaultsItsDaemon(t *testing.T) {
+	document := validDocument()
+	mount := document.Mounts[0].(VirtioFSMountInput)
+	mount.VirtioFS = VirtioFSInput{}
+	document.Mounts[0] = mount
+
+	manifest, err := document.Manifest()
+	if err != nil {
+		t.Fatalf("resolve manifest: %v", err)
+	}
+	if len(manifest.Run) != 1 || manifest.Run[0].Exec[0] != "virtiofsd" {
+		t.Fatalf("expected virtle's virtiofsd run, got %#v", manifest.Run)
+	}
+	if got, want := manifest.QEMU.Devices.VirtioFS[0].SocketPath, mount.Tag+".sock"; got != want {
+		t.Fatalf("share socket = %q, want %q", got, want)
+	}
+	if !reflect.DeepEqual(manifest.CleanupFiles, []string{mount.Tag + ".sock"}) {
+		t.Fatalf("cleanup files = %q", manifest.CleanupFiles)
+	}
+}
+
 func TestDocumentManagedVirtioFSDefaultBinUsesPATH(t *testing.T) {
 	document := validDocument()
 	mount := document.Mounts[0].(VirtioFSMountInput)

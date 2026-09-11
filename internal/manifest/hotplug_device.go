@@ -48,11 +48,16 @@ type HotplugBlock struct {
 }
 
 // DefaultVirtioFSArgs is the default virtiofsd argument list for a
-// virtiofs hotplug device.
-func DefaultVirtioFSArgs(socketPath string, source string, id string) []string {
-	return []string{
+// virtiofs hotplug device; a read-only share adds the flag that makes the
+// daemon refuse guest writes.
+func DefaultVirtioFSArgs(socketPath string, source string, id string, readOnly bool) []string {
+	args := []string{
 		"--socket-path=" + socketPath,
 		"--shared-dir=" + source,
 		"--tag=" + id,
 	}
+	if readOnly {
+		args = append(args, virtioFSReadOnlyFlag)
+	}
+	return args
 }

@@ -171,3 +171,45 @@ func TestCloudHypervisorKernelParams(t *testing.T) {
 		}
 	}
 }
+
+// TestCloudHypervisorReadOnlyShares covers read_only on a virtiofs mount:
+// the daemon virtle starts gets --readonly, and a share whose daemon virtle
+// does not start, or starts with the mount's own arguments lacking the
+// flag, is rejected rather than attached writable.
+func TestCloudHypervisorReadOnlyShares(t *testing.T) {
+	const share = "working_dir = '/work'\n[kernel]\npath = 'vmlinux'\n[[mounts]]\ntype = 'virtiofs'\ntag = 'src'\nsource = '/src'\nread_only = true\n"
+	m, err := decodeCloudHypervisor(t, share).Manifest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs, err := m.ResolvedRuns(0)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("runs = %+v, %v", runs, err)
+	}
+	if want := []string{"virtiofsd", "--socket-path=/work/.virtle/src.sock", "--shared-dir=/src", "--tag=src", "--readonly"}; !reflect.DeepEqual(runs[0].Exec, want) {
+		t.Fatalf("virtiofsd argv = %q, want %q", runs[0].Exec, want)
+	}
+	if _, err := decodeCloudHypervisor(t, share+"virtiofs.args = ['--socket-path={{.Socket}}', '--shared-dir={{.MountSource}}', '--tag={{.MountTag}}', '--readonly']\n").Manifest(); err != nil {
+		t.Fatalf("own arguments with the flag: %v", err)
+	}
+	for name, tc := range map[string]struct{ extra, want string }{
+		"socket served elsewhere":        {"virtiofs.socket = '/run/external.sock'\n", "run the daemon with --readonly"},
+		"own arguments without the flag": {"virtiofs.args = ['--socket-path={{.Socket}}', '--shared-dir={{.MountSource}}']\n", "must include --readonly"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := decodeCloudHypervisor(t, share+tc.extra).Manifest()
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestMaxCloudHypervisorCPUsByArchitecture(t *testing.T) {
+	if got := maxCloudHypervisorCPUs("amd64"); got != 8192 {
+		t.Fatalf("amd64 = %d, want 8192", got)
+	}
+	if got := maxCloudHypervisorCPUs("arm64"); got != 255 {
+		t.Fatalf("arm64 = %d, want 255", got)
+	}
+}

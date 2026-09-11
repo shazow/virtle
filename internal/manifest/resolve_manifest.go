@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -51,6 +52,7 @@ func (d Document) ManifestWithOptions(options ResolveOptions) (*Manifest, error)
 		return nil, fmt.Errorf("manifest.cloud-hypervisor requires backend = %q", BackendCloudHypervisor)
 	}
 	d = DocumentWithDefaults(d)
+	d.Mounts = d.Mounts.withVirtioFSDefaults()
 	if err := validateHostName(d.HostName); err != nil {
 		return nil, err
 	}
@@ -590,11 +592,15 @@ func resolveNinePMounts(mounts []NinePMountInput, transport string) []QEMUNinePS
 
 func (m *Manifest) resolveVirtioFSRuns(mounts []VirtioFSMountInput, options ResolveOptions) ([]Run, error) {
 	runs := make([]Run, 0, len(mounts))
-	for _, mount := range mounts {
+	for i, mount := range mounts {
 		if mount.VirtioFS.Socket == "" {
 			continue
 		}
 		if mount.VirtioFS.Bin == "" && len(mount.VirtioFS.Args) == 0 {
+			// A named socket and no daemon: served by someone else.
+			if mount.ReadOnly {
+				return nil, virtioFSReadOnlyUnenforced(i)
+			}
 			continue
 		}
 		socketPath, err := m.resolveSocketPath(mount.VirtioFS.Socket)
@@ -618,6 +624,9 @@ func (m *Manifest) resolveVirtioFSRuns(mounts []VirtioFSMountInput, options Reso
 					} else if options.Logger != nil {
 						options.Logger.Info("using existing virtiofs socket", "socket", socketPath)
 					}
+					if mount.ReadOnly {
+						return nil, virtioFSReadOnlyUnenforced(i)
+					}
 					continue
 				}
 			}
@@ -626,12 +635,18 @@ func (m *Manifest) resolveVirtioFSRuns(mounts []VirtioFSMountInput, options Reso
 		}
 
 		args := append([]string(nil), mount.VirtioFS.Args...)
-		if len(args) == 0 {
+		switch {
+		case len(args) == 0:
 			args = []string{
 				"--socket-path={{.Socket}}",
 				"--shared-dir={{.MountSource}}",
 				"--tag={{.MountTag}}",
 			}
+			if mount.ReadOnly {
+				args = append(args, virtioFSReadOnlyFlag)
+			}
+		case mount.ReadOnly && !slices.Contains(args, virtioFSReadOnlyFlag):
+			return nil, fmt.Errorf("manifest.mounts.virtiofs[%d].read_only: virtiofs.args must include %s for the daemon to refuse guest writes", i, virtioFSReadOnlyFlag)
 		}
 		runs = append(runs, Run{
 			Exec: append([]string{m.resolveOptionalBin(mount.VirtioFS.Bin, defaultVirtioFSBin)}, args...),
@@ -732,19 +747,19 @@ func (m *Manifest) resolveImageHotplug(entry ImageMountInput) (HotplugDevice, er
 
 func (m *Manifest) resolveVirtioFSHotplug(mount VirtioFSMountInput) (HotplugDevice, error) {
 	id := mount.Tag
-	socket := mount.VirtioFS.Socket
-	if socket == "" {
-		socket = id + ".sock"
-	}
-	socketPath, err := m.resolveSocketPath(socket)
+	defaultVirtioFSDaemon(&mount)
+	socketPath, err := m.resolveSocketPath(mount.VirtioFS.Socket)
 	if err != nil {
 		return HotplugDevice{}, err
 	}
 	source := m.resolvePath(mount.SourcePath)
 	args := append([]string(nil), mount.VirtioFS.Args...)
-	if len(args) == 0 {
-		args = DefaultVirtioFSArgs(socketPath, source, id)
-	} else {
+	switch {
+	case len(args) == 0:
+		args = DefaultVirtioFSArgs(socketPath, source, id, mount.ReadOnly)
+	case mount.ReadOnly && !slices.Contains(args, virtioFSReadOnlyFlag):
+		return HotplugDevice{}, fmt.Errorf("manifest.hotplug virtiofs %q: virtiofs.args must include %s for the daemon to refuse guest writes", id, virtioFSReadOnlyFlag)
+	default:
 		renderedArgs, err := renderVirtioFSArgv(m.Paths.WorkingDir, args, socketPath, source, id)
 		if err != nil {
 			return HotplugDevice{}, err
@@ -767,6 +782,32 @@ func (m *Manifest) resolveVirtioFSHotplug(mount VirtioFSMountInput) (HotplugDevi
 // defaultVirtioFSBin is the virtiofsd binary used when a mount names none;
 // it is left unresolved so the host PATH supplies it.
 const defaultVirtioFSBin = "virtiofsd"
+
+// virtioFSReadOnlyFlag makes virtiofsd refuse every guest write. It is how a
+// read-only share is enforced, so it has to reach a daemon virtle starts.
+const virtioFSReadOnlyFlag = "--readonly"
+
+// defaultVirtioFSDaemon fills in a virtiofs mount that names no socket, the
+// same way on every backend: the socket is <tag>.sock under the state
+// directory and, unless the mount brings its own bin or args, virtle starts
+// virtiofsd from PATH on it. A mount that names a socket and nothing else is
+// served by someone else.
+func defaultVirtioFSDaemon(mount *VirtioFSMountInput) {
+	if mount.VirtioFS.Socket != "" {
+		return
+	}
+	mount.VirtioFS.Socket = mount.Tag + ".sock"
+	if mount.VirtioFS.Bin == "" && len(mount.VirtioFS.Args) == 0 {
+		mount.VirtioFS.Bin = defaultVirtioFSBin
+	}
+}
+
+// virtioFSReadOnlyUnenforced rejects read_only on a share whose daemon
+// virtle does not run: silently attaching it writable would be worse than
+// an error.
+func virtioFSReadOnlyUnenforced(index int) error {
+	return fmt.Errorf("manifest.mounts.virtiofs[%d].read_only: virtle does not start this share's daemon, so it cannot make the share read-only; run the daemon with %s and drop read_only", index, virtioFSReadOnlyFlag)
+}
 
 func (m *Manifest) resolveOptionalBin(bin string, defaultBin string) string {
 	if bin == "" || bin == defaultBin {

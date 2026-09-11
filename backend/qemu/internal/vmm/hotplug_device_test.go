@@ -28,7 +28,7 @@ func TestAdHocHotplugDevicesReceiveExecutablePlansAndDefaults(t *testing.T) {
 	if got, want := share.VirtioFS.SocketPath, filepath.Join(tmpDir, "state", "data.sock"); got != want {
 		t.Errorf("share socket = %q, want %q", got, want)
 	}
-	if got, want := share.VirtioFS.Args, manifest.DefaultVirtioFSArgs(share.VirtioFS.SocketPath, "/host/data", "data"); !reflect.DeepEqual(got, want) {
+	if got, want := share.VirtioFS.Args, manifest.DefaultVirtioFSArgs(share.VirtioFS.SocketPath, "/host/data", "data", false); !reflect.DeepEqual(got, want) {
 		t.Errorf("share helper args = %#v, want %#v", got, want)
 	}
 

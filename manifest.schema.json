@@ -30,7 +30,7 @@
       "description": "Firecracker executable and lifecycle timeouts.",
       "additionalProperties": false
     },
-    "cloud_hypervisor": {
+    "cloud-hypervisor": {
       "type": "object",
       "properties": {
         "binary": {
@@ -39,7 +39,7 @@
         },
         "startup_timeout": {
           "type": "string",
-          "description": "Maximum time for API startup and configuration; zero uses 10s."
+          "description": "Maximum time for API startup, share daemons, and configuration; zero uses 10s."
         },
         "shutdown_timeout": {
           "type": "string",

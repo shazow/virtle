@@ -278,7 +278,7 @@ func TestSpecDocumentOverlaysBase(t *testing.T) {
 			VirtioFS: imanifest.VirtioFSInput{
 				Socket: "custom.sock",
 				Bin:    "/custom/virtiofsd",
-				Args:   []string{"--socket={{.Socket}}", "--source={{.MountSource}}", "--tag={{.MountTag}}"},
+				Args:   []string{"--socket={{.Socket}}", "--source={{.MountSource}}", "--tag={{.MountTag}}", "--readonly"},
 			},
 		},
 		imanifest.NinePMountInput{
@@ -350,7 +350,7 @@ func TestSpecDocumentOverlaysBase(t *testing.T) {
 	if len(runs) != 1 {
 		t.Fatalf("runs = %+v, want one virtiofs helper", runs)
 	}
-	if got, want := runs[0].Exec, []string{"/custom/virtiofsd", "--socket=/state/custom.sock", "--source=/host/new", "--tag=src"}; !reflect.DeepEqual(got, want) {
+	if got, want := runs[0].Exec, []string{"/custom/virtiofsd", "--socket=/state/custom.sock", "--source=/host/new", "--tag=src", "--readonly"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("virtiofs helper = %#v, want %#v", got, want)
 	}
 	if got := mf.QEMU.Devices.VirtioFS; len(got) != 1 || got[0].Tag != "src" || got[0].SocketPath != "custom.sock" {

@@ -12,18 +12,28 @@ import (
 // and the VMM's own limits.
 const (
 	defaultCloudHypervisorBinary = "cloud-hypervisor"
-	// MaxCloudHypervisorCPUs is the largest vCPU count Cloud Hypervisor
-	// accepts on x86_64 (255 on other architectures); the VMM checks the
-	// host's own KVM limit on top when the VM is created.
-	MaxCloudHypervisorCPUs = 8192
 )
+
+// MaxCloudHypervisorCPUs is the largest vCPU count Cloud Hypervisor accepts
+// on this architecture; the VMM checks the host's own KVM limit on top when
+// the VM is created.
+var MaxCloudHypervisorCPUs = maxCloudHypervisorCPUs(runtime.GOARCH)
+
+// maxCloudHypervisorCPUs is Cloud Hypervisor's MAX_SUPPORTED_CPUS: 8192 on
+// x86_64, 255 elsewhere.
+func maxCloudHypervisorCPUs(arch string) int {
+	if arch == "amd64" {
+		return 8192
+	}
+	return 255
+}
 
 // CloudHypervisorInput contains only VMM-specific options. Resources, boot
 // devices, and virtiofs shares use the same machine, kernel and mounts
 // sections as QEMU.
 type CloudHypervisorInput struct {
 	Binary          string         `json:"binary,omitempty" toml:"binary" jsonschema:"Cloud Hypervisor executable; default cloud-hypervisor. No shell expansion."`
-	StartupTimeout  units.Duration `json:"startup_timeout,omitempty" toml:"startup_timeout" jsonschema:"Maximum time for API startup and configuration; zero uses 10s."`
+	StartupTimeout  units.Duration `json:"startup_timeout,omitempty" toml:"startup_timeout" jsonschema:"Maximum time for API startup, share daemons, and configuration; zero uses 10s."`
 	ShutdownTimeout units.Duration `json:"shutdown_timeout,omitempty" toml:"shutdown_timeout" jsonschema:"Maximum graceful shutdown time; zero uses 10s."`
 }
 
@@ -53,11 +63,11 @@ func (d Document) cloudHypervisorManifest(options ResolveOptions) (*Manifest, er
 	if err := d.rejectQEMUOnly(BackendCloudHypervisor); err != nil {
 		return nil, err
 	}
-	switch {
-	case d.Firecracker != (FirecrackerInput{}):
+	if d.Firecracker != (FirecrackerInput{}) {
 		return nil, unsupportedBy(BackendCloudHypervisor, "manifest.firecracker configures Firecracker; remove it or set backend = %q", BackendFirecracker)
-	case len(d.Mounts) != len(d.Mounts.Image())+len(d.Mounts.VirtioFS()):
-		return nil, unsupportedBy(BackendCloudHypervisor, "9p mounts; use type virtiofs")
+	}
+	if i, kind, ok := d.Mounts.firstMountNot(MountTypeImage, MountTypeVirtioFS); ok {
+		return nil, unsupportedBy(BackendCloudHypervisor, "manifest.mounts[%d].type %s; shares are virtiofs mounts", i, kind)
 	}
 	m, vmm, err := d.resolveVMM(vmmProfile{
 		backend:       BackendCloudHypervisor,
@@ -80,9 +90,9 @@ func (d Document) cloudHypervisorManifest(options ResolveOptions) (*Manifest, er
 
 // resolveCloudHypervisorShares lowers the virtiofs mounts. A mount without
 // a socket gets <tag>.sock under the state directory and virtle's own
-// virtiofsd, as the QEMU backend's Spec path does; the daemons become Run
-// entries and their sockets cleanup files through the same resolution QEMU
-// uses, so a socket that is already live is left to whoever serves it.
+// virtiofsd, as on QEMU; the daemons become Run entries and their sockets
+// cleanup files through the same resolution QEMU uses, so a socket that is
+// already live is left to whoever serves it.
 func (m *Manifest) resolveCloudHypervisorShares(mounts []VirtioFSMountInput, options ResolveOptions) ([]CloudHypervisorShare, error) {
 	if len(mounts) == 0 {
 		return nil, nil
@@ -99,12 +109,7 @@ func (m *Manifest) resolveCloudHypervisorShares(mounts []VirtioFSMountInput, opt
 			return nil, fmt.Errorf("manifest.mounts.virtiofs[%d].source is required", i)
 		}
 		tags[mount.Tag] = true
-		if mount.VirtioFS.Socket == "" {
-			mount.VirtioFS.Socket = mount.Tag + ".sock"
-			if mount.VirtioFS.Bin == "" && len(mount.VirtioFS.Args) == 0 {
-				mount.VirtioFS.Bin = defaultVirtioFSBin
-			}
-		}
+		defaultVirtioFSDaemon(mount)
 	}
 	runs, err := m.resolveVirtioFSRuns(mounts, options)
 	if err != nil {

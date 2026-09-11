@@ -47,6 +47,7 @@ func DocumentWithDefaults(document Document) Document {
 		defaults.Backend = document.Backend
 	}
 	defaults.Firecracker = document.Firecracker
+	defaults.CloudHypervisor = document.CloudHypervisor
 	if document.HostName != "" {
 		defaults.HostName = document.HostName
 	}

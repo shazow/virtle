@@ -133,7 +133,7 @@ func TestConfigurationWithTAP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []imanifest.FirecrackerNetwork{{ID: "microvm1", Tap: "tap0", MAC: "02:02:00:00:00:01"}}; !reflect.DeepEqual(mf.Firecracker.Networks, want) {
+	if want := []imanifest.TapNetwork{{ID: "microvm1", Tap: "tap0", MAC: "02:02:00:00:00:01"}}; !reflect.DeepEqual(mf.Firecracker.Networks, want) {
 		t.Fatalf("networks = %+v, want %+v", mf.Firecracker.Networks, want)
 	}
 	var paths []string
@@ -177,7 +177,7 @@ func TestConfigurationWithTAP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []imanifest.FirecrackerNetwork{{ID: "eth0", Tap: "tap0", MAC: "02:aa:00:00:00:01"}}; !reflect.DeepEqual(mf.Firecracker.Networks, want) {
+	if want := []imanifest.TapNetwork{{ID: "eth0", Tap: "tap0", MAC: "02:aa:00:00:00:01"}}; !reflect.DeepEqual(mf.Firecracker.Networks, want) {
 		t.Fatalf("networks = %+v, want %+v", mf.Firecracker.Networks, want)
 	}
 	if b.doc.Networks[0].Tap != "tap9" {

@@ -19,22 +19,23 @@ type ResolveOptions struct {
 }
 
 type Manifest struct {
-	Backend       string          `json:"backend"`
-	Firecracker   *Firecracker    `json:"firecracker,omitempty"`
-	Identity      Identity        `json:"identity"`
-	Paths         Paths           `json:"paths"`
-	Persistence   Persistence     `json:"persistence"`
-	SSH           SSH             `json:"ssh"`
-	QEMU          QEMU            `json:"qemu"`
-	Volumes       []Volume        `json:"volumes,omitempty"`
-	VSock         VSock           `json:"vsock"`
-	Workspace     Workspace       `json:"workspace,omitempty"`
-	WriteFiles    WriteFiles      `json:"writeFiles,omitempty"`
-	Notifications Notifications   `json:"notifications,omitempty"`
-	Run           []Run           `json:"run,omitempty"`
-	Hotplug       []HotplugDevice `json:"hotplug,omitempty"`
-	Egress        *Egress         `json:"egress,omitempty"`
-	CleanupFiles  []string        `json:"cleanupFiles,omitempty"`
+	Backend         string           `json:"backend"`
+	Firecracker     *Firecracker     `json:"firecracker,omitempty"`
+	CloudHypervisor *CloudHypervisor `json:"cloudHypervisor,omitempty"`
+	Identity        Identity         `json:"identity"`
+	Paths           Paths            `json:"paths"`
+	Persistence     Persistence      `json:"persistence"`
+	SSH             SSH              `json:"ssh"`
+	QEMU            QEMU             `json:"qemu"`
+	Volumes         []Volume         `json:"volumes,omitempty"`
+	VSock           VSock            `json:"vsock"`
+	Workspace       Workspace        `json:"workspace,omitempty"`
+	WriteFiles      WriteFiles       `json:"writeFiles,omitempty"`
+	Notifications   Notifications    `json:"notifications,omitempty"`
+	Run             []Run            `json:"run,omitempty"`
+	Hotplug         []HotplugDevice  `json:"hotplug,omitempty"`
+	Egress          *Egress          `json:"egress,omitempty"`
+	CleanupFiles    []string         `json:"cleanupFiles,omitempty"`
 }
 
 type Identity struct {

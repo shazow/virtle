@@ -51,6 +51,7 @@ const (
 // must not be modified after Start is first called.
 type Backend struct {
 	Binary          string        // cloud-hypervisor executable; default: "cloud-hypervisor" from PATH
+	ExtraArgs       []string      // passthrough Cloud Hypervisor arguments, after virtle's own; no shell expansion
 	StartupTimeout  time.Duration // bound on API startup, share daemons, and configuration; default: 10s
 	ShutdownTimeout time.Duration // bound on graceful Shutdown before the VMM is killed; default: 10s
 	Console         Console       // serial console wiring; the zero value keeps the manifest's kernel.serial (default ConsoleOff)

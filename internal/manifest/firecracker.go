@@ -20,6 +20,7 @@ type FirecrackerInput struct {
 	Binary          string         `json:"binary,omitempty" toml:"binary" jsonschema:"Firecracker executable; default firecracker. No shell expansion."`
 	StartupTimeout  units.Duration `json:"startup_timeout,omitempty" toml:"startup_timeout" jsonschema:"Maximum time for API startup and configuration; zero uses 10s."`
 	ShutdownTimeout units.Duration `json:"shutdown_timeout,omitempty" toml:"shutdown_timeout" jsonschema:"Maximum graceful shutdown time; zero uses 10s."`
+	Args            []string       `json:"args,omitempty" toml:"args" jsonschema:"Extra command-line arguments appended after the ones virtle passes; no shell expansion or templates."`
 }
 
 // Firecracker is the resolved Firecracker launch configuration: what the
@@ -34,7 +35,7 @@ func (d Document) firecrackerManifest() (*Manifest, error) {
 	if err := d.rejectQEMUOnly(BackendFirecracker); err != nil {
 		return nil, err
 	}
-	if d.CloudHypervisor != (CloudHypervisorInput{}) {
+	if !unconfigured(d.CloudHypervisor) {
 		return nil, unsupportedBy(BackendFirecracker, "manifest.cloud-hypervisor configures Cloud Hypervisor; remove it or set backend = %q", BackendCloudHypervisor)
 	}
 	if i, kind, ok := d.Mounts.firstMountNot(MountTypeImage); ok {

@@ -49,6 +49,7 @@ const (
 // first called.
 type Backend struct {
 	Binary          string        // firecracker executable; default: "firecracker" from PATH
+	ExtraArgs       []string      // passthrough Firecracker arguments, after virtle's own; no shell expansion
 	StartupTimeout  time.Duration // bound on API startup and configuration; default: 10s
 	ShutdownTimeout time.Duration // bound on graceful Shutdown before the VMM is killed; default: 10s
 	Console         Console       // serial console wiring; the zero value keeps the manifest's kernel.serial (default ConsoleOff)

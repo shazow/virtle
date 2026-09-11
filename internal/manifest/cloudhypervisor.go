@@ -35,6 +35,7 @@ type CloudHypervisorInput struct {
 	Binary          string         `json:"binary,omitempty" toml:"binary" jsonschema:"Cloud Hypervisor executable; default cloud-hypervisor. No shell expansion."`
 	StartupTimeout  units.Duration `json:"startup_timeout,omitempty" toml:"startup_timeout" jsonschema:"Maximum time for API startup, share daemons, and configuration; zero uses 10s."`
 	ShutdownTimeout units.Duration `json:"shutdown_timeout,omitempty" toml:"shutdown_timeout" jsonschema:"Maximum graceful shutdown time; zero uses 10s."`
+	Args            []string       `json:"args,omitempty" toml:"args" jsonschema:"Extra command-line arguments appended after the ones virtle passes; no shell expansion or templates."`
 }
 
 // CloudHypervisor is the resolved Cloud Hypervisor launch configuration:
@@ -63,7 +64,7 @@ func (d Document) cloudHypervisorManifest(options ResolveOptions) (*Manifest, er
 	if err := d.rejectQEMUOnly(BackendCloudHypervisor); err != nil {
 		return nil, err
 	}
-	if d.Firecracker != (FirecrackerInput{}) {
+	if !unconfigured(d.Firecracker) {
 		return nil, unsupportedBy(BackendCloudHypervisor, "manifest.firecracker configures Firecracker; remove it or set backend = %q", BackendFirecracker)
 	}
 	if i, kind, ok := d.Mounts.firstMountNot(MountTypeImage, MountTypeVirtioFS); ok {

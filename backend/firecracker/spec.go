@@ -3,6 +3,7 @@ package firecracker
 import (
 	"errors"
 	"fmt"
+	"slices"
 
 	imanifest "github.com/shazow/virtle/internal/manifest"
 	"github.com/shazow/virtle/internal/vmmhost"
@@ -42,6 +43,9 @@ func (b *Backend) resolveSpec(spec *vm.Spec, stateDir string) (*imanifest.Manife
 	}
 	if b.Binary != "" {
 		doc.Firecracker.Binary = b.Binary
+	}
+	if len(b.ExtraArgs) != 0 {
+		doc.Firecracker.Args = append(slices.Clone(doc.Firecracker.Args), b.ExtraArgs...)
 	}
 	if b.StartupTimeout != 0 {
 		doc.Firecracker.StartupTimeout = units.Duration(b.StartupTimeout)

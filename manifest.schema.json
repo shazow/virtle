@@ -25,6 +25,16 @@
         "shutdown_timeout": {
           "type": "string",
           "description": "Maximum graceful shutdown time; zero uses 10s."
+        },
+        "args": {
+          "type": [
+            "null",
+            "array"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Extra command-line arguments appended after the ones virtle passes; no shell expansion or templates."
         }
       },
       "description": "Firecracker executable and lifecycle timeouts.",
@@ -44,6 +54,16 @@
         "shutdown_timeout": {
           "type": "string",
           "description": "Maximum graceful shutdown time; zero uses 10s."
+        },
+        "args": {
+          "type": [
+            "null",
+            "array"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Extra command-line arguments appended after the ones virtle passes; no shell expansion or templates."
         }
       },
       "description": "Cloud Hypervisor executable and lifecycle timeouts.",

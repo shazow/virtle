@@ -57,7 +57,7 @@ func (b *Backend) start(ctx context.Context, mf *imanifest.Manifest, ephemeralSt
 			return helpers.Stop, nil
 		},
 		Command: func(socket string) *exec.Cmd {
-			return exec.Command(cfg.Binary, "--api-socket", "path="+socket)
+			return exec.Command(cfg.Binary, append([]string{"--api-socket", "path=" + socket}, cfg.Args...)...)
 		},
 		Configure: func(ctx context.Context, socket string) error {
 			// vm.create fails outright when a share's socket is not there

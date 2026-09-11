@@ -22,6 +22,8 @@ compact before/after examples.
   rounds instead of pairs: `--pairs 10 --warmup-pairs 2` becomes `--rounds 9
   --warmup-rounds 3` (multiples of three), and `results.json` records
   `rounds` and `warmup_rounds`.
+- `[cloud-hypervisor] args` and `[firecracker] args` append command-line
+  arguments to the VMM after virtle's own, as `[qemu] exec` allows for QEMU.
 - `kernel.serial = "console"` works on Cloud Hypervisor as it does on QEMU:
   the guest console is the host terminal `virtle launch` runs in.
 - On Cloud Hypervisor, `[[mounts]] type = "image"` takes `image.format =
@@ -46,7 +48,8 @@ compact before/after examples.
   `backend.ConsoleProvider`, and `vm.Spec.Shares` become virtio-fs shares.
   `manifest.Load` returns it for `backend = "cloud-hypervisor"`.
 - `cloudhypervisor.Backend` accepts `vm.Disk.Format = "qcow2"` and
-  `Console: cloudhypervisor.ConsoleInteractive`.
+  `Console: cloudhypervisor.ConsoleInteractive`; `cloudhypervisor.Backend`
+  and `firecracker.Backend` gain `ExtraArgs`, as `qemu.Backend` has.
 - `vm.Share.ReadOnly` is enforced by the share's `virtiofsd`; `Start` fails
   when virtle does not start that daemon or its arguments lack `--readonly`.
 

@@ -3,6 +3,7 @@ package cloudhypervisor
 import (
 	"errors"
 	"fmt"
+	"slices"
 
 	imanifest "github.com/shazow/virtle/internal/manifest"
 	"github.com/shazow/virtle/internal/vmmhost"
@@ -43,6 +44,9 @@ func (b *Backend) resolveSpec(spec *vm.Spec, stateDir string) (*imanifest.Manife
 	}
 	if b.Binary != "" {
 		doc.CloudHypervisor.Binary = b.Binary
+	}
+	if len(b.ExtraArgs) != 0 {
+		doc.CloudHypervisor.Args = append(slices.Clone(doc.CloudHypervisor.Args), b.ExtraArgs...)
 	}
 	if b.StartupTimeout != 0 {
 		doc.CloudHypervisor.StartupTimeout = units.Duration(b.StartupTimeout)

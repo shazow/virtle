@@ -27,3 +27,14 @@ type Term interface {
 	// errors.ErrUnsupported.
 	Wait(ctx context.Context) (int, error)
 }
+
+// TermOptions configures a newly opened guest terminal session. The zero
+// value requests the source's default shell with its default size.
+// The bundled backends' serial-console attachment does not accept options.
+type TermOptions struct {
+	Argv     []string // command to run; default: a login shell
+	Env      []string
+	TermType string // terminal type advertised to the guest, e.g. "xterm-256color"
+	Cols     int
+	Rows     int
+}

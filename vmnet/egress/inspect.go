@@ -178,12 +178,15 @@ func (p *Policy) inspect(ctx context.Context, f vmnet.Flow, rule string) (net.Co
 
 func (p *Policy) serveInspected(ctx context.Context, conn net.Conn, f vmnet.Flow, rule string) {
 	defer conn.Close()
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
 	peek := bufio.NewReader(conn)
 	first, err := peek.Peek(1)
 	if err != nil {
 		return
 	}
-	var served net.Conn = &peekedConn{Conn: conn, Reader: peek}
+	listener := &oneConnListener{done: make(chan struct{})}
+	var served net.Conn = &peekedConn{Conn: conn, Reader: peek, closed: func() { _ = listener.Close() }}
 	scheme := "http"
 	if first[0] == 0x16 { // a TLS handshake record
 		scheme = "https"
@@ -224,7 +227,7 @@ func (p *Policy) serveInspected(ctx context.Context, conn net.Conn, f vmnet.Flow
 			p.refuse(w, r, f, rule, err)
 		},
 	}
-	listener := &oneConnListener{conn: served, done: make(chan struct{})}
+	listener.conn = served
 	server := &http.Server{
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if err := validateAuthority(r, f, scheme); err != nil {
@@ -253,14 +256,9 @@ func (p *Policy) serveInspected(ctx context.Context, conn net.Conn, f vmnet.Flow
 		}),
 		ReadHeaderTimeout: 30 * time.Second,
 		BaseContext:       func(net.Listener) context.Context { return ctx },
-		// The server serves this one connection: once it is closed the
-		// listener ends, and with it Serve and this goroutine.
-		ConnState: func(_ net.Conn, state http.ConnState) {
-			if state == http.StateClosed || state == http.StateHijacked {
-				_ = listener.Close()
-			}
-		},
 	}
+	// Closing the connection ends the listener. A protocol upgrade only
+	// transfers ownership: the reverse proxy closes it when the relay ends.
 	_ = server.Serve(listener)
 }
 
@@ -619,20 +617,29 @@ func (r *replacingReader) Read(p []byte) (int, error) {
 
 func (r *replacingReader) Close() error { return r.src.Close() }
 
-// peekedConn is a conn whose first bytes were peeked.
+// peekedConn preserves peeked bytes and ends its listener when closed,
+// including after ownership passes to a protocol-upgrade relay.
 type peekedConn struct {
 	net.Conn
 	Reader *bufio.Reader
+	closed func()
 }
 
 func (c *peekedConn) Read(p []byte) (int, error) { return c.Reader.Read(p) }
 
+func (c *peekedConn) Close() error {
+	err := c.Conn.Close()
+	c.closed()
+	return err
+}
+
 // oneConnListener hands one conn to an http.Server, then blocks until it is
-// closed, which the server's ConnState hook does once the conn is done.
+// closed along with that connection.
 type oneConnListener struct {
-	conn net.Conn
-	once sync.Once
-	done chan struct{}
+	conn      net.Conn
+	once      sync.Once
+	closeOnce sync.Once
+	done      chan struct{}
 }
 
 func (l *oneConnListener) Accept() (net.Conn, error) {
@@ -646,11 +653,7 @@ func (l *oneConnListener) Accept() (net.Conn, error) {
 }
 
 func (l *oneConnListener) Close() error {
-	select {
-	case <-l.done:
-	default:
-		close(l.done)
-	}
+	l.closeOnce.Do(func() { close(l.done) })
 	return nil
 }
 

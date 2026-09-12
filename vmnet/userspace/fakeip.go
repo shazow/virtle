@@ -5,6 +5,7 @@ import (
 	"net/netip"
 	"strings"
 	"sync"
+	"time"
 )
 
 // DefaultFakeIPRange is where synthetic DNS answers come from when
@@ -14,13 +15,12 @@ var DefaultFakeIPRange = netip.MustParsePrefix("198.18.0.0/15")
 
 // fakeIPTable hands out one synthetic address per name a guest resolves,
 // so a flow to that address carries the name the guest meant and the
-// Egress resolves it when it dials. Names never leave the process at
-// resolution time. A name keeps its address until the range is spent; then
-// the name that has gone longest without a lookup or a flow gives its
-// address up, so a guest resolving names without end cannot exhaust the
-// range for the others.
+// Egress resolves it when it dials. A binding remains protected for at
+// least the advertised DNS TTL after each use. When the range is spent,
+// only an expired binding may give its address to another name.
 type fakeIPTable struct {
 	prefix netip.Prefix
+	now    func() time.Time
 
 	mu     sync.Mutex
 	byName map[string]*list.Element
@@ -30,13 +30,15 @@ type fakeIPTable struct {
 }
 
 type fakeIPEntry struct {
-	name string
-	addr netip.Addr
+	name    string
+	addr    netip.Addr
+	expires time.Time
 }
 
 func newFakeIPTable(prefix netip.Prefix) *fakeIPTable {
 	return &fakeIPTable{
 		prefix: prefix,
+		now:    time.Now,
 		byName: make(map[string]*list.Element),
 		byAddr: make(map[netip.Addr]*list.Element),
 		used:   list.New(),
@@ -50,13 +52,15 @@ func fakeName(name string) string {
 }
 
 // addr returns the name's address, allocating one on first use; ok is false
-// only when the range holds no address at all.
+// when the range has no free address or expired binding to reuse.
 func (t *fakeIPTable) addr(name string) (netip.Addr, bool) {
 	name = fakeName(name)
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	now := t.now()
 	if e, ok := t.byName[name]; ok {
 		t.used.MoveToFront(e)
+		e.Value.(*fakeIPEntry).expires = now.Add(time.Duration(dnsTTL) * time.Second)
 		return e.Value.(*fakeIPEntry).addr, true
 	}
 	a := t.next
@@ -64,7 +68,9 @@ func (t *fakeIPTable) addr(name string) (netip.Addr, bool) {
 		t.next = a.Next()
 	} else {
 		oldest := t.used.Back()
-		if oldest == nil {
+		// Every use renews the same TTL and moves its entry to the front,
+		// so the oldest entry is also the first eligible for reuse.
+		if oldest == nil || oldest.Value.(*fakeIPEntry).expires.After(now) {
 			return netip.Addr{}, false
 		}
 		old := t.used.Remove(oldest).(*fakeIPEntry)
@@ -72,7 +78,7 @@ func (t *fakeIPTable) addr(name string) (netip.Addr, bool) {
 		delete(t.byAddr, old.addr)
 		a = old.addr
 	}
-	e := t.used.PushFront(&fakeIPEntry{name: name, addr: a})
+	e := t.used.PushFront(&fakeIPEntry{name: name, addr: a, expires: now.Add(time.Duration(dnsTTL) * time.Second)})
 	t.byName[name] = e
 	t.byAddr[a] = e
 	return a, true
@@ -87,6 +93,7 @@ func (t *fakeIPTable) name(a netip.Addr) (string, bool) {
 		return "", false
 	}
 	t.used.MoveToFront(e)
+	e.Value.(*fakeIPEntry).expires = t.now().Add(time.Duration(dnsTTL) * time.Second)
 	return e.Value.(*fakeIPEntry).name, true
 }
 

@@ -90,7 +90,8 @@ func freeLoopbackPort(t *testing.T) string {
 // forward, and forwards attach and detach at runtime.
 func TestNetwork(t *testing.T) {
 	f := loadFixture(t)
-	network, err := userspace.New(userspace.Config{})
+	// The Nix sandbox has no host resolver configuration.
+	network, err := userspace.New(userspace.Config{DNSUpstream: fixtureDNS(t, nil)})
 	if err != nil {
 		t.Fatal(err)
 	}

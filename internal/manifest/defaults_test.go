@@ -149,7 +149,7 @@ func TestDocumentWithDefaultsPreservesExplicitOverridesForMovedDefaults(t *testi
 	if got, want := manifest.QEMU.Machine.Type, "q35"; got != want {
 		t.Fatalf("machine type = %q, want %q", got, want)
 	}
-	if got, want := manifest.QEMU.Memory.Size, units.MiB(2048); got != want {
+	if got, want := manifest.QEMU.Memory.Size.Int(), 2048; got != want {
 		t.Fatalf("memory = %d, want %d", got, want)
 	}
 	if got, want := manifest.QEMU.QMP.SocketPath, "custom-qmp.sock"; got != want {

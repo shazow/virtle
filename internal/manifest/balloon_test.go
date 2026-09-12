@@ -3,8 +3,6 @@ package manifest
 import (
 	"testing"
 	"time"
-
-	"github.com/shazow/virtle/units"
 )
 
 func TestValidateAppliesBalloonDefaults(t *testing.T) {
@@ -16,19 +14,19 @@ func TestValidateAppliesBalloonDefaults(t *testing.T) {
 	if manifest.QEMU.Devices.Balloon.Controller == nil {
 		t.Fatal("expected balloon controller defaults to be synthesized")
 	}
-	if got, want := manifest.QEMU.Devices.Balloon.Controller.MinActual, units.MiB(512); got != want {
+	if got, want := manifest.QEMU.Devices.Balloon.Controller.MinActual.Int(), 512; got != want {
 		t.Fatalf("unexpected balloon controller minActualMiB default: got %d want %d", got, want)
 	}
 	if got, want := manifest.QEMU.Devices.Balloon.Controller.MaxActual, manifest.QEMU.Memory.Size; got != want {
 		t.Fatalf("unexpected balloon controller maxActualMiB default: got %d want %d", got, want)
 	}
-	if got, want := manifest.QEMU.Devices.Balloon.Controller.GrowBelowAvailable, units.MiB(256); got != want {
+	if got, want := manifest.QEMU.Devices.Balloon.Controller.GrowBelowAvailable.Int(), 256; got != want {
 		t.Fatalf("unexpected balloon controller grow threshold default: got %d want %d", got, want)
 	}
-	if got, want := manifest.QEMU.Devices.Balloon.Controller.ReclaimAboveAvailable, units.MiB(512); got != want {
+	if got, want := manifest.QEMU.Devices.Balloon.Controller.ReclaimAboveAvailable.Int(), 512; got != want {
 		t.Fatalf("unexpected balloon controller reclaim threshold default: got %d want %d", got, want)
 	}
-	if got, want := manifest.QEMU.Devices.Balloon.Controller.Step, units.MiB(256); got != want {
+	if got, want := manifest.QEMU.Devices.Balloon.Controller.Step.Int(), 256; got != want {
 		t.Fatalf("unexpected balloon controller step default: got %d want %d", got, want)
 	}
 	if got, want := manifest.QEMU.Devices.Balloon.Controller.PollInterval, 5*time.Second; got != want {

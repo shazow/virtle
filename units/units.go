@@ -35,10 +35,19 @@ func (b Bytes) Int64() int64 { return int64(b) }
 // Bytes converts a MiB-denominated value to bytes.
 func (m MiB) Bytes() Bytes { return Bytes(m) * Mebibyte }
 
+// Int returns m as a plain int count of mebibytes.
+func (m MiB) Int() int { return int(m) }
+
+// Kibibytes returns b as a whole number of kibibytes, truncating toward zero.
+func (b Bytes) Kibibytes() int64 { return int64(b / Kibibyte) }
+
 // Mebibytes returns b as a whole number of mebibytes, truncating toward
 // zero. Useful at boundaries (such as the manifest format) that are
 // MiB-denominated.
 func (b Bytes) Mebibytes() MiB { return MiB(b / Mebibyte) }
+
+// Gibibytes returns b as a whole number of gibibytes, truncating toward zero.
+func (b Bytes) Gibibytes() int64 { return int64(b / Gibibyte) }
 
 // String formats b using the largest unit that divides it evenly, e.g.
 // "2GiB", "512MiB", "1536B".

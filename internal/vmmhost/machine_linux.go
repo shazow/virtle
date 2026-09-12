@@ -201,7 +201,8 @@ func Start(ctx context.Context, l Launch) (*Machine, error) {
 	case l.ConsoleInteractive:
 		// The guest's serial port is the process's own terminal: the VMM
 		// reads what the user types and prints where ConsoleOutput points.
-		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, l.ConsoleOutput, io.MultiWriter(m.diagnostics, l.ConsoleOutput)
+		serialized := &lockedWriter{writer: l.ConsoleOutput}
+		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, serialized, io.MultiWriter(m.diagnostics, serialized)
 	case l.Console:
 		// The guest's serial port rides the VMM's standard streams: the hub
 		// prints it, retains it, and serves Machine.Console sessions. The

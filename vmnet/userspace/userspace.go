@@ -36,23 +36,6 @@ import (
 	"github.com/shazow/virtle/vmnet"
 )
 
-// DNSMode selects how the gateway answers guest queries. In both modes AAAA
-// answers are empty, because the segment carries only IPv4, and queries for
-// other record types go to the host's resolver.
-type DNSMode string
-
-const (
-	// DNSForward resolves names with the host's resolver and answers with
-	// the real addresses. An Egress then sees addresses, never names.
-	DNSForward DNSMode = "forward"
-	// DNSFakeIP answers every name with a synthetic address from
-	// Config.FakeIPRange and remembers which name it stands for, so the
-	// Egress sees each flow's Host and resolves it itself when it dials:
-	// the mode for policies that decide by name (vmnet/egress). A name that
-	// does not exist fails at connect time rather than at resolution.
-	DNSFakeIP DNSMode = "fakeip"
-)
-
 // DefaultMTU is the segment MTU when Config.MTU is zero.
 const DefaultMTU = 1500
 
@@ -100,9 +83,7 @@ type Config struct {
 	// MTU is the largest IP packet on the segment; a link must carry at
 	// least this much to attach. Default DefaultMTU.
 	MTU int
-	// DNS is the gateway's answering mode. Default DNSForward.
-	DNS DNSMode
-	// FakeIPRange is where DNSFakeIP answers come from; it must not overlap
+	// FakeIPRange is where synthetic DNS answers come from; it must not overlap
 	// Subnet. Default DefaultFakeIPRange.
 	FakeIPRange netip.Prefix
 	// Egress dials guest-initiated flows. Default vmnet.Passthrough{}.
@@ -131,7 +112,7 @@ type Network struct {
 	wg      sync.WaitGroup
 	dhcp    *dhcpServer
 	dns     *dnsServer
-	fakeIPs *fakeIPTable // set in DNSFakeIP mode
+	fakeIPs *fakeIPTable
 
 	mu     sync.Mutex
 	closed bool
@@ -177,24 +158,18 @@ func New(cfg Config) (*Network, error) {
 	if n.mtu < minMTU || n.mtu > maxMTU {
 		return nil, fmt.Errorf("userspace: MTU %d is outside %d-%d", n.mtu, minMTU, maxMTU)
 	}
-	switch cfg.DNS {
-	case "", DNSForward:
-	case DNSFakeIP:
-		fakeRange := cfg.FakeIPRange
-		if !fakeRange.IsValid() {
-			fakeRange = DefaultFakeIPRange
-		}
-		fakeRange = fakeRange.Masked()
-		switch {
-		case !fakeRange.Addr().Is4() || fakeRange.Bits() > 30:
-			return nil, fmt.Errorf("userspace: fake IP range %s is not an IPv4 range with room for names", cfg.FakeIPRange)
-		case fakeRange.Overlaps(n.subnet):
-			return nil, fmt.Errorf("userspace: fake IP range %s overlaps the subnet %s", fakeRange, n.subnet)
-		}
-		n.fakeIPs = newFakeIPTable(fakeRange)
-	default:
-		return nil, fmt.Errorf("userspace: unknown DNS mode %q", cfg.DNS)
+	fakeRange := cfg.FakeIPRange
+	if !fakeRange.IsValid() {
+		fakeRange = DefaultFakeIPRange
 	}
+	fakeRange = fakeRange.Masked()
+	switch {
+	case !fakeRange.Addr().Is4() || fakeRange.Bits() > 30:
+		return nil, fmt.Errorf("userspace: fake IP range %s is not an IPv4 range with room for names", cfg.FakeIPRange)
+	case fakeRange.Overlaps(n.subnet):
+		return nil, fmt.Errorf("userspace: fake IP range %s overlaps the subnet %s", fakeRange, n.subnet)
+	}
+	n.fakeIPs = newFakeIPTable(fakeRange)
 	if n.egress == nil {
 		n.egress = vmnet.Passthrough{}
 	}
@@ -233,7 +208,7 @@ func New(cfg Config) (*Network, error) {
 
 func (n *Network) configureStack() error {
 	s := n.stack
-	if err := s.CreateNIC(nicID, ethernet.New(n.ep)); err != nil {
+	if err := s.CreateNIC(nicID, ethernet.New(&networkEndpoint{Endpoint: n.ep, n: n})); err != nil {
 		return tcpipError("create NIC", err)
 	}
 	if err := s.AddProtocolAddress(nicID, tcpip.ProtocolAddress{
@@ -268,14 +243,6 @@ func (n *Network) Subnet() netip.Prefix { return n.subnet }
 // MTU is the segment's MTU.
 func (n *Network) MTU() int { return n.mtu }
 
-// DNS is the gateway's answering mode.
-func (n *Network) DNS() DNSMode {
-	if n.fakeIPs != nil {
-		return DNSFakeIP
-	}
-	return DNSForward
-}
-
 // Attach implements vmnet.Network.
 func (n *Network) Attach(ctx context.Context, link vmnet.Link, opts vmnet.AttachOptions) (vmnet.Port, error) {
 	if link.MTU() < n.mtu {
@@ -285,13 +252,22 @@ func (n *Network) Attach(ctx context.Context, link vmnet.Link, opts vmnet.Attach
 	if err != nil {
 		return nil, err
 	}
-	// The pumps start before anything can fail, so Close always has
-	// goroutines to end and Network.Close has none to miss.
+	// Install the neighbor before reading guest frames. TCP teardown relies
+	// on a SYN-ACK reaching the link endpoint without waiting on ARP.
+	p.mu.Lock()
+	if p.closed {
+		err = net.ErrClosed
+	} else if terr := n.stack.AddStaticNeighbor(nicID, ipv4.ProtocolNumber, p.addr4, tcpip.LinkAddress(p.mac)); terr != nil {
+		err = tcpipError("add neighbor", terr)
+	}
+	p.mu.Unlock()
+	// newPort counts both pumps; start them even if attachment failed so
+	// Network.Close has no missing goroutines to wait for.
 	go n.portRx(p)
 	go n.portTx(p)
-	if err := n.stack.AddStaticNeighbor(nicID, ipv4.ProtocolNumber, p.addr4, tcpip.LinkAddress(p.mac)); err != nil {
+	if err != nil {
 		_ = p.Close()
-		return nil, tcpipError("add neighbor", err)
+		return nil, err
 	}
 	n.logger.Info("network port attached", "guest", p.name, "addr", p.addr, "mac", p.mac.String())
 	return p, nil
@@ -331,8 +307,12 @@ func (n *Network) newPort(link vmnet.Link, opts vmnet.AttachOptions) (*port, err
 	if _, used := n.byMAC[mac.String()]; used || mac.String() == n.gatewayHW.String() {
 		return nil, fmt.Errorf("userspace: MAC %s is in use", mac)
 	}
+	ctx, cancel := context.WithCancel(n.ctx)
 	p := &port{
 		n:         n,
+		ctx:       ctx,
+		cancel:    cancel,
+		flows:     make(map[*forwardedFlow]struct{}),
 		name:      opts.Name,
 		egress:    opts.Egress,
 		addr:      addr,

@@ -9,10 +9,48 @@ import (
 	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
+	"gvisor.dev/gvisor/pkg/tcpip/link/channel"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
+	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
 
+	"github.com/shazow/virtle/vm"
 	"github.com/shazow/virtle/vmnet"
 )
+
+// networkEndpoint observes TCP endpoint publication before an outgoing
+// packet can be dropped. gVisor registers a passive TCP endpoint before
+// writing SYN-ACK, but CreateEndpoint returns only after the handshake.
+// This signal lets port teardown abort that endpoint without waiting on
+// the guest or racing an endpoint that has not been registered yet.
+type networkEndpoint struct {
+	*channel.Endpoint
+	n *Network
+}
+
+func (e *networkEndpoint) WritePackets(pkts stack.PacketBufferList) (int, tcpip.Error) {
+	for _, pkt := range pkts.AsSlice() {
+		if pkt.TransportProtocolNumber != tcp.ProtocolNumber {
+			continue
+		}
+		h := header.TCP(pkt.TransportHeader().Slice())
+		if !h.Flags().Contains(header.TCPFlagSyn | header.TCPFlagAck) {
+			continue
+		}
+		ip := pkt.Network()
+		p := e.n.portByAddr(netipAddr(ip.DestinationAddress()))
+		if p == nil {
+			continue
+		}
+		p.mu.Lock()
+		for f := range p.flows {
+			if f.flow.Proto == vm.TCP && f.id.LocalAddress == ip.SourceAddress() && f.id.LocalPort == h.SourcePort() && f.id.RemotePort == h.DestinationPort() {
+				f.markPublished()
+			}
+		}
+		p.mu.Unlock()
+	}
+	return e.Endpoint.WritePackets(pkts)
+}
 
 // The switch moves Ethernet frames between the stack's link endpoint and the
 // attached ports. Every port's MAC is known at attach, so there is no

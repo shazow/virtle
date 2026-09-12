@@ -7,7 +7,7 @@ import (
 	"sync"
 )
 
-// DefaultFakeIPRange is where DNSFakeIP answers come from when
+// DefaultFakeIPRange is where synthetic DNS answers come from when
 // Config.FakeIPRange is zero: the benchmarking range, which no real
 // destination uses.
 var DefaultFakeIPRange = netip.MustParsePrefix("198.18.0.0/15")

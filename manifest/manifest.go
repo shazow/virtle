@@ -104,9 +104,7 @@ func LoadDocument(doc imanifest.Document) (*vm.Spec, backend.Backend, error) {
 			if err != nil {
 				return nil, nil, err
 			}
-			// Name rules need names: the network hands out synthetic
-			// addresses so the policy sees what the guest resolved.
-			netCfg.DNS, netCfg.Egress = userspace.DNSFakeIP, policy
+			netCfg.Egress = policy
 			spec.Egress = specEgress(mf.Egress)
 			spec.Files = append(spec.Files, policy.GuestFiles()...)
 			spec.Files = append(spec.Files, guestSecretsFile(policy, spec.Egress)...)

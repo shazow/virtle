@@ -7,6 +7,32 @@ Keep entries terse. When a day includes both CLI and library changes, group
 them by type, CLI first. For compatibility-breaking usage migrations, include
 compact before/after examples.
 
+## 2026-09-12
+
+- Virtle networks answer DNS locally with synthetic A records, empty AAAA
+  records, and PTR records for known synthetic addresses. Queries requiring
+  external resolution, including TXT, CNAME, MX, NS, and SRV, are refused;
+  the egress resolves names only after approving a connection.
+- Egress address and CIDR deny entries also apply after DNS resolution, and
+  the default denied ranges include the IPv6 unspecified address. Inspected
+  HTTP requests must match the authorized host and port before admission
+  hooks or secret injection run.
+- Closing a network port ends its outgoing flows before releasing its
+  address, so a replacement guest establishes connections under its own
+  policy.
+
+### Library changes
+
+- `userspace.Config.DNS`, `DNSMode`, `DNSForward`, `DNSFakeIP`, and
+  `Network.DNS` are removed: every userspace network uses synthetic DNS.
+  Replace `userspace.Config{DNS: userspace.DNSFakeIP, Egress: policy}` with
+  `userspace.Config{Egress: policy}`. `FakeIPRange` remains configurable.
+- `egress.Request.Host` exposes the validated HTTP authority to admission
+  and injection callbacks.
+- Cloud Hypervisor's interactive console serializes writes to
+  `Backend.ConsoleOutput`, as print mode does; callers can supply an ordinary
+  `io.Writer` without adding their own synchronization.
+
 ## 2026-09-11
 
 - The Firecracker and Cloud Hypervisor backends are experimental: they stay

@@ -315,6 +315,12 @@ type NetworkInput struct {
 	MAC     string        `json:"mac,omitempty" toml:"mac" jsonschema:"Guest network interface MAC address; a virtle network allocates one when omitted."`
 	Tap     string        `json:"tap,omitempty" toml:"tap" jsonschema:"Host TAP device name, for type tap; QEMU picks and sets up the device itself when omitted."`
 	Forward []ForwardPort `json:"forward,omitempty" toml:"forward" jsonschema:"Port forwarding rules for this network."`
+	DNS     *DNSInput     `json:"dns,omitempty" toml:"dns" jsonschema:"DNS upstream for a virtle network; not supported on other network types or hotplugged networks."`
+}
+
+// DNSInput selects the upstream used by a virtle network's DNS service.
+type DNSInput struct {
+	Upstream string `json:"upstream,omitempty" toml:"upstream" jsonschema:"DNS upstream: host (the default) uses the host's configured DNS servers; an IP address with a port selects one server, such as 127.0.0.1:53 or [::1]:53."`
 }
 
 type ForwardPort struct {

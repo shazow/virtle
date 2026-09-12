@@ -26,7 +26,7 @@ func (r *recordedEvents) Record(e egress.Event) {
 	r.list = append(r.list, e)
 }
 
-// TestFakeIPNamesReachThePolicy is the fake-IP mode end to end: the guest
+// TestFakeIPNamesReachThePolicy exercises synthetic DNS end to end: the guest
 // resolves names to synthetic addresses, its flows carry the names, and a
 // policy decides by name and dials the real destination.
 func TestFakeIPNamesReachThePolicy(t *testing.T) {
@@ -40,12 +40,11 @@ func TestFakeIPNamesReachThePolicy(t *testing.T) {
 	loopback := netip.MustParseAddr("127.0.0.1")
 	rec := &recordedEvents{}
 	policy := &egress.Policy{
-		Rules:        []egress.Rule{{Hosts: []string{"allowed.test"}}},
+		Rules:        []egress.Rule{{Hosts: []string{"allowed.test", "another.test"}}},
 		DenyPrefixes: []netip.Prefix{},
-		Resolver:     hostTable{"allowed.test": loopback, "blocked.test": loopback},
 		Recorder:     rec,
 	}
-	n := newTestNetwork(t, Config{Egress: policy})
+	n := newTestNetwork(t, Config{Egress: policy, DNSUpstream: dnsUpstream(t, addressDNS)})
 	g := attachGuest(t, n, "vm1", vmnet.AttachOptions{})
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
@@ -72,10 +71,13 @@ func TestFakeIPNamesReachThePolicy(t *testing.T) {
 		}
 		return a
 	}
-	allowed, blocked := resolve("allowed.test"), resolve("blocked.test")
-	if allowed == blocked || resolve("allowed.test") != allowed {
-		t.Fatalf("names map to %s and %s; the mapping must be distinct and stable", allowed, blocked)
+	allowed, another := resolve("allowed.test"), resolve("another.test")
+	if allowed == another || resolve("allowed.test") != allowed {
+		t.Fatalf("names map to %s and %s; the mapping must be distinct and stable", allowed, another)
 	}
+	// A guest can learn a synthetic address from another guest; connection
+	// admission must still check the name independently of DNS admission.
+	blocked, _ := n.fakeIPs.addr("blocked.test")
 
 	c, err := g.dialTCP(ctx, netip.AddrPortFrom(allowed, port))
 	if err != nil {

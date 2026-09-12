@@ -314,3 +314,25 @@ func TestLoadVirtleNetworkReachesTheInternetByDefault(t *testing.T) {
 		t.Fatalf("allow entries without a reach loaded: %v", err)
 	}
 }
+
+func TestLoadVirtleNetworkWithDNSUpstream(t *testing.T) {
+	for name, input := range map[string]string{
+		"toml": "[kernel]\npath = 'kernel'\n[[networks]]\ntype = 'virtle'\n[networks.dns]\nupstream = '192.0.2.1:5353'\n",
+		"json": `{"kernel":{"path":"kernel"},"networks":[{"type":"virtle","dns":{"upstream":"[2001:db8::1]:5353"}}]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, b, err := Load(strings.NewReader(input))
+			if err != nil {
+				t.Fatal(err)
+			}
+			qb, ok := b.(*qemu.Backend)
+			if !ok {
+				t.Fatalf("backend = %T, want QEMU", b)
+			}
+			defer qb.Close()
+			if _, ok := qb.Network.(*userspace.Network); !ok {
+				t.Fatalf("network = %T, want userspace network", qb.Network)
+			}
+		})
+	}
+}

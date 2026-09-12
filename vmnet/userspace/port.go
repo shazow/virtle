@@ -10,10 +10,12 @@ import (
 	"slices"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
+	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
 
 	"github.com/shazow/virtle/vm"
 	"github.com/shazow/virtle/vmnet"
@@ -21,17 +23,20 @@ import (
 
 // port is one attached guest NIC.
 type port struct {
-	n      *Network
-	ctx    context.Context
-	cancel context.CancelFunc
-	name   string
-	egress *vm.Egress // the guest's policy data, carried on its flows
-	addr   netip.Addr
-	addr4  tcpip.Address
-	mac    net.HardwareAddr
-	link   vmnet.Link
-	out    chan []byte   // frames for the guest
-	done   chan struct{} // closed with the port
+	n        *Network
+	ctx      context.Context
+	cancel   context.CancelFunc
+	name     string
+	egress   *vm.Egress // the guest's policy data, carried on its flows
+	addr     netip.Addr
+	addr4    tcpip.Address
+	mac      net.HardwareAddr
+	link     vmnet.Link
+	out      chan []byte    // frames for the guest
+	done     chan struct{}  // closed with the port
+	attached time.Time      // compared with queued UDP receive timestamps
+	ingress  sync.Mutex     // serializes packet injection with address release
+	dnsTCP   *tcp.Forwarder // captures this attachment before asynchronous SYN handling
 
 	mu        sync.Mutex
 	closed    bool
@@ -93,6 +98,11 @@ func (p *port) close() error {
 	}
 	close(p.done)
 	p.mu.Unlock()
+	// Finish gateway packet injection and reply writes before releasing
+	// the address for another attachment.
+	p.ingress.Lock()
+	//lint:ignore SA2001 Lock acquisition is the synchronization barrier.
+	p.ingress.Unlock()
 	for _, f := range flows {
 		f.close()
 	}

@@ -18,6 +18,7 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
 	"gvisor.dev/gvisor/pkg/waiter"
 
+	"github.com/shazow/virtle/internal/dnsproxy"
 	"github.com/shazow/virtle/vm"
 	"github.com/shazow/virtle/vmnet"
 )
@@ -28,7 +29,15 @@ import (
 
 func (n *Network) installForwarders() {
 	tf := tcp.NewForwarder(n.stack, 0, maxInFlight, n.handleTCP)
-	n.stack.SetTransportProtocolHandler(tcp.ProtocolNumber, tf.HandlePacket)
+	n.stack.SetTransportProtocolHandler(tcp.ProtocolNumber, func(id stack.TransportEndpointID, pkt *stack.PacketBuffer) bool {
+		if id.LocalAddress == n.gateway4 && id.LocalPort == dnsPort {
+			if p := n.portByAddr(netipAddr(id.RemoteAddress)); p != nil {
+				return p.dnsTCP.HandlePacket(id, pkt)
+			}
+			return false
+		}
+		return tf.HandlePacket(id, pkt)
+	})
 	uf := udp.NewForwarder(n.stack, n.handleUDP)
 	n.stack.SetTransportProtocolHandler(udp.ProtocolNumber, uf.HandlePacket)
 }
@@ -94,17 +103,16 @@ func (f *forwardedFlow) finish() {
 // dialFlow requires a live owning port; an unassigned source never gets the
 // network's default policy in place of a guest's restrictions.
 func (n *Network) dialFlow(proto vm.Proto, id stack.TransportEndpointID, timeout time.Duration) (*forwardedFlow, error) {
+	// Guest DNS must use the gateway so its queries are authorized and
+	// recorded. The configured resolver is reached separately on the host.
+	if id.LocalPort == dnsPort {
+		return nil, vmnet.ErrDenied
+	}
 	p := n.portByAddr(netipAddr(id.RemoteAddress))
 	if p == nil {
 		return nil, vmnet.ErrDenied
 	}
-	f := &forwardedFlow{p: p, id: id, published: make(chan struct{}), flow: vmnet.Flow{
-		Proto:  proto,
-		Src:    netip.AddrPortFrom(p.addr, id.RemotePort),
-		Dst:    netip.AddrPortFrom(netipAddr(id.LocalAddress), id.LocalPort),
-		Guest:  p.name,
-		Egress: p.egress,
-	}}
+	f := &forwardedFlow{p: p, id: id, published: make(chan struct{}), flow: p.flow(proto, id)}
 	if n.fakeIPs.contains(f.flow.Dst.Addr()) {
 		name, ok := n.fakeIPs.name(f.flow.Dst.Addr())
 		if !ok {
@@ -121,7 +129,8 @@ func (n *Network) dialFlow(proto vm.Proto, id stack.TransportEndpointID, timeout
 	p.mu.Unlock()
 	ctx, cancel := context.WithTimeout(p.ctx, timeout)
 	defer cancel()
-	upstream, err := n.egress.DialFlow(ctx, f.flow)
+	resolver := n.resolver.WithLogger(n.logger.With("guest", p.name, "src", f.flow.Src))
+	upstream, err := n.egress.DialFlow(dnsproxy.WithResolver(ctx, resolver), f.flow)
 	f.mu.Lock()
 	if err == nil && f.closed {
 		err = net.ErrClosed
@@ -138,6 +147,16 @@ func (n *Network) dialFlow(proto vm.Proto, id stack.TransportEndpointID, timeout
 		return nil, err
 	}
 	return f, nil
+}
+
+func (p *port) flow(proto vm.Proto, id stack.TransportEndpointID) vmnet.Flow {
+	return vmnet.Flow{
+		Proto:  proto,
+		Src:    netip.AddrPortFrom(p.addr, id.RemotePort),
+		Dst:    netip.AddrPortFrom(netipAddr(id.LocalAddress), id.LocalPort),
+		Guest:  p.name,
+		Egress: p.egress,
+	}
 }
 
 // forwardable reports whether a flow is one an Egress should see: unicast
@@ -167,11 +186,23 @@ func (n *Network) handleTCP(r *tcp.ForwarderRequest) {
 		return
 	}
 	defer f.finish()
+	c, err := f.acceptTCP(r)
+	if err != nil {
+		n.logger.Debug("flow endpoint failed", "guest", f.flow.Guest, "dst", f.flow.Dst, "err", err)
+		return
+	}
+	n.logger.Debug("flow opened", "guest", f.flow.Guest, "proto", "tcp", "dst", f.flow.Dst)
+	splice(c, f.upstream)
+}
+
+// acceptTCP publishes an endpoint while remaining cancellable by port Close.
+// DNS and external flows use the same handshake lifetime and teardown.
+func (f *forwardedFlow) acceptTCP(r *tcp.ForwarderRequest) (net.Conn, error) {
 	f.mu.Lock()
 	if f.closed {
 		f.mu.Unlock()
-		r.Complete(true)
-		return
+		r.Complete(false)
+		return nil, net.ErrClosed
 	}
 	f.creating = true
 	f.mu.Unlock()
@@ -180,19 +211,17 @@ func (n *Network) handleTCP(r *tcp.ForwarderRequest) {
 	f.markPublished() // Also wake Close when creation fails before SYN-ACK.
 	r.Complete(false)
 	if terr != nil {
-		n.logger.Debug("flow endpoint failed", "guest", f.flow.Guest, "dst", f.flow.Dst, "err", terr.String())
-		return
+		return nil, tcpipError("TCP endpoint", terr)
 	}
 	f.mu.Lock()
 	if f.closed {
 		f.mu.Unlock()
 		ep.Abort()
-		return
+		return nil, net.ErrClosed
 	}
 	f.endpoint = ep
 	f.mu.Unlock()
-	n.logger.Debug("flow opened", "guest", f.flow.Guest, "proto", "tcp", "dst", f.flow.Dst)
-	splice(gonet.NewTCPConn(&wq, ep), f.upstream)
+	return gonet.NewTCPConn(&wq, ep), nil
 }
 
 // handleUDP runs on the packet path. Returning false leaves the datagram

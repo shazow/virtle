@@ -19,7 +19,7 @@ type Process struct {
 	done             chan struct{}
 	ownsProcessGroup bool
 
-	shutdown    func() error
+	shutdown    func(context.Context) error
 	gracePeriod time.Duration
 	waitErr     error
 }
@@ -126,9 +126,10 @@ func (p *Process) PollExit() (bool, error) {
 }
 
 // SetShutdown installs a graceful shutdown callback tried before SIGTERM.
-// It must be called before Stop may run concurrently; the field is not
-// synchronized.
-func (p *Process) SetShutdown(shutdown func() error) {
+// The callback receives Stop's context and must return once it ends: Stop
+// then abandons the remaining graceful rungs and kills. It must be called
+// before Stop may run concurrently; the field is not synchronized.
+func (p *Process) SetShutdown(shutdown func(ctx context.Context) error) {
 	if p == nil {
 		return
 	}
@@ -171,7 +172,7 @@ func (p *Process) Stop(ctx context.Context) error {
 	gracePeriod := p.getGracePeriod()
 	var shutdownErr error
 	if p.shutdown != nil && ctx.Err() == nil {
-		if err := p.shutdown(); err != nil {
+		if err := p.shutdown(ctx); err != nil {
 			shutdownErr = fmt.Errorf("shutdown %s: %w", p.Name(), err)
 		} else if p.waitGrace(ctx, gracePeriod) {
 			return nil

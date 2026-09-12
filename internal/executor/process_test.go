@@ -48,7 +48,7 @@ func TestProcessStopEndedContextSkipsGraceAndKills(t *testing.T) {
 	// A generous grace period that would stall the test if Stop waited it out.
 	process.SetGracePeriod(time.Hour)
 	shutdownCalled := false
-	process.SetShutdown(func() error {
+	process.SetShutdown(func(context.Context) error {
 		shutdownCalled = true
 		return nil
 	})
@@ -90,7 +90,7 @@ func TestProcessStopUsesShutdownCallback(t *testing.T) {
 	handle := &executortest.Process{OverrideName: "worker"}
 	process := executor.Wrap(handle)
 	called := false
-	process.SetShutdown(func() error {
+	process.SetShutdown(func(context.Context) error {
 		called = true
 		handle.Complete(nil)
 		return nil
@@ -123,7 +123,7 @@ func TestProcessStopSignalsThenKills(t *testing.T) {
 func TestProcessStopReportsShutdownAndSignalErrors(t *testing.T) {
 	handle := &executortest.Process{OverrideName: "worker", SignalErr: errors.New("signal failed")}
 	process := executor.Wrap(handle)
-	process.SetShutdown(func() error {
+	process.SetShutdown(func(context.Context) error {
 		return errors.New("shutdown failed")
 	})
 

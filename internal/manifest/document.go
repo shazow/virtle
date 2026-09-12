@@ -311,9 +311,9 @@ const (
 
 type NetworkInput struct {
 	ID      string        `json:"id,omitempty" toml:"id" jsonschema:"Network device identifier."`
-	Type    string        `json:"type,omitempty" toml:"type" jsonschema:"Network type: user (the VMM's built-in user networking, the default), virtle (a network virtle runs in userspace), or tap (a host TAP device)."`
+	Type    string        `json:"type,omitempty" toml:"type" jsonschema:"Network type: user (the VMM's built-in user networking, the default), virtle (a network virtle runs in userspace), or tap (a host TAP device). QEMU also takes any of its own -netdev backends verbatim."`
 	MAC     string        `json:"mac,omitempty" toml:"mac" jsonschema:"Guest network interface MAC address; a virtle network allocates one when omitted."`
-	Tap     string        `json:"tap,omitempty" toml:"tap" jsonschema:"Host TAP device name, for type tap."`
+	Tap     string        `json:"tap,omitempty" toml:"tap" jsonschema:"Host TAP device name, for type tap; QEMU picks and sets up the device itself when omitted."`
 	Forward []ForwardPort `json:"forward,omitempty" toml:"forward" jsonschema:"Port forwarding rules for this network."`
 }
 

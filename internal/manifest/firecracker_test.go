@@ -180,8 +180,13 @@ path = "kernel"
 initrd_path = "initrd"
 [cloud-hypervisor]
 binary = "cloud-hypervisor"`, "", "requires backend"},
-		// The VM name is embedded in the state lock path of both backends.
+		// The VM name is embedded in the state lock path of both backends: a
+		// separator nests the lock, a name that leaves the directory is refused.
 		{"qemu host_name with separator", `host_name = "a/b"
+[kernel]
+path = "kernel"
+initrd_path = "initrd"`, BackendQEMU, ""},
+		{"qemu host_name leaving the state directory", `host_name = "../b"
 [kernel]
 path = "kernel"
 initrd_path = "initrd"`, "", "host_name"},

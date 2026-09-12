@@ -25,12 +25,14 @@ func (d Document) Manifest() (*Manifest, error) {
 	return d.ManifestWithOptions(ResolveOptions{})
 }
 
-// validateHostName rejects VM names that cannot serve as a file name: the
-// name is embedded in the state lock path (<state_dir>/<host_name>.lock)
-// that both backends share.
+// validateHostName rejects VM names whose state lock
+// (<state_dir>/<host_name>.lock, shared by every backend) would land outside
+// the state directory. A separator nests the lock instead; both backends
+// create the directories on the way, so such names keep working.
 func validateHostName(name string) error {
-	if name == "." || name == ".." || strings.ContainsRune(name, filepath.Separator) {
-		return fmt.Errorf("manifest.host_name %q must be a plain name without path separators", name)
+	clean := filepath.Clean(name)
+	if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("manifest.host_name %q must stay under the state directory", name)
 	}
 	return nil
 }
@@ -642,12 +644,13 @@ func (m *Manifest) resolveVirtioFSRuns(mounts []VirtioFSMountInput, options Reso
 				"--shared-dir={{.MountSource}}",
 				"--tag={{.MountTag}}",
 			}
-		}
-		if mount.ReadOnly && !slices.Contains(args, virtioFSReadOnlyFlag) {
-			// The daemon is what enforces read_only, so the flag rides along
-			// whatever the argument list; a wrapper with its own notion of
-			// read-only ignores it.
-			args = append(args, virtioFSReadOnlyFlag)
+			if mount.ReadOnly {
+				args = append(args, virtioFSReadOnlyFlag)
+			}
+		} else if mount.ReadOnly && !slices.Contains(args, virtioFSReadOnlyFlag) && options.Logger != nil {
+			// Arguments the manifest spells are used as written: virtle
+			// cannot know what the daemon behind them accepts.
+			options.Logger.Info("read-only virtiofs share runs with the manifest's virtiofs.args; read_only is those arguments' to enforce", "tag", mount.Tag)
 		}
 		runs = append(runs, Run{
 			Exec: append([]string{m.resolveOptionalBin(mount.VirtioFS.Bin, defaultVirtioFSBin)}, args...),
@@ -763,9 +766,6 @@ func (m *Manifest) resolveVirtioFSHotplug(mount VirtioFSMountInput) (HotplugDevi
 			return HotplugDevice{}, err
 		}
 		args = renderedArgs
-		if mount.ReadOnly && !slices.Contains(args, virtioFSReadOnlyFlag) {
-			args = append(args, virtioFSReadOnlyFlag)
-		}
 	}
 	return HotplugDevice{
 		Kind: HotplugKindVirtioFS,
@@ -785,8 +785,9 @@ func (m *Manifest) resolveVirtioFSHotplug(mount VirtioFSMountInput) (HotplugDevi
 const defaultVirtioFSBin = "virtiofsd"
 
 // virtioFSReadOnlyFlag makes virtiofsd refuse every guest write. It is how a
-// read-only share is enforced, so it reaches every daemon virtle starts; a
-// daemon started by someone else enforces read_only on its own terms.
+// read-only share is enforced, so it joins virtle's default arguments for a
+// daemon it starts; arguments the manifest spells (virtiofs.args) and a
+// daemon started by someone else enforce read_only on their own terms.
 const virtioFSReadOnlyFlag = "--readonly"
 
 // defaultVirtioFSDaemon fills in a virtiofs mount that names no socket, the
@@ -939,16 +940,29 @@ func resolveNetwork(dir string, networks []NetworkInput, fwdTunnelExec []string,
 			}
 			device.Forward = forwards
 		case NetworkTypeTAP:
-			if err := validateTapName(network.Tap); err != nil {
-				return nil, fmt.Errorf("manifest.networks[%d].tap %w", i, err)
-			}
 			if len(network.Forward) > 0 {
 				return nil, fmt.Errorf("manifest.networks[%d].forward is not supported on a tap network; the host kernel routes it", i)
 			}
 			device.Backend = "tap"
-			device.NetdevOptions = []string{"ifname=" + network.Tap, "script=no", "downscript=no"}
+			// Without a name the device is QEMU's to pick and set up with
+			// its own ifup/ifdown scripts, as it was before virtle read
+			// the type.
+			if network.Tap != "" {
+				if err := validateTapName(network.Tap); err != nil {
+					return nil, fmt.Errorf("manifest.networks[%d].tap %w", i, err)
+				}
+				device.NetdevOptions = []string{"ifname=" + network.Tap, "script=no", "downscript=no"}
+			}
 		default:
-			return nil, fmt.Errorf("manifest.networks[%d].type must be one of user, virtle, or tap", i)
+			// Any other type reaches QEMU verbatim as the -netdev backend,
+			// forwards and all, as every type did before virtle knew the
+			// three above; QEMU decides whether it exists.
+			device.Backend = netType
+			forwardOptions, err := resolveForwardPorts(dir, network.Forward, fwdTunnelExec, i)
+			if err != nil {
+				return nil, err
+			}
+			device.NetdevOptions = forwardOptions
 		}
 		devices = append(devices, device)
 	}

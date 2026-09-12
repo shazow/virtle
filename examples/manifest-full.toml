@@ -218,7 +218,7 @@ type = "virtiofs"
 # entry only carries common mount fields plus its backend-specific table.
 tag = "workspace"
 source = "."
-read_only = false  # Default: guest can write to the share
+read_only = false  # Default: guest can write; true adds --readonly to virtle's default virtiofsd arguments
 
 # QEMU talks to virtiofsd through this socket. Keeping the socket named in the
 # manifest lets virtle wait for readiness and place it under state_dir.
@@ -306,7 +306,7 @@ exec = ["xdg-dbus-proxy", "{{.Env.DBUS_SESSION_BUS_ADDRESS}}", "{{.SocketDir}}/d
 # host's business. The id and MAC are stable handles for QEMU and the guest; a
 # virtle network allocates the MAC when it is omitted.
 id = "microvm1"
-type = "user"  # Options: user, virtle, tap (default: user)
+type = "user"  # Options: user, virtle, tap (default: user); QEMU also takes its own -netdev backends verbatim
 mac = "02:02:00:00:00:01"
 
 # Port forwards are host/guest integration points. They are explicit because

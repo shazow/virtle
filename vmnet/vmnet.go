@@ -65,8 +65,9 @@ type AttachOptions struct {
 // Port is one attached guest NIC. Its address and MAC are fixed at Attach
 // (a static DHCP lease keyed by MAC), so a consumer can dial the guest
 // before it has booted. Expose rejects a duplicate forward and returns
-// net.ErrClosed after Close; Close is idempotent and releases the address,
-// the forwards, and the link.
+// net.ErrClosed after Close. Close cancels pending guest dials and closes
+// outgoing flows before releasing the address, forwards, and link.
+// It is idempotent; concurrent calls wait for the same cleanup.
 type Port interface {
 	Addr() netip.Addr
 	MAC() net.HardwareAddr

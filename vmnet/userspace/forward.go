@@ -9,8 +9,10 @@ import (
 	"sync"
 	"time"
 
+	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
+	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
@@ -35,40 +37,107 @@ func (n *Network) installForwarders() {
 // handed out: it stands for no name, so nothing can be dialed for it.
 var errUnknownFakeIP = errors.New("userspace: no name resolved to the address")
 
-// flowFor describes a forwarder request: the guest is found by its source
-// address, which the switch has already checked belongs to it, and in
-// DNSFakeIP mode the destination is translated back to the name the guest
-// resolved.
-func (n *Network) flowFor(proto vm.Proto, id stack.TransportEndpointID) (vmnet.Flow, error) {
-	f := vmnet.Flow{
-		Proto: proto,
-		Src:   netip.AddrPortFrom(netipAddr(id.RemoteAddress), id.RemotePort),
-		Dst:   netip.AddrPortFrom(netipAddr(id.LocalAddress), id.LocalPort),
-	}
-	if p := n.portByAddr(f.Src.Addr()); p != nil {
-		f.Guest = p.name
-		f.Egress = p.egress
-	}
-	if n.fakeIPs != nil && n.fakeIPs.contains(f.Dst.Addr()) {
-		name, ok := n.fakeIPs.name(f.Dst.Addr())
-		if !ok {
-			return f, errUnknownFakeIP
-		}
-		f.Host = name
-	}
-	return f, nil
+// forwardedFlow owns both ends of a guest-initiated flow. It is registered
+// before dialing, so detaching the port cancels pending dials and closes
+// existing flows before the port's address can be assigned again.
+type forwardedFlow struct {
+	p    *port
+	id   stack.TransportEndpointID
+	flow vmnet.Flow
+
+	mu        sync.Mutex
+	closed    bool
+	upstream  net.Conn
+	endpoint  tcpip.Endpoint
+	creating  bool
+	published chan struct{}
+	publish   sync.Once
+	closeOnce sync.Once
 }
 
-// dialFlow dials a forwarder request through the Egress, within timeout.
-func (n *Network) dialFlow(proto vm.Proto, id stack.TransportEndpointID, timeout time.Duration) (vmnet.Flow, net.Conn, error) {
-	f, err := n.flowFor(proto, id)
-	if err != nil {
-		return f, nil, err
+func (f *forwardedFlow) close() { f.closeOnce.Do(f.abort) }
+
+func (f *forwardedFlow) abort() {
+	f.mu.Lock()
+	f.closed = true
+	upstream, creating := f.upstream, f.creating
+	f.mu.Unlock()
+	if upstream != nil {
+		_ = upstream.Close()
 	}
-	ctx, cancel := context.WithTimeout(n.ctx, timeout)
+	if creating {
+		// Wait only for endpoint publication, never for the guest's ACK.
+		// The link signals before admitting SYN-ACK to its output queue.
+		<-f.published
+	}
+	f.mu.Lock()
+	ep := f.endpoint
+	f.mu.Unlock()
+	if ep != nil {
+		ep.Abort()
+	} else if creating {
+		if ep := f.p.n.stack.FindTransportEndpoint(ipv4.ProtocolNumber, tcp.ProtocolNumber, f.id, nicID); ep != nil {
+			ep.Abort()
+		}
+	}
+}
+
+func (f *forwardedFlow) markPublished() { f.publish.Do(func() { close(f.published) }) }
+
+func (f *forwardedFlow) finish() {
+	f.close()
+	f.p.mu.Lock()
+	delete(f.p.flows, f)
+	f.p.mu.Unlock()
+}
+
+// dialFlow requires a live owning port; an unassigned source never gets the
+// network's default policy in place of a guest's restrictions.
+func (n *Network) dialFlow(proto vm.Proto, id stack.TransportEndpointID, timeout time.Duration) (*forwardedFlow, error) {
+	p := n.portByAddr(netipAddr(id.RemoteAddress))
+	if p == nil {
+		return nil, vmnet.ErrDenied
+	}
+	f := &forwardedFlow{p: p, id: id, published: make(chan struct{}), flow: vmnet.Flow{
+		Proto:  proto,
+		Src:    netip.AddrPortFrom(p.addr, id.RemotePort),
+		Dst:    netip.AddrPortFrom(netipAddr(id.LocalAddress), id.LocalPort),
+		Guest:  p.name,
+		Egress: p.egress,
+	}}
+	if n.fakeIPs.contains(f.flow.Dst.Addr()) {
+		name, ok := n.fakeIPs.name(f.flow.Dst.Addr())
+		if !ok {
+			return nil, errUnknownFakeIP
+		}
+		f.flow.Host = name
+	}
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return nil, net.ErrClosed
+	}
+	p.flows[f] = struct{}{}
+	p.mu.Unlock()
+	ctx, cancel := context.WithTimeout(p.ctx, timeout)
 	defer cancel()
-	upstream, err := n.egress.DialFlow(ctx, f)
-	return f, upstream, err
+	upstream, err := n.egress.DialFlow(ctx, f.flow)
+	f.mu.Lock()
+	if err == nil && f.closed {
+		err = net.ErrClosed
+	}
+	if err == nil {
+		f.upstream = upstream
+	}
+	f.mu.Unlock()
+	if err != nil {
+		if upstream != nil {
+			_ = upstream.Close()
+		}
+		f.finish()
+		return nil, err
+	}
+	return f, nil
 }
 
 // forwardable reports whether a flow is one an Egress should see: unicast
@@ -91,22 +160,39 @@ func (n *Network) handleTCP(r *tcp.ForwarderRequest) {
 		r.Complete(true)
 		return
 	}
-	flow, upstream, err := n.dialFlow(vm.TCP, r.ID(), dialTimeout)
+	f, err := n.dialFlow(vm.TCP, r.ID(), dialTimeout)
 	if err != nil {
-		n.logger.Debug("flow refused", "guest", flow.Guest, "proto", "tcp", "dst", flow.Dst, "err", err)
+		n.logger.Debug("flow refused", "proto", "tcp", "err", err)
 		r.Complete(true)
 		return
 	}
-	var wq waiter.Queue
-	ep, terr := r.CreateEndpoint(&wq)
-	r.Complete(false)
-	if terr != nil {
-		n.logger.Debug("flow endpoint failed", "guest", flow.Guest, "dst", flow.Dst, "err", terr.String())
-		_ = upstream.Close()
+	defer f.finish()
+	f.mu.Lock()
+	if f.closed {
+		f.mu.Unlock()
+		r.Complete(true)
 		return
 	}
-	n.logger.Debug("flow opened", "guest", flow.Guest, "proto", "tcp", "dst", flow.Dst)
-	splice(gonet.NewTCPConn(&wq, ep), upstream)
+	f.creating = true
+	f.mu.Unlock()
+	var wq waiter.Queue
+	ep, terr := r.CreateEndpoint(&wq)
+	f.markPublished() // Also wake Close when creation fails before SYN-ACK.
+	r.Complete(false)
+	if terr != nil {
+		n.logger.Debug("flow endpoint failed", "guest", f.flow.Guest, "dst", f.flow.Dst, "err", terr.String())
+		return
+	}
+	f.mu.Lock()
+	if f.closed {
+		f.mu.Unlock()
+		ep.Abort()
+		return
+	}
+	f.endpoint = ep
+	f.mu.Unlock()
+	n.logger.Debug("flow opened", "guest", f.flow.Guest, "proto", "tcp", "dst", f.flow.Dst)
+	splice(gonet.NewTCPConn(&wq, ep), f.upstream)
 }
 
 // handleUDP runs on the packet path. Returning false leaves the datagram
@@ -115,20 +201,35 @@ func (n *Network) handleUDP(r *udp.ForwarderRequest) bool {
 	if !n.forwardable(r.ID()) {
 		return false
 	}
-	flow, upstream, err := n.dialFlow(vm.UDP, r.ID(), udpDialTimeout)
+	f, err := n.dialFlow(vm.UDP, r.ID(), udpDialTimeout)
 	if err != nil {
-		n.logger.Debug("flow refused", "guest", flow.Guest, "proto", "udp", "dst", flow.Dst, "err", err)
+		n.logger.Debug("flow refused", "proto", "udp", "err", err)
+		return false
+	}
+	// UDP endpoint creation does not wait on the guest. Publish it while
+	// holding the flow lock so Close cannot miss a newly registered tuple.
+	f.mu.Lock()
+	if f.closed {
+		f.mu.Unlock()
+		f.finish()
 		return false
 	}
 	var wq waiter.Queue
 	ep, terr := r.CreateEndpoint(&wq)
+	if terr == nil {
+		f.endpoint = ep
+	}
+	f.mu.Unlock()
 	if terr != nil {
-		n.logger.Debug("flow endpoint failed", "guest", flow.Guest, "dst", flow.Dst, "err", terr.String())
-		_ = upstream.Close()
+		n.logger.Debug("flow endpoint failed", "guest", f.flow.Guest, "dst", f.flow.Dst, "err", terr.String())
+		f.finish()
 		return true
 	}
-	n.logger.Debug("flow opened", "guest", flow.Guest, "proto", "udp", "dst", flow.Dst)
-	go relayDatagrams(gonet.NewUDPConn(&wq, ep), upstream)
+	n.logger.Debug("flow opened", "guest", f.flow.Guest, "proto", "udp", "dst", f.flow.Dst)
+	go func() {
+		defer f.finish()
+		relayDatagrams(gonet.NewUDPConn(&wq, ep), f.upstream)
+	}()
 	return true
 }
 

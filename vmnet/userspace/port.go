@@ -22,6 +22,8 @@ import (
 // port is one attached guest NIC.
 type port struct {
 	n      *Network
+	ctx    context.Context
+	cancel context.CancelFunc
 	name   string
 	egress *vm.Egress // the guest's policy data, carried on its flows
 	addr   netip.Addr
@@ -34,6 +36,9 @@ type port struct {
 	mu        sync.Mutex
 	closed    bool
 	exposures map[forwardKey]*exposure
+	flows     map[*forwardedFlow]struct{}
+	closeOnce sync.Once
+	closeErr  error
 
 	dropped     atomic.Uint64 // frames the guest did not read in time
 	rejected    atomic.Uint64 // frames with a source that is not the guest's
@@ -70,18 +75,27 @@ func (p *port) isClosed() bool {
 
 // Close implements vmnet.Port.
 func (p *port) Close() error {
+	p.closeOnce.Do(func() { p.closeErr = p.close() })
+	return p.closeErr
+}
+
+func (p *port) close() error {
 	p.mu.Lock()
-	if p.closed {
-		p.mu.Unlock()
-		return nil
-	}
 	p.closed = true
+	p.cancel()
+	flows := make([]*forwardedFlow, 0, len(p.flows))
+	for f := range p.flows {
+		flows = append(flows, f)
+	}
 	exposures := make([]*exposure, 0, len(p.exposures))
 	for _, e := range p.exposures {
 		exposures = append(exposures, e)
 	}
 	close(p.done)
 	p.mu.Unlock()
+	for _, f := range flows {
+		f.close()
+	}
 	for _, e := range exposures {
 		_ = e.Close()
 	}

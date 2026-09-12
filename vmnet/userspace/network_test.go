@@ -355,69 +355,68 @@ func TestAddressesRunOut(t *testing.T) {
 	}
 }
 
-// fakeResolver answers from a table; anything else is a not-found error.
-type fakeResolver struct {
-	*net.Resolver
-	a map[string]netip.Addr
-}
-
-func (r fakeResolver) LookupNetIP(_ context.Context, _, host string) ([]netip.Addr, error) {
-	if a, ok := r.a[host]; ok {
-		return []netip.Addr{a}, nil
-	}
-	return nil, &net.DNSError{Err: "no such host", Name: host, IsNotFound: true}
-}
-
-func TestDNSForwardsToTheHostResolver(t *testing.T) {
-	n := newTestNetwork(t, Config{})
-	n.dns.resolver = fakeResolver{a: map[string]netip.Addr{"example.test.": netip.MustParseAddr("192.0.2.7")}}
-	g := attachGuest(t, n, "vm1", vmnet.AttachOptions{})
+func TestDNSAnswersStayOnTheGateway(t *testing.T) {
+	n := newTestNetwork(t, Config{Egress: vmnet.DenyAll{}})
+	g := attachGuest(t, n, "vm1", vmnet.AttachOptions{Egress: &vm.Egress{}})
 	resolver := netip.AddrPortFrom(n.Gateway(), dnsPort)
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
 
-	ask := func(c net.Conn, name string, qtype uint16) *dns.Msg {
-		t.Helper()
-		m := new(dns.Msg)
-		m.SetQuestion(name, qtype)
-		m.SetEdns0(4096, false)
-		r, _, err := (&dns.Client{Timeout: testTimeout}).ExchangeWithConnContext(ctx, m, &dns.Conn{Conn: c})
-		if err != nil {
-			t.Fatalf("query %s %s: %v", name, dns.TypeToString[qtype], err)
-		}
-		return r
-	}
-	u, err := g.dialUDP(resolver)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer u.Close()
-	r := ask(u, "example.test.", dns.TypeA)
-	if r.Rcode != dns.RcodeSuccess || len(r.Answer) != 1 {
-		t.Fatalf("A answer = %v", r)
-	}
-	if a, ok := r.Answer[0].(*dns.A); !ok || a.A.String() != "192.0.2.7" {
-		t.Fatalf("A record = %v", r.Answer[0])
-	}
-	if r := ask(u, "example.test.", dns.TypeAAAA); r.Rcode != dns.RcodeSuccess || len(r.Answer) != 0 {
-		t.Fatalf("AAAA answer = %v, want an empty success", r)
-	}
-	if r := ask(u, "nope.test.", dns.TypeA); r.Rcode != dns.RcodeNameError {
-		t.Fatalf("unknown name rcode = %s, want NXDOMAIN", dns.RcodeToString[r.Rcode])
-	}
-	if r := ask(u, "7.2.0.192.in-addr.arpa.", dns.TypePTR); r.Rcode == dns.RcodeNotImplemented {
-		t.Fatalf("PTR is not served")
-	}
-	if r := ask(u, "2.127.168.192.in-addr.arpa.", dns.TypePTR); r.Rcode != dns.RcodeNameError {
-		t.Fatalf("PTR for a guest address = %s, want NXDOMAIN", dns.RcodeToString[r.Rcode])
-	}
-	tc, err := g.dialTCP(ctx, resolver)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tc.Close()
-	if r := ask(tc, "example.test.", dns.TypeA); len(r.Answer) != 1 {
-		t.Fatalf("A over TCP = %v", r)
+	for _, network := range []string{"udp", "tcp"} {
+		t.Run(network, func(t *testing.T) {
+			var c net.Conn
+			var err error
+			if network == "udp" {
+				c, err = g.dialUDP(resolver)
+			} else {
+				c, err = g.dialTCP(ctx, resolver)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer c.Close()
+			ask := func(name string, qtype uint16) *dns.Msg {
+				t.Helper()
+				m := new(dns.Msg)
+				m.SetQuestion(name, qtype)
+				m.SetEdns0(4096, false)
+				r, _, err := (&dns.Client{Timeout: testTimeout}).ExchangeWithConnContext(ctx, m, &dns.Conn{Conn: c})
+				if err != nil {
+					t.Fatalf("query %s %s: %v", name, dns.TypeToString[qtype], err)
+				}
+				return r
+			}
+			r := ask("example.test.", dns.TypeA)
+			if r.Rcode != dns.RcodeSuccess || len(r.Answer) != 1 {
+				t.Fatalf("A answer = %v", r)
+			}
+			a, ok := r.Answer[0].(*dns.A)
+			if !ok {
+				t.Fatalf("A record = %v", r.Answer[0])
+			}
+			addr, ok := netip.AddrFromSlice(a.A)
+			if !ok || !n.fakeIPs.contains(addr.Unmap()) {
+				t.Fatalf("A address = %v, want a synthetic address", a.A)
+			}
+			reverse, err := dns.ReverseAddr(a.A.String())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if r := ask(reverse, dns.TypePTR); len(r.Answer) != 1 || r.Answer[0].(*dns.PTR).Ptr != "example.test." {
+				t.Fatalf("synthetic PTR = %v", r)
+			}
+			if r := ask("example.test.", dns.TypeAAAA); r.Rcode != dns.RcodeSuccess || len(r.Answer) != 0 {
+				t.Fatalf("AAAA answer = %v, want empty success", r)
+			}
+			for _, qtype := range []uint16{dns.TypeTXT, dns.TypeCNAME, dns.TypeMX, dns.TypeNS, dns.TypeSRV} {
+				if r := ask("example.test.", qtype); r.Rcode != dns.RcodeRefused {
+					t.Errorf("%s = %v, want REFUSED", dns.TypeToString[qtype], r)
+				}
+			}
+			if r := ask("7.2.0.192.in-addr.arpa.", dns.TypePTR); r.Rcode != dns.RcodeRefused {
+				t.Errorf("external PTR = %v, want REFUSED", r)
+			}
+		})
 	}
 }
 
@@ -449,7 +448,6 @@ func TestConfigValidation(t *testing.T) {
 		"gateway is network":   {Gateway: netip.MustParseAddr("192.168.127.0")},
 		"gateway is broadcast": {Gateway: netip.MustParseAddr("192.168.127.255")},
 		"mtu too small":        {MTU: 100},
-		"unknown dns mode":     {DNS: "magic"},
 	} {
 		if n, err := New(cfg); err == nil {
 			n.Close()

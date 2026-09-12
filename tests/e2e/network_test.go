@@ -223,7 +223,7 @@ func TestEgressPolicy(t *testing.T) {
 		Resolver:     hostTable{"allowed.test": loopback, "blocked.test": loopback},
 		Recorder:     events,
 	}
-	network, err := userspace.New(userspace.Config{DNS: userspace.DNSFakeIP, Egress: policy})
+	network, err := userspace.New(userspace.Config{Egress: policy})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -321,7 +321,7 @@ func TestEgressInjection(t *testing.T) {
 	if err := policy.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	network, err := userspace.New(userspace.Config{DNS: userspace.DNSFakeIP, Egress: policy})
+	network, err := userspace.New(userspace.Config{Egress: policy})
 	if err != nil {
 		t.Fatal(err)
 	}

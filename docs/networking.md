@@ -25,7 +25,7 @@ host through the network's **egress**. Nothing touches the host's network
 configuration and no privilege is needed.
 
 ```go
-network, err := userspace.New(userspace.Config{}) // 192.168.127.0/24, DNS forwarded to the host resolver
+network, err := userspace.New(userspace.Config{}) // 192.168.127.0/24, local synthetic DNS
 defer network.Close()
 
 b := &qemu.Backend{Network: network}
@@ -49,6 +49,8 @@ conn, err := network.DialContext(ctx, "tcp", status.Networks[0].Addr+":22") // n
   reach without leaving the network.
 - A suspended machine keeps its address and MAC and re-attaches with them on
   resume, so the lease its kernel holds stays valid.
+- Closing a port ends its outgoing connections before releasing the address;
+  a replacement guest establishes new flows under its own policy.
 - The segment carries IPv4 only. The gateway answers ping; nothing forwards
   ICMP to the outside.
 
@@ -91,24 +93,30 @@ resolves to as well as on addresses dialed directly. A rule is an explicit
 decision and is not held to that, so a rule can still name a host on the
 LAN under `ReachInternet`.
 
-Name rules need names. The network's fake-IP DNS mode
-(`userspace.DNSFakeIP`) answers every query with a synthetic address it
-remembers, the flow to that address carries the name the guest resolved, and
-the egress resolves it when it dials. The manifest loader selects that mode
-for every virtle network.
+The gateway answers A queries locally with synthetic addresses. A flow to
+one of those addresses carries the requested name, and the egress resolves
+it only after approving the flow. AAAA answers are empty because the guest
+segment carries IPv4; PTR queries can return a known synthetic address's
+name. Queries requiring external resolution, including TXT, CNAME, MX, NS,
+and SRV, are refused. DNS therefore cannot send data outside the network
+before egress approves a connection. This behavior applies to every
+userspace network; there is no DNS mode to select.
 
 ```go
 policy := &egress.Policy{
 	Rules:  []egress.Rule{{Hosts: []string{"*.github.com"}, Ports: []int{443}}},
 	Logger: logger,
 }
-network, err := userspace.New(userspace.Config{DNS: userspace.DNSFakeIP, Egress: policy})
+network, err := userspace.New(userspace.Config{Egress: policy})
 ```
 
 A guest's own `vm.Spec.Egress` only narrows the network's policy: its `Allow`
 list is intersected with the rules, its `Deny` list wins, and only the
 `Secrets` it names are issued to it. One network can therefore serve several
 sandboxes with different rules.
+
+Address and CIDR deny entries also apply to the addresses an approved name
+resolves to. A DNS name cannot bypass a denied destination address.
 
 ### Inspection, injections, and secrets
 
@@ -119,6 +127,11 @@ status. The guest must trust the CA certificate (`Policy.CAPEM`,
 `Policy.GuestFiles`). Only TCP is inspected: a UDP flow to a host an
 inspecting rule matches (QUIC, say) is refused, so the guest falls back to
 what the policy can see.
+
+An inspected request's HTTP authority must match the flow's authorized host
+and destination port. A mismatch is refused before admission hooks or secret
+injection run, so a guest cannot route a credential to another virtual host
+sharing the same upstream server.
 
 Inspected requests can be decided on and rewritten as they pass. An
 `Injection` is a token the guest writes and a function that computes its

@@ -249,9 +249,8 @@ hosts = ["api.github.com"]
 	}
 	qb := b.(*qemu.Backend)
 	defer qb.Close()
-	network, ok := qb.Network.(*userspace.Network)
-	if !ok || network.DNS() != userspace.DNSFakeIP {
-		t.Fatalf("network = %T; a policy needs the fake-IP DNS mode", qb.Network)
+	if _, ok := qb.Network.(*userspace.Network); !ok {
+		t.Fatalf("network = %T; want the userspace network", qb.Network)
 	}
 	if spec.Egress == nil || len(spec.Egress.Allow) != 1 || spec.Egress.Allow[0].Host != "api.github.com" || len(spec.Egress.Deny) != 1 || len(spec.Egress.Secrets) != 1 || spec.Egress.Secrets[0] != "GITHUB_TOKEN" {
 		t.Fatalf("Spec.Egress = %+v", spec.Egress)
@@ -290,11 +289,8 @@ func TestLoadVirtleNetworkReachesTheInternetByDefault(t *testing.T) {
 	}
 	qb := b.(*qemu.Backend)
 	defer qb.Close()
-	// The policy is there (the network resolves names for it), the guest
+	// The network carries the policy, the guest
 	// has nothing of its own to add to it, and gets no files.
-	if network := qb.Network.(*userspace.Network); network.DNS() != userspace.DNSFakeIP {
-		t.Fatalf("DNS mode = %s; a virtle network carries a policy by default", network.DNS())
-	}
 	if spec.Egress != nil || len(spec.Files) != 0 {
 		t.Fatalf("Egress = %+v, Files = %+v; want the network's default policy and no files", spec.Egress, spec.Files)
 	}

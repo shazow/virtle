@@ -588,7 +588,7 @@ func TestManagerLaunchRemovesEphemeralStateDir(t *testing.T) {
 	}
 }
 
-func TestCreateVolumeImageCreatesNativeExt4(t *testing.T) {
+func TestEnsureVolumeImageCreatesNativeExt4(t *testing.T) {
 	account, err := user.Current()
 	if err != nil {
 		t.Fatalf("current user: %v", err)
@@ -613,7 +613,7 @@ func TestCreateVolumeImageCreatesNativeExt4(t *testing.T) {
 				runAsUser = account.Username
 			}
 
-			err := launch.CreateVolumeImage(manifest.Volume{
+			created, err := launch.EnsureVolumeImage(manifest.Volume{
 				ImagePath:  imagePath,
 				Size:       tt.sizeMiB,
 				FSType:     "ext4",
@@ -622,6 +622,9 @@ func TestCreateVolumeImageCreatesNativeExt4(t *testing.T) {
 			}, runAsUser)
 			if err != nil {
 				t.Fatalf("create volume image: %v", err)
+			}
+			if !created {
+				t.Fatal("volume image was not created")
 			}
 
 			info, err := os.Stat(imagePath)
@@ -664,7 +667,7 @@ func TestCreateVolumeImageCreatesNativeExt4(t *testing.T) {
 	}
 }
 
-func TestCreateVolumeImageRunsChattrBeforeSizingImage(t *testing.T) {
+func TestEnsureVolumeImageRunsChattrBeforeSizingImage(t *testing.T) {
 	tmpDir := t.TempDir()
 	binDir := filepath.Join(tmpDir, "bin")
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
@@ -679,7 +682,7 @@ func TestCreateVolumeImageRunsChattrBeforeSizingImage(t *testing.T) {
 	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
 
 	imagePath := filepath.Join(tmpDir, "volume.img")
-	if err := launch.CreateVolumeImage(manifest.Volume{
+	if _, err := launch.EnsureVolumeImage(manifest.Volume{
 		ImagePath:  imagePath,
 		Size:       256,
 		FSType:     "ext4",
@@ -2796,9 +2799,9 @@ func TestBuildQEMUCommandAllowsInitrdApplianceWithoutStorageDevices(t *testing.T
 
 func TestBuildQEMUCommandUsesRuntimeDirForRelativeQMP(t *testing.T) {
 	runtimeDir := t.TempDir()
+	t.Cleanup(xdg.Reload)
 	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
 	xdg.Reload()
-	t.Cleanup(xdg.Reload)
 
 	cfg := validManifest("/tmp/work")
 	cfg.Paths.RuntimeDir = manifest.RuntimeDir{Mode: manifest.RuntimeDirXDG}
@@ -2825,9 +2828,9 @@ func TestBuildQEMUCommandUsesRuntimeDirForRelativeQMP(t *testing.T) {
 
 func TestStartRunsUsesNamedVirtioFSRunEnv(t *testing.T) {
 	runtimeDir := t.TempDir()
+	t.Cleanup(xdg.Reload)
 	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
 	xdg.Reload()
-	t.Cleanup(xdg.Reload)
 
 	cfg := validManifest(t.TempDir())
 	cfg.Paths.RuntimeDir = manifest.RuntimeDir{Mode: manifest.RuntimeDirXDG}

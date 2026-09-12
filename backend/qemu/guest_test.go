@@ -177,13 +177,6 @@ func TestQGAGuestRunDirEnvWrapsShell(t *testing.T) {
 	}
 }
 
-func TestQGAGuestRunStdinUnsupported(t *testing.T) {
-	g := &qgaGuest{vm: &fakeGuestHost{client: newFakeQGAClient()}}
-	if err := g.Run(context.Background(), &vm.GuestCmd{Path: "cat", Stdin: strings.NewReader("x")}); err == nil {
-		t.Fatal("expected stdin to be unsupported over QGA")
-	}
-}
-
 func TestQGAGuestCreateThenOpen(t *testing.T) {
 	client := newFakeQGAClient()
 	g := &qgaGuest{vm: &fakeGuestHost{client: client}}

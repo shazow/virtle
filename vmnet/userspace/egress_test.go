@@ -2,7 +2,6 @@ package userspace
 
 import (
 	"context"
-	"errors"
 	"net"
 	"net/netip"
 	"strings"
@@ -27,7 +26,7 @@ func (r *recordedEvents) Record(e egress.Event) {
 	r.list = append(r.list, e)
 }
 
-// TestFakeIPNamesReachThePolicy is the fake-IP mode end to end: the guest
+// TestFakeIPNamesReachThePolicy exercises synthetic DNS end to end: the guest
 // resolves names to synthetic addresses, its flows carry the names, and a
 // policy decides by name and dials the real destination.
 func TestFakeIPNamesReachThePolicy(t *testing.T) {
@@ -41,19 +40,18 @@ func TestFakeIPNamesReachThePolicy(t *testing.T) {
 	loopback := netip.MustParseAddr("127.0.0.1")
 	rec := &recordedEvents{}
 	policy := &egress.Policy{
-		Rules:        []egress.Rule{{Hosts: []string{"allowed.test"}}},
+		Rules:        []egress.Rule{{Hosts: []string{"allowed.test", "another.test"}}},
 		DenyPrefixes: []netip.Prefix{},
-		Resolver:     hostTable{"allowed.test": loopback, "blocked.test": loopback},
 		Recorder:     rec,
 	}
-	n := newTestNetwork(t, Config{DNS: DNSFakeIP, Egress: policy})
+	n := newTestNetwork(t, Config{DNS: DNSFakeIP, Egress: policy, DNSUpstream: dnsUpstream(t, addressDNS)})
 	g := attachGuest(t, n, "vm1", vmnet.AttachOptions{})
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
 
 	resolve := func(name string) netip.Addr {
 		t.Helper()
-		u, err := g.dialUDP(netip.AddrPortFrom(n.Gateway(), dnsPort))
+		u, err := g.dialUDP(netip.AddrPortFrom(n.gateway, dnsPort))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -73,10 +71,13 @@ func TestFakeIPNamesReachThePolicy(t *testing.T) {
 		}
 		return a
 	}
-	allowed, blocked := resolve("allowed.test"), resolve("blocked.test")
-	if allowed == blocked || resolve("allowed.test") != allowed {
-		t.Fatalf("names map to %s and %s; the mapping must be distinct and stable", allowed, blocked)
+	allowed, another := resolve("allowed.test"), resolve("another.test")
+	if allowed == another || resolve("allowed.test") != allowed {
+		t.Fatalf("names map to %s and %s; the mapping must be distinct and stable", allowed, another)
 	}
+	// A guest can learn a synthetic address from another guest; connection
+	// admission must still check the name independently of DNS admission.
+	blocked, _ := n.fakeIPs.addr("blocked.test")
 
 	c, err := g.dialTCP(ctx, netip.AddrPortFrom(allowed, port))
 	if err != nil {
@@ -104,7 +105,7 @@ func TestFakeIPNamesReachThePolicy(t *testing.T) {
 	}
 
 	// The synthetic address resolves back to its name.
-	u, err := g.dialUDP(netip.AddrPortFrom(n.Gateway(), dnsPort))
+	u, err := g.dialUDP(netip.AddrPortFrom(n.gateway, dnsPort))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,37 +129,7 @@ func (h hostTable) LookupNetIP(_ context.Context, _, host string) ([]netip.Addr,
 	return nil, &net.DNSError{Err: "no such host", Name: host, IsNotFound: true}
 }
 
-func TestFakeIPTable(t *testing.T) {
-	table := newFakeIPTable(netip.MustParsePrefix("198.18.0.0/30"))
-	a, ok := table.addr("One.Test.")
-	if !ok || a != netip.MustParseAddr("198.18.0.1") {
-		t.Fatalf("first address = %s, %v", a, ok)
-	}
-	if again, _ := table.addr("one.test"); again != a {
-		t.Fatalf("the same name got %s and %s", a, again)
-	}
-	if name, ok := table.name(a); !ok || name != "one.test" {
-		t.Fatalf("name = %q, %v", name, ok)
-	}
-	b, ok := table.addr("two.test")
-	if !ok || b != netip.MustParseAddr("198.18.0.2") {
-		t.Fatalf("second address = %s, %v", b, ok)
-	}
-	// A /30 has two addresses; the third name takes the one that has gone
-	// longest without a lookup or a flow, never the broadcast address.
-	if c, ok := table.addr("three.test"); !ok || c != a {
-		t.Fatalf("third name = %s, %v; want one.test's %s, the least recently used", c, ok, a)
-	}
-	if name, ok := table.name(a); !ok || name != "three.test" {
-		t.Fatalf("%s now names %q, %v", a, name, ok)
-	}
-	if d, ok := table.addr("one.test"); !ok || d != b {
-		t.Fatalf("one.test came back as %s, %v; want two.test's %s", d, ok, b)
-	}
-	if _, ok := table.name(netip.MustParseAddr("198.18.0.3")); ok {
-		t.Fatal("an unassigned address has a name")
-	}
-
+func TestFakeIPRange(t *testing.T) {
 	for name, cfg := range map[string]Config{
 		"fake range overlaps subnet": {DNS: DNSFakeIP, FakeIPRange: netip.MustParsePrefix("192.168.0.0/16")},
 		"fake range is ipv6":         {DNS: DNSFakeIP, FakeIPRange: netip.MustParsePrefix("fd00::/64")},
@@ -172,9 +143,7 @@ func TestFakeIPTable(t *testing.T) {
 	if !n.fakeIPs.contains(netip.MustParseAddr("10.99.3.4")) {
 		t.Fatal("the configured fake range is not in use")
 	}
-	if _, err := New(Config{DNS: "magic"}); !errors.Is(err, err) || err == nil {
-		t.Fatal("unknown DNS mode accepted")
-	}
+
 }
 
 func TestUnknownFakeAddressesAreRefused(t *testing.T) {

@@ -179,6 +179,9 @@ type QEMUNetDevice struct {
 	// forwards the port exposes.
 	Managed bool             `json:"managed,omitempty"`
 	Forward []HotplugForward `json:"forward,omitempty"`
+	// DNSUpstream selects the managed network's DNS server; host uses the
+	// host's configured servers. It is empty for unmanaged network devices.
+	DNSUpstream string `json:"dnsUpstream,omitempty"`
 }
 
 type QEMUVSOCKDevice struct {

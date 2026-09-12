@@ -328,6 +328,10 @@ func (m *manager) suspendState(qmpSocketPath, statePath string, cid int) launch.
 	if attached := m.attachedNet; attached != nil {
 		state.NetworkMAC = attached.port.MAC().String()
 		state.NetworkAddr = attached.port.Addr().String()
+		if network, ok := m.network.(vmnet.StatefulNetwork); ok {
+			checkpoint := network.SaveNetworkState()
+			state.NetworkState = &checkpoint
+		}
 	}
 	return state
 }

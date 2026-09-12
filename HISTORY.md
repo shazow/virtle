@@ -7,6 +7,102 @@ Keep entries terse. When a day includes both CLI and library changes, group
 them by type, CLI first. For compatibility-breaking usage migrations, include
 compact before/after examples.
 
+## 2026-09-12
+
+- Virtle network TCP SYN handlers retain their originating attachment through
+  asynchronous dispatch and address reuse. Pending handshakes are bounded
+  per attachment, with separate capacity for DNS. Closing a port forward
+  cancels and joins pending guest dials and established connections.
+  UDP flows and forwarded peers stay alive while either direction is active.
+
+- Resolved manifests retain separate runtime socket and persistent state
+  directories. Runtime sockets support working-directory, XDG, and explicit
+  path placement; an unset state directory falls back to `persistence.baseDir`.
+  Document loading continues to place sockets under the state directory.
+- Firecracker and Cloud Hypervisor validate `[[run]]` helpers at manifest
+  load, including empty commands, template syntax, and reserved variables.
+  Existing disk images can use any filesystem; the ext4 restriction applies
+  only when `image.create = true`.
+- Helper templates accept ordinary Go template constructs such as
+  `{{with .Workspace}}`; forwarding command arguments retain literal dollar
+  strings. `manifest defaults --resolved` leaves the optional initrd unset.
+- `docs/recipes/networking` demonstrates QEMU managed DNS, egress filtering,
+  HTTPS inspection, and scoped secret injection with local mock services.
+  Use `nix run` to explore or `nix run .#check` to verify the full demo.
+- Synthetic DNS addresses remain bound for their advertised TTL. Exhausting
+  a configured range returns SERVFAIL until a binding expires instead of
+  redirecting a guest's cached address to another hostname.
+- QEMU suspend saves synthetic DNS bindings and issued secret placeholders
+  with the NIC identity, and restores them before guest traffic resumes.
+  Secret values and permissions still come from the current policy. Suspend
+  state is now `qemu-v2`; older saves require the virtle version that wrote
+  them or a fresh boot.
+- Manifest-loaded QEMU backends preserve user and TAP NICs alongside a
+  virtle NIC. Inspected HTTP protocol upgrades keep their relay connections
+  alive until the stream closes.
+- Concurrent launches sharing a CA directory initialize one consistent
+  certificate/key pair. Interrupted initial publication can be completed
+  from the private bundle without changing its identity. Existing separate
+  `ca.pem` and `ca-key.pem` files remain readable without rotating the CA.
+- Virtle networks authorize DNS queries through their egress policy and
+  proxy them to host DNS by default. `[networks.dns].upstream` selects an
+  explicit IP:port for both DNS queries and outbound name resolution.
+  Synthetic mode retains synthetic A addresses, empty AAAA answers, and
+  local synthetic PTR records. Other ordinary record types are proxied; query
+  decisions and exchanges are logged, and direct guest DNS outside the
+  gateway is blocked.
+- Egress address and CIDR deny entries also apply after DNS resolution, and
+  the default denied ranges include the IPv6 unspecified address. Inspected
+  HTTP requests must match the authorized host and port before admission
+  hooks or secret injection run.
+- Closing a network port ends its outgoing flows before releasing its
+  address, so a replacement guest establishes connections under its own
+  policy. DNS requests are also bound to their originating port. Fragmented
+  TCP and UDP packets to the gateway are rejected; large DNS messages can
+  use TCP.
+
+### Library changes
+
+- Removed the unimplemented `vm.TermOptions`, `vm.GuestWithCopy`, and
+  `vm.CopyOptions` declarations. `GuestCmd.Stdin`, `Term.Resize`, and
+  `Term.Wait` are removed because no backend implemented them. `Guest.Close`
+  is removed because guest operations own their connections; close file and
+  console streams as before, and use `Machine.Wait` to wait for VM exit.
+  The working `vm.Output` and `vm.ArchiveFS` conveniences remain available.
+- `backend.Resumer.StateVersion` remains available for querying the save
+  format before resume. Control clients retain completion and shutdown
+  fallbacks for older running servers without the current lifecycle RPCs.
+- Networks may optionally report `MTU() int`; QEMU uses a positive reported
+  value or defaults to 1500. `userspace.Network.Listen` and `Gateway`,
+  `vmnet.DenyAll`, and `Passthrough.Dialer` remain available.
+  Gateway listeners reserve port 53 for the network's DNS service.
+- Custom networks can implement `vmnet.StatefulNetwork` using the public
+  `vmnet.NetworkState` and `vmnet.DNSBinding` types to participate in QEMU
+  suspend/resume. The public types preserve the checkpoint JSON representation.
+- Control RPCs honor context cancellation, including the forced-stop fallback
+  for a canceled shutdown. Userspace network attachment and dialing reject
+  canceled contexts before acquiring resources. Firecracker and Cloud
+  Hypervisor status results own their network snapshots.
+- `userspace.Config.DNS` retains `DNSForward` (the Go default, returning
+  real A addresses) and `DNSFakeIP` (synthetic A addresses). Manifest egress
+  policies select synthetic mode to retain hostnames on outgoing flows.
+- `userspace.Config.DNSUpstream` selects `"host"` (the default) or an explicit
+  resolver IP:port. `"host"` reads DNS servers from `/etc/resolv.conf`; this
+  wire-DNS path does not consult `/etc/hosts` or use `net.DefaultResolver`.
+  Custom egress implementations must implement `vmnet.DNSAuthorizer` to
+  permit upstream DNS queries. Query filtering follows hostname permissions,
+  with service ports checked at connection time. Synthetic A allocation now
+  requires a successful upstream answer, preserving NXDOMAIN and NODATA.
+  `Policy.Resolver` and `Passthrough.Dialer.Resolver` override connection
+  lookups only; names known to a custom resolver must also be served by the
+  configured DNS upstream. Passthrough dialer timeouts and deadlines cover
+  both name resolution and connection attempts.
+- `egress.Request.Host` exposes the validated HTTP authority to admission
+  and injection callbacks.
+- Cloud Hypervisor's interactive console serializes writes to
+  `Backend.ConsoleOutput`, as print mode does; callers can supply an ordinary
+  `io.Writer` without adding their own synchronization.
+
 ## 2026-09-11
 
 - The Firecracker and Cloud Hypervisor backends are experimental: they stay

@@ -150,8 +150,13 @@ func specDocument(spec *vm.Spec, cfg *Backend, base *imanifest.Document) (imanif
 		enabled := false
 		doc.VSock.Enabled = &enabled
 	}
-	if err := applySpecLink(&doc, cfg); err != nil {
-		return imanifest.Document{}, err
+	// A loaded manifest owns each NIC's frame path. Its Network serves the
+	// virtle NIC without changing the other NICs; only an explicit Link
+	// overrides those choices. Go-created specs infer Stream from Network.
+	if base == nil || cfg.Link != nil {
+		if err := applySpecLink(&doc, cfg); err != nil {
+			return imanifest.Document{}, err
+		}
 	}
 
 	if err := applySpecDevices(&doc, spec); err != nil {

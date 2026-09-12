@@ -5,8 +5,8 @@
 // Manifest sections with no vm.Spec representation — host [run] helper
 // commands, [notifications] hooks, [ssh] settings — stay attached to the
 // returned backend, which rejects the ones it cannot honor at load time.
-// QEMU starts the helpers and runs the hooks itself; the interactive SSH
-// session is driven by the virtle CLI's foreground loop.
+// All backends start host helpers; QEMU also runs notification hooks. The
+// interactive SSH session is driven by the virtle CLI's foreground loop.
 package manifest
 
 import (
@@ -91,21 +91,20 @@ func LoadDocument(doc imanifest.Document) (*vm.Spec, backend.Backend, error) {
 	// The backend is built after the network, so the network's logger looks
 	// the backend up when it logs rather than capturing it here.
 	var loaded *qemu.Backend
-	if slices.ContainsFunc(mf.QEMU.Devices.Network, func(d imanifest.QEMUNetDevice) bool { return d.Managed }) {
+	if i := slices.IndexFunc(mf.QEMU.Devices.Network, func(d imanifest.QEMUNetDevice) bool { return d.Managed }); i >= 0 {
 		logger := slog.New(delegatingHandler{get: func() slog.Handler {
 			if loaded != nil && loaded.Logger != nil {
 				return loaded.Logger.Handler()
 			}
 			return slog.DiscardHandler
 		}})
-		netCfg := userspace.Config{Logger: logger.With("package", "vmnet")}
+		netCfg := userspace.Config{Logger: logger.With("package", "vmnet"), DNSUpstream: mf.QEMU.Devices.Network[i].DNSUpstream}
 		if mf.Egress != nil {
 			policy, err := egressPolicy(mf.Egress, logger.With("package", "egress"))
 			if err != nil {
 				return nil, nil, err
 			}
-			// Name rules need names: the network hands out synthetic
-			// addresses so the policy sees what the guest resolved.
+			// Name rules need the guest's original DNS name on each flow.
 			netCfg.DNS, netCfg.Egress = userspace.DNSFakeIP, policy
 			spec.Egress = specEgress(mf.Egress)
 			spec.Files = append(spec.Files, policy.GuestFiles()...)

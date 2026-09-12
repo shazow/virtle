@@ -8,9 +8,11 @@ import (
 	"net"
 	"net/netip"
 	"os/exec"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -127,6 +129,46 @@ func newNetworkTestManager(network vmnet.Network, runner *launchRunner) *manager
 		qmpConnectTimeout: time.Second,
 		qmpRetryDelay:     time.Millisecond,
 		shutdownDelay:     time.Millisecond,
+	}
+}
+
+type mtuNetwork struct {
+	vmnet.Network
+	mtu int
+}
+
+func (n mtuNetwork) MTU() int { return n.mtu }
+
+func TestAttachNetworkMTU(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		mtu  int
+		want int
+	}{
+		{name: "unspecified", want: 1500},
+		{name: "zero", want: 1500},
+		{name: "negative", mtu: -1, want: 1500},
+		{name: "custom", mtu: 9000, want: 9000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			network := &fakeNetwork{}
+			var attachedNetwork vmnet.Network = mtuNetwork{Network: network, mtu: tc.mtu}
+			if tc.name == "unspecified" {
+				attachedNetwork = struct{ vmnet.Network }{network}
+			}
+			m := &manager{network: attachedNetwork}
+			a, err := m.attachNetwork(t.Context(), &launch.Plan{Manifest: managedManifest("")})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer a.Close()
+			if got := a.netdev(3).MTU; got != tc.want {
+				t.Errorf("QEMU MTU = %d, want %d", got, tc.want)
+			}
+			if got := network.ports[0].link.MTU(); got != tc.want {
+				t.Errorf("link MTU = %d, want %d", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -292,6 +334,182 @@ func TestAttachNetworkKeepsSavedIdentityAndRecordsIt(t *testing.T) {
 	}
 	if m.suspendState("qmp.sock", "x", 1).NetworkAddr != "192.168.127.3" {
 		t.Fatal("suspend state does not follow the attached port")
+	}
+}
+
+type checkpointNetwork struct {
+	fakeNetwork
+	saved      vmnet.NetworkState
+	restored   []vmnet.NetworkState
+	onRestore  func() error
+	onSave     func()
+	restoreErr error
+}
+
+func (n *checkpointNetwork) SaveNetworkState() vmnet.NetworkState {
+	if n.onSave != nil {
+		n.onSave()
+	}
+	return n.saved
+}
+
+func (n *checkpointNetwork) RestoreNetworkState(state vmnet.NetworkState) error {
+	if n.onRestore != nil {
+		if err := n.onRestore(); err != nil {
+			return err
+		}
+	}
+	n.restored = append(n.restored, state)
+	return n.restoreErr
+}
+
+func TestNetworkCheckpointResume(t *testing.T) {
+	cfg := managedManifest(t.TempDir())
+	cfg.Persistence.StateDir = ".virtle"
+	cfg.Paths.RuntimeDir = manifest.RuntimeDir{Mode: manifest.RuntimeDirPath, Path: ".virtle"}
+	checkpoint := vmnet.NetworkState{
+		FakeIPRange: netip.MustParsePrefix("198.18.0.0/15"),
+		Bindings:    []vmnet.DNSBinding{{Name: "api.example", Addr: netip.MustParseAddr("198.18.0.1")}},
+		Tokens:      map[string]string{"api": "guest-token"},
+	}
+	qmp := &fakeQMPClient{status: "running"}
+	network := &checkpointNetwork{saved: checkpoint, onSave: func() {
+		qmp.mu.Lock()
+		defer qmp.mu.Unlock()
+		if qmp.status != "paused" || qmp.migrateCalls != 1 {
+			t.Error("network state was captured before the VM migration completed")
+		}
+	}}
+	m := newNetworkTestManager(network, &launchRunner{})
+	m.launchManifest = cfg
+	attached, err := m.attachNetwork(t.Context(), &launch.Plan{Manifest: cfg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer attached.Close()
+	m.attachedNet = attached
+	if err := m.saveSuspendStateConnected(t.Context(), "qmp.sock", qmp, 7, nil); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	state, err := launch.ReadSuspendState(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Version != StateVersion || !reflect.DeepEqual(state.NetworkState, &checkpoint) {
+		t.Fatalf("saved network checkpoint = %+v, want %+v at version %q", state.NetworkState, checkpoint, StateVersion)
+	}
+	if err := attached.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// A freshly constructed backend must restore the checkpoint while it
+	// holds the runtime lock, before attaching the resumed guest's NIC.
+	replacement := &checkpointNetwork{onRestore: func() error {
+		lock, err := (&fileLocker{}).Acquire(cfg.ResolvedLockPath())
+		if err == nil {
+			_ = lock.Release()
+			return errors.New("network restore ran without the runtime lock")
+		}
+		return nil
+	}}
+	replacement.onAttach = func() {
+		if len(replacement.restored) != 1 || !reflect.DeepEqual(replacement.restored[0], checkpoint) {
+			t.Error("guest attached before its network checkpoint was restored")
+		}
+	}
+	resumed := newNetworkTestManager(replacement, &launchRunner{})
+	plan, err := resumed.planLaunch(launch.Spec{Manifest: cfg, Options: launch.Options{Resume: ResumeModeForce}})
+	if err != nil {
+		t.Fatalf("plan resume: %v", err)
+	}
+	running, err := resumed.startWithPlan(t.Context(), plan)
+	if err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	defer running.Close()
+	if len(replacement.attaches) != 1 {
+		t.Fatalf("network attached %d times, want once", len(replacement.attaches))
+	}
+	if got := replacement.attaches[0]; got.MAC.String() != state.NetworkMAC || got.Addr.String() != state.NetworkAddr {
+		t.Fatalf("resumed NIC identity = %s/%s, want %s/%s", got.MAC, got.Addr, state.NetworkMAC, state.NetworkAddr)
+	}
+}
+
+func TestNetworkRestoreFailureStopsLaunch(t *testing.T) {
+	restoreErr := errors.New("conflicting DNS binding")
+	for _, test := range []struct {
+		name    string
+		capable bool
+		nic     bool
+		wantErr error
+	}{
+		{name: "unsupported network", nic: true, wantErr: errors.ErrUnsupported},
+		{name: "invalid checkpoint", capable: true, nic: true, wantErr: restoreErr},
+		{name: "missing NIC", capable: true, wantErr: errors.ErrUnsupported},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			plain := &fakeNetwork{}
+			var network vmnet.Network = plain
+			if test.capable {
+				n := &checkpointNetwork{restoreErr: restoreErr}
+				plain, network = &n.fakeNetwork, n
+			}
+			cfg := managedManifest(t.TempDir())
+			if !test.nic {
+				cfg.QEMU.Devices.Network = nil
+			}
+			runner := &launchRunner{}
+			m := newNetworkTestManager(network, runner)
+			plan, err := m.planLaunch(launch.Spec{Manifest: cfg})
+			if err != nil {
+				t.Fatal(err)
+			}
+			statePath, err := launch.PrepareVMStateFile(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			plan.ResumeState = &launch.SuspendState{CID: 7, VMStatePath: statePath, NetworkState: &vmnet.NetworkState{}}
+			running, err := m.startWithPlan(t.Context(), plan)
+			if running != nil {
+				_ = running.Close()
+			}
+			if !errors.Is(err, test.wantErr) {
+				t.Fatalf("resume error = %v, want %v", err, test.wantErr)
+			}
+			if len(plain.attaches) != 0 || len(runner.startedNames()) != 0 {
+				t.Fatal("restore failure allowed a port or process to start")
+			}
+		})
+	}
+}
+
+func TestNetworkRestoreNeedsRuntimeLock(t *testing.T) {
+	cfg := managedManifest(t.TempDir())
+	lock, err := (&fileLocker{}).Acquire(cfg.ResolvedLockPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Release()
+	network := &checkpointNetwork{}
+	m := newNetworkTestManager(network, &launchRunner{})
+	plan, err := m.planLaunch(launch.Spec{Manifest: cfg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	statePath, err := launch.PrepareVMStateFile(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.ResumeState = &launch.SuspendState{CID: 7, VMStatePath: statePath, NetworkState: &vmnet.NetworkState{}}
+	running, err := m.startWithPlan(t.Context(), plan)
+	if running != nil {
+		_ = running.Close()
+	}
+	if !errors.Is(err, syscall.EWOULDBLOCK) {
+		t.Fatalf("concurrent launch error = %v, want the runtime lock to be busy", err)
+	}
+	if len(network.restored) != 0 || len(network.attaches) != 0 {
+		t.Fatal("failed launch changed network state before owning the runtime lock")
 	}
 }
 

@@ -63,6 +63,9 @@ func (inj *Injection) label() string {
 type Request struct {
 	Flow   vmnet.Flow
 	Method string
+	// Host is the validated HTTP authority, normalized to the flow's host
+	// and port before admission or injection.
+	Host   string
 	URL    *url.URL
 	Header http.Header
 }

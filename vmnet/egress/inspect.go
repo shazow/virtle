@@ -13,9 +13,11 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/netip"
 	"net/url"
 	"path"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -176,12 +178,15 @@ func (p *Policy) inspect(ctx context.Context, f vmnet.Flow, rule string) (net.Co
 
 func (p *Policy) serveInspected(ctx context.Context, conn net.Conn, f vmnet.Flow, rule string) {
 	defer conn.Close()
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
 	peek := bufio.NewReader(conn)
 	first, err := peek.Peek(1)
 	if err != nil {
 		return
 	}
-	var served net.Conn = &peekedConn{Conn: conn, Reader: peek}
+	listener := &oneConnListener{done: make(chan struct{})}
+	var served net.Conn = &peekedConn{Conn: conn, Reader: peek, closed: func() { _ = listener.Close() }}
 	scheme := "http"
 	if first[0] == 0x16 { // a TLS handshake record
 		scheme = "https"
@@ -208,7 +213,7 @@ func (p *Policy) serveInspected(ctx context.Context, conn net.Conn, f vmnet.Flow
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(target)
-			pr.Out.Host = pr.In.Host // as the guest sent it, port included
+			pr.Out.Host = pr.In.Host // the validated, normalized authority
 		},
 		Transport: p.upstreamTransport(f),
 		ModifyResponse: func(resp *http.Response) error {
@@ -222,13 +227,17 @@ func (p *Policy) serveInspected(ctx context.Context, conn net.Conn, f vmnet.Flow
 			p.refuse(w, r, f, rule, err)
 		},
 	}
-	listener := &oneConnListener{conn: served, done: make(chan struct{})}
+	listener.conn = served
 	server := &http.Server{
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if err := validateAuthority(r, f, scheme); err != nil {
+				p.refuse(w, r, f, rule, err)
+				return
+			}
 			// The request as the guest sent it, kept for Admit, for the
 			// values, and for the record: after substitution it could
 			// carry a value.
-			seen := Request{Flow: f, Method: r.Method, URL: cloneURL(r.URL), Header: r.Header.Clone()}
+			seen := Request{Flow: f, Method: r.Method, Host: r.Host, URL: cloneURL(r.URL), Header: r.Header.Clone()}
 			info := &requestInfo{path: seen.URL.Path}
 			r = r.WithContext(context.WithValue(r.Context(), requestInfoKey{}, info))
 			if p.Admit != nil {
@@ -247,15 +256,51 @@ func (p *Policy) serveInspected(ctx context.Context, conn net.Conn, f vmnet.Flow
 		}),
 		ReadHeaderTimeout: 30 * time.Second,
 		BaseContext:       func(net.Listener) context.Context { return ctx },
-		// The server serves this one connection: once it is closed the
-		// listener ends, and with it Serve and this goroutine.
-		ConnState: func(_ net.Conn, state http.ConnState) {
-			if state == http.StateClosed || state == http.StateHijacked {
-				_ = listener.Close()
-			}
-		},
 	}
+	// Closing the connection ends the listener. A protocol upgrade only
+	// transfers ownership: the reverse proxy closes it when the relay ends.
 	_ = server.Serve(listener)
+}
+
+// validateAuthority binds an inspected request to the destination whose flow
+// was authorized. TLS authenticates that destination, but a different HTTP
+// authority could select another tenant at the same upstream address.
+func validateAuthority(r *http.Request, f vmnet.Flow, scheme string) error {
+	expected := normalizeName(f.Host)
+	if expected == "" {
+		expected = f.Dst.Addr().Unmap().String()
+	}
+	matches := func(authority string) bool {
+		u, err := url.Parse("//" + authority)
+		if err != nil || u.Host == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" || strings.HasSuffix(u.Host, ":") {
+			return false
+		}
+		host := normalizeName(u.Hostname())
+		if addr, err := netip.ParseAddr(host); err == nil {
+			host = addr.Unmap().String()
+		}
+		port := uint64(80)
+		if scheme == "https" {
+			port = 443
+		}
+		if s := u.Port(); s != "" {
+			port, err = strconv.ParseUint(s, 10, 16)
+			if err != nil {
+				return false
+			}
+		}
+		return host == expected && port == uint64(f.Dst.Port())
+	}
+	if !matches(r.Host) || (r.URL.Host != "" && !matches(r.URL.Host)) || (r.URL.Scheme != "" && !strings.EqualFold(r.URL.Scheme, scheme)) {
+		return fmt.Errorf("HTTP authority does not match the flow destination: %w", vmnet.ErrDenied)
+	}
+	// net/http uses the absolute URL's authority as r.Host when present.
+	// Normalize both forms so admission and forwarding see one authority.
+	r.Host = net.JoinHostPort(expected, strconv.Itoa(int(f.Dst.Port())))
+	if r.URL.Host != "" {
+		r.URL.Host = r.Host
+	}
+	return nil
 }
 
 // refuse answers a request the policy did not forward: 403 when it was
@@ -572,20 +617,29 @@ func (r *replacingReader) Read(p []byte) (int, error) {
 
 func (r *replacingReader) Close() error { return r.src.Close() }
 
-// peekedConn is a conn whose first bytes were peeked.
+// peekedConn preserves peeked bytes and ends its listener when closed,
+// including after ownership passes to a protocol-upgrade relay.
 type peekedConn struct {
 	net.Conn
 	Reader *bufio.Reader
+	closed func()
 }
 
 func (c *peekedConn) Read(p []byte) (int, error) { return c.Reader.Read(p) }
 
+func (c *peekedConn) Close() error {
+	err := c.Conn.Close()
+	c.closed()
+	return err
+}
+
 // oneConnListener hands one conn to an http.Server, then blocks until it is
-// closed, which the server's ConnState hook does once the conn is done.
+// closed along with that connection.
 type oneConnListener struct {
-	conn net.Conn
-	once sync.Once
-	done chan struct{}
+	conn      net.Conn
+	once      sync.Once
+	closeOnce sync.Once
+	done      chan struct{}
 }
 
 func (l *oneConnListener) Accept() (net.Conn, error) {
@@ -599,11 +653,7 @@ func (l *oneConnListener) Accept() (net.Conn, error) {
 }
 
 func (l *oneConnListener) Close() error {
-	select {
-	case <-l.done:
-	default:
-		close(l.done)
-	}
+	l.closeOnce.Do(func() { close(l.done) })
 	return nil
 }
 

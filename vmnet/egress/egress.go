@@ -9,8 +9,8 @@
 // sees.
 //
 // Name rules need a network that tells the Egress which name a guest
-// resolved (userspace.DNSFakeIP); on a network that resolves names itself
-// only address rules can match.
+// resolved (as the userspace network's synthetic DNS does); on a network
+// that resolves names itself only address rules can match.
 package egress
 
 import (
@@ -28,6 +28,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/shazow/virtle/internal/dnsproxy"
 	"github.com/shazow/virtle/vm"
 	"github.com/shazow/virtle/vmnet"
 )
@@ -96,6 +97,7 @@ var DefaultDenyPrefixes = []netip.Prefix{
 	netip.MustParsePrefix("169.254.0.0/16"),
 	netip.MustParsePrefix("224.0.0.0/4"),
 	netip.MustParsePrefix("255.255.255.255/32"),
+	netip.MustParsePrefix("::/128"),
 	netip.MustParsePrefix("::1/128"),
 	netip.MustParsePrefix("fe80::/10"),
 	netip.MustParsePrefix("ff00::/8"),
@@ -123,8 +125,8 @@ type Policy struct {
 	Logger *slog.Logger
 	// Dialer dials allowed flows; nil means a zero Dialer.
 	Dialer *net.Dialer
-	// Resolver resolves the names of allowed flows; nil means
-	// net.DefaultResolver.
+	// Resolver resolves the names of allowed flows. Nil uses the network's
+	// DNS resolver from the flow context, or net.DefaultResolver when absent.
 	Resolver Resolver
 
 	// Injections are tokens inspected requests carry in place of a value
@@ -199,10 +201,8 @@ func (p *Policy) DialFlow(ctx context.Context, f vmnet.Flow) (net.Conn, error) {
 // addresses.
 func (p *Policy) decide(f vmnet.Flow) (matched Rule, pattern, reason string, public bool) {
 	if f.Egress != nil {
-		for _, r := range f.Egress.Deny {
-			if matchPattern(r.Host, r.Ports, f) {
-				return Rule{}, "", "denied by the guest's policy", false
-			}
+		if deniedByGuest(f) {
+			return Rule{}, "", "denied by the guest's policy", false
 		}
 		allowed := false
 		for _, r := range f.Egress.Allow {
@@ -260,7 +260,11 @@ func (p *Policy) dial(ctx context.Context, f vmnet.Flow, public bool) (net.Conn,
 	}
 	resolver := p.Resolver
 	if resolver == nil {
-		resolver = net.DefaultResolver
+		if configured := dnsproxy.FromContext(ctx); configured != nil {
+			resolver = configured
+		} else {
+			resolver = net.DefaultResolver
+		}
 	}
 	host := normalizeName(f.Host)
 	addrs, err := resolver.LookupNetIP(ctx, "ip", host)
@@ -270,13 +274,22 @@ func (p *Policy) dial(ctx context.Context, f vmnet.Flow, public bool) (net.Conn,
 	var firstErr error
 	for _, a := range addrs {
 		a = a.Unmap()
-		if why := p.refused(a, public); why != "" {
+		upstream := netip.AddrPortFrom(a, f.Dst.Port())
+		// Address denies also apply to names resolving to those addresses.
+		// Keep name-based admission on the original flow, and check only
+		// destination denies against each address the resolver returned.
+		resolved := f
+		resolved.Host, resolved.Dst = "", upstream
+		why := p.refused(a, public)
+		if why == "" && deniedByGuest(resolved) {
+			why = "denied by the guest's policy"
+		}
+		if why != "" {
 			if firstErr == nil {
 				firstErr = fmt.Errorf("%s resolves to %s, %s: %w", host, a, why, vmnet.ErrDenied)
 			}
 			continue
 		}
-		upstream := netip.AddrPortFrom(a, f.Dst.Port())
 		conn, err := dialer.DialContext(ctx, f.Network(), upstream.String())
 		if err == nil {
 			return conn, upstream, nil
@@ -289,6 +302,19 @@ func (p *Policy) dial(ctx context.Context, f vmnet.Flow, public bool) (net.Conn,
 		firstErr = fmt.Errorf("%s resolves to no address", host)
 	}
 	return nil, netip.AddrPort{}, firstErr
+}
+
+// deniedByGuest checks the guest's destination denies. Named flows are
+// checked before resolution; each resolved address is checked before dialing.
+func deniedByGuest(f vmnet.Flow) bool {
+	if f.Egress != nil {
+		for _, r := range f.Egress.Deny {
+			if matchPattern(r.Host, r.Ports, f) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // refused says why an address may not be dialed, or nothing: it is in a

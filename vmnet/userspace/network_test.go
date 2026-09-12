@@ -11,10 +11,10 @@ import (
 	"time"
 
 	"github.com/insomniacslk/dhcp/dhcpv4"
-	"github.com/miekg/dns"
 
 	"github.com/shazow/virtle/vm"
 	"github.com/shazow/virtle/vmnet"
+	"github.com/shazow/virtle/vmnet/egress"
 )
 
 // recordingEgress remembers every flow and dials with dial.
@@ -48,15 +48,15 @@ func TestDHCPLeaseMatchesPort(t *testing.T) {
 	if g.addr != g.port.Addr() {
 		t.Fatalf("leased %s, port reports %s", g.addr, g.port.Addr())
 	}
-	if !n.Subnet().Contains(g.addr) || g.addr == n.Gateway() {
+	if !n.Subnet().Contains(g.addr) || g.addr == n.gateway {
 		t.Fatalf("leased %s outside %s", g.addr, n.Subnet())
 	}
 	ack := g.ack
-	if got := ack.Router(); len(got) != 1 || !got[0].Equal(n.Gateway().AsSlice()) {
-		t.Errorf("router = %v, want %s", got, n.Gateway())
+	if got := ack.Router(); len(got) != 1 || !got[0].Equal(n.gateway.AsSlice()) {
+		t.Errorf("router = %v, want %s", got, n.gateway)
 	}
-	if got := ack.DNS(); len(got) != 1 || !got[0].Equal(n.Gateway().AsSlice()) {
-		t.Errorf("dns = %v, want %s", got, n.Gateway())
+	if got := ack.DNS(); len(got) != 1 || !got[0].Equal(n.gateway.AsSlice()) {
+		t.Errorf("dns = %v, want %s", got, n.gateway)
 	}
 	if ones, _ := ack.SubnetMask().Size(); ones != n.Subnet().Bits() {
 		t.Errorf("mask = /%d, want /%d", ones, n.Subnet().Bits())
@@ -70,7 +70,7 @@ func TestDHCPLeaseMatchesPort(t *testing.T) {
 	if ack.IPAddressLeaseTime(0) != leaseTime {
 		t.Errorf("lease time = %s, want %s", ack.IPAddressLeaseTime(0), leaseTime)
 	}
-	if !ack.ServerIdentifier().Equal(n.Gateway().AsSlice()) {
+	if !ack.ServerIdentifier().Equal(n.gateway.AsSlice()) {
 		t.Errorf("server identifier = %s", ack.ServerIdentifier())
 	}
 	if want := macFor(g.addr); g.port.MAC().String() != want.String() {
@@ -139,7 +139,7 @@ func TestGuestFlowsGoThroughEgress(t *testing.T) {
 }
 
 func TestDeniedFlowIsRefusedBeforeAccept(t *testing.T) {
-	egress := &recordingEgress{dial: vmnet.DenyAll{}.DialFlow}
+	egress := &recordingEgress{dial: (&egress.Policy{}).DialFlow}
 	n := newTestNetwork(t, Config{Egress: egress})
 	g := attachGuest(t, n, "vm1", vmnet.AttachOptions{})
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
@@ -154,7 +154,7 @@ func TestDeniedFlowIsRefusedBeforeAccept(t *testing.T) {
 	if time.Since(start) > testTimeout/2 {
 		t.Fatalf("the refusal took %s; the guest should see a reset, not a timeout", time.Since(start))
 	}
-	u, err := g.dialUDP(netip.MustParseAddrPort("203.0.113.10:53"))
+	u, err := g.dialUDP(netip.MustParseAddrPort("203.0.113.10:1234"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,19 +233,34 @@ func TestExposeReachesGuestListener(t *testing.T) {
 	}
 }
 
-func TestHostDialsAndServesGuests(t *testing.T) {
+func TestHostDialsGuests(t *testing.T) {
 	n := newTestNetwork(t, Config{})
 	g := attachGuest(t, n, "vm1", vmnet.AttachOptions{})
 	g.listenTCP(7)
+	g.listenUDP(9)
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
-	for _, addr := range []string{g.addr.String() + ":7", "vm1:7"} {
-		c, err := n.DialContext(ctx, "tcp", addr)
-		if err != nil {
-			t.Fatalf("DialContext %s: %v", addr, err)
+	canceled, stop := context.WithCancel(t.Context())
+	stop()
+	for _, network := range []string{"tcp", "tcp4", "udp", "udp4"} {
+		port := ":7"
+		if strings.HasPrefix(network, "udp") {
+			port = ":9"
 		}
-		echo(t, c, "from the host to "+addr)
-		c.Close()
+		for _, addr := range []string{g.addr.String() + port, "vm1" + port} {
+			if c, err := n.DialContext(canceled, network, addr); !errors.Is(err, context.Canceled) {
+				if c != nil {
+					c.Close()
+				}
+				t.Fatalf("DialContext %s %s with canceled context = %v", network, addr, err)
+			}
+			c, err := n.DialContext(ctx, network, addr)
+			if err != nil {
+				t.Fatalf("DialContext %s %s: %v", network, addr, err)
+			}
+			echo(t, c, "from the host to "+addr)
+			c.Close()
+		}
 	}
 	if _, err := n.DialContext(ctx, "tcp", "vm2:7"); err == nil {
 		t.Fatal("DialContext resolved a machine that is not attached")
@@ -253,26 +268,10 @@ func TestHostDialsAndServesGuests(t *testing.T) {
 	if _, err := n.DialContext(ctx, "tcp", "10.1.1.1:7"); err == nil {
 		t.Fatal("DialContext accepted an address outside the network")
 	}
-
-	ln, err := n.Listen("tcp", ":8080")
-	if err != nil {
-		t.Fatalf("Listen: %v", err)
-	}
-	defer ln.Close()
-	go serveEcho(ln)
-	c, err := g.dialTCP(ctx, netip.AddrPortFrom(n.Gateway(), 8080))
-	if err != nil {
-		t.Fatalf("guest dial the gateway service: %v", err)
-	}
-	echo(t, c, "to a host service")
-	c.Close()
-	if _, err := n.Listen("tcp", g.addr.String()+":1"); err == nil {
-		t.Fatal("Listen bound an address that is not the gateway's")
-	}
 }
 
 func TestGuestsReachEachOther(t *testing.T) {
-	egress := &recordingEgress{dial: vmnet.DenyAll{}.DialFlow}
+	egress := &recordingEgress{dial: (&egress.Policy{}).DialFlow}
 	n := newTestNetwork(t, Config{Egress: egress})
 	g1 := attachGuest(t, n, "vm1", vmnet.AttachOptions{})
 	g2 := attachGuest(t, n, "vm2", vmnet.AttachOptions{})
@@ -306,10 +305,10 @@ func TestAttachOptions(t *testing.T) {
 	for name, opts := range map[string]vmnet.AttachOptions{
 		"address in use":     {Addr: fixed.Addr},
 		"MAC in use":         {MAC: fixed.MAC},
-		"gateway address":    {Addr: n.Gateway()},
+		"gateway address":    {Addr: n.gateway},
 		"outside the subnet": {Addr: netip.MustParseAddr("10.0.0.2")},
 		"multicast MAC":      {MAC: net.HardwareAddr{0x01, 0, 0, 0, 0, 1}},
-		"gateway MAC":        {MAC: macFor(n.Gateway())},
+		"gateway MAC":        {MAC: macFor(n.gateway)},
 	} {
 		hostEnd, guestEnd := net.Pipe()
 		defer guestEnd.Close()
@@ -323,6 +322,29 @@ func TestAttachOptions(t *testing.T) {
 	if p, err := n.Attach(context.Background(), vmnet.QEMUStream(small, n.MTU()-1), vmnet.AttachOptions{}); err == nil {
 		p.Close()
 		t.Fatal("Attach accepted a link with a smaller MTU")
+	}
+}
+
+func TestAttachContext(t *testing.T) {
+	n := newTestNetwork(t, Config{DNSUpstream: "127.0.0.1:53"})
+	link := idleLink(t, n.MTU())
+	opts := vmnet.AttachOptions{Addr: n.gateway.Next()}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if p, err := n.Attach(ctx, link, opts); !errors.Is(err, context.Canceled) {
+		if p != nil {
+			p.Close()
+		}
+		t.Fatalf("Attach with canceled context = %v", err)
+	}
+	// A canceled attachment leaves the link and requested address available
+	// for the caller to retry.
+	p, err := n.Attach(t.Context(), link, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Addr() != opts.Addr {
+		t.Fatalf("attached address = %s, want %s", p.Addr(), opts.Addr)
 	}
 }
 
@@ -355,72 +377,6 @@ func TestAddressesRunOut(t *testing.T) {
 	}
 }
 
-// fakeResolver answers from a table; anything else is a not-found error.
-type fakeResolver struct {
-	*net.Resolver
-	a map[string]netip.Addr
-}
-
-func (r fakeResolver) LookupNetIP(_ context.Context, _, host string) ([]netip.Addr, error) {
-	if a, ok := r.a[host]; ok {
-		return []netip.Addr{a}, nil
-	}
-	return nil, &net.DNSError{Err: "no such host", Name: host, IsNotFound: true}
-}
-
-func TestDNSForwardsToTheHostResolver(t *testing.T) {
-	n := newTestNetwork(t, Config{})
-	n.dns.resolver = fakeResolver{a: map[string]netip.Addr{"example.test.": netip.MustParseAddr("192.0.2.7")}}
-	g := attachGuest(t, n, "vm1", vmnet.AttachOptions{})
-	resolver := netip.AddrPortFrom(n.Gateway(), dnsPort)
-	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
-	defer cancel()
-
-	ask := func(c net.Conn, name string, qtype uint16) *dns.Msg {
-		t.Helper()
-		m := new(dns.Msg)
-		m.SetQuestion(name, qtype)
-		m.SetEdns0(4096, false)
-		r, _, err := (&dns.Client{Timeout: testTimeout}).ExchangeWithConnContext(ctx, m, &dns.Conn{Conn: c})
-		if err != nil {
-			t.Fatalf("query %s %s: %v", name, dns.TypeToString[qtype], err)
-		}
-		return r
-	}
-	u, err := g.dialUDP(resolver)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer u.Close()
-	r := ask(u, "example.test.", dns.TypeA)
-	if r.Rcode != dns.RcodeSuccess || len(r.Answer) != 1 {
-		t.Fatalf("A answer = %v", r)
-	}
-	if a, ok := r.Answer[0].(*dns.A); !ok || a.A.String() != "192.0.2.7" {
-		t.Fatalf("A record = %v", r.Answer[0])
-	}
-	if r := ask(u, "example.test.", dns.TypeAAAA); r.Rcode != dns.RcodeSuccess || len(r.Answer) != 0 {
-		t.Fatalf("AAAA answer = %v, want an empty success", r)
-	}
-	if r := ask(u, "nope.test.", dns.TypeA); r.Rcode != dns.RcodeNameError {
-		t.Fatalf("unknown name rcode = %s, want NXDOMAIN", dns.RcodeToString[r.Rcode])
-	}
-	if r := ask(u, "7.2.0.192.in-addr.arpa.", dns.TypePTR); r.Rcode == dns.RcodeNotImplemented {
-		t.Fatalf("PTR is not served")
-	}
-	if r := ask(u, "2.127.168.192.in-addr.arpa.", dns.TypePTR); r.Rcode != dns.RcodeNameError {
-		t.Fatalf("PTR for a guest address = %s, want NXDOMAIN", dns.RcodeToString[r.Rcode])
-	}
-	tc, err := g.dialTCP(ctx, resolver)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tc.Close()
-	if r := ask(tc, "example.test.", dns.TypeA); len(r.Answer) != 1 {
-		t.Fatalf("A over TCP = %v", r)
-	}
-}
-
 func TestCloseEndsEverything(t *testing.T) {
 	n := newTestNetwork(t, Config{})
 	g := attachGuest(t, n, "vm1", vmnet.AttachOptions{})
@@ -449,7 +405,7 @@ func TestConfigValidation(t *testing.T) {
 		"gateway is network":   {Gateway: netip.MustParseAddr("192.168.127.0")},
 		"gateway is broadcast": {Gateway: netip.MustParseAddr("192.168.127.255")},
 		"mtu too small":        {MTU: 100},
-		"unknown dns mode":     {DNS: "magic"},
+		"unknown DNS mode":     {DNS: "magic"},
 	} {
 		if n, err := New(cfg); err == nil {
 			n.Close()
@@ -457,8 +413,8 @@ func TestConfigValidation(t *testing.T) {
 		}
 	}
 	n := newTestNetwork(t, Config{Subnet: netip.MustParsePrefix("10.20.30.64/26"), MTU: 9000})
-	if n.Gateway() != netip.MustParseAddr("10.20.30.65") || n.MTU() != 9000 {
-		t.Fatalf("gateway %s mtu %d", n.Gateway(), n.MTU())
+	if n.gateway != netip.MustParseAddr("10.20.30.65") || n.MTU() != 9000 {
+		t.Fatalf("gateway %s mtu %d", n.gateway, n.MTU())
 	}
 	p, err := n.Attach(context.Background(), idleLink(t, 9000), vmnet.AttachOptions{})
 	if err != nil {
@@ -476,7 +432,7 @@ func TestGatewayPortsAreClosedNotForwarded(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
 	start := time.Now()
-	if c, err := g.dialTCP(ctx, netip.AddrPortFrom(n.Gateway(), 9)); err == nil {
+	if c, err := g.dialTCP(ctx, netip.AddrPortFrom(n.gateway, 9)); err == nil {
 		c.Close()
 		t.Fatal("a gateway port with nothing behind it accepted")
 	} else if !strings.Contains(err.Error(), "refused") || time.Since(start) > testTimeout/2 {
@@ -514,5 +470,59 @@ func TestExposeRacesWithClose(t *testing.T) {
 			t.Fatalf("Expose during Close = %v", err)
 		}
 		guestEnd.Close()
+	}
+}
+
+func TestHostServesGuests(t *testing.T) {
+	for _, network := range []string{"tcp", "tcp4"} {
+		t.Run(network, func(t *testing.T) {
+			n := newTestNetwork(t, Config{Gateway: netip.MustParseAddr("192.168.127.10"), Egress: vmnet.DenyAll{}})
+			g := attachGuest(t, n, "guest", vmnet.AttachOptions{})
+			for _, addr := range []string{":0", net.JoinHostPort(n.Gateway().String(), "0")} {
+				ln, err := n.Listen(network, addr)
+				if err != nil {
+					t.Fatalf("Listen %s: %v", addr, err)
+				}
+				t.Cleanup(func() { _ = ln.Close() })
+				go serveEcho(ln)
+				ctx, cancel := context.WithTimeout(t.Context(), testTimeout)
+				defer cancel()
+				port := uint16(ln.Addr().(*net.TCPAddr).Port)
+				c, err := g.dialTCP(ctx, netip.AddrPortFrom(n.Gateway(), port))
+				if err != nil {
+					t.Fatalf("guest dial the gateway service: %v", err)
+				}
+				echo(t, c, "to a host service")
+				_ = c.Close()
+				_ = ln.Close()
+			}
+			for _, addr := range []string{":53", net.JoinHostPort(n.Gateway().String(), "53"), net.JoinHostPort(g.addr.String(), "80"), ":65536"} {
+				if ln, err := n.Listen(network, addr); err == nil {
+					_ = ln.Close()
+					t.Errorf("Listen accepted %s", addr)
+				}
+			}
+			ln, err := n.Listen(network, ":0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = ln.Close() })
+			finished := make(chan error, 1)
+			go func() { _, err := ln.Accept(); finished <- err }()
+			if err := n.Close(); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case err := <-finished:
+				if err == nil {
+					t.Fatal("closed network accepted a connection")
+				}
+			case <-time.After(testTimeout):
+				t.Fatal("network close left gateway listener waiting")
+			}
+			if _, err := n.Listen(network, ":0"); !errors.Is(err, net.ErrClosed) {
+				t.Fatalf("Listen after Close = %v", err)
+			}
+		})
 	}
 }

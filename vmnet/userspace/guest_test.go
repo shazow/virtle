@@ -70,9 +70,15 @@ func newTestNetwork(t *testing.T, cfg Config) *Network {
 // attachGuest attaches a guest named name and boots it through DHCP.
 func attachGuest(t *testing.T, n *Network, name string, opts vmnet.AttachOptions) *guest {
 	t.Helper()
+	return attachGuestLink(t, n, name, opts, func(link vmnet.Link) vmnet.Link { return link })
+}
+
+// attachGuestLink boots a guest with a caller-supplied link adapter.
+func attachGuestLink(t *testing.T, n *Network, name string, opts vmnet.AttachOptions, wrap func(vmnet.Link) vmnet.Link) *guest {
+	t.Helper()
 	hostEnd, guestEnd := net.Pipe()
 	opts.Name = name
-	port, err := n.Attach(context.Background(), vmnet.QEMUStream(hostEnd, n.MTU()), opts)
+	port, err := n.Attach(context.Background(), wrap(vmnet.QEMUStream(hostEnd, n.MTU())), opts)
 	if err != nil {
 		t.Fatalf("Attach %s: %v", name, err)
 	}

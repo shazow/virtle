@@ -75,7 +75,7 @@ type Share struct {
 type Disk struct {
 	ReadOnly  bool        // attach without allowing guest writes
 	Path      string      // host image path
-	GuestPath string      // guest mount point; "/" makes this the root device (virtle passes root=); other paths need a guest agent and fail Start with errors.ErrUnsupported until one exists
+	GuestPath string      // "/" selects the root device (virtle passes root=); empty attaches without mounting; other paths return errors.ErrUnsupported
 	Format    string      // image format (e.g. "qcow2", "raw"); backend default when empty
 	Size      units.Bytes // created at this size if the image is absent
 }
@@ -95,10 +95,9 @@ type Forward struct {
 	Proto     Proto  // zero value means TCP
 }
 
-// File is a small file placed in the guest before the workload starts;
-// large trees go through GuestWithCopy after boot. Content is consumed by
-// Start — refresh it (e.g. a fresh bytes.NewReader) before reusing the
-// Spec.
+// File is a small file placed in the guest before the workload starts.
+// Content is consumed by Start; refresh it (e.g. a fresh bytes.NewReader)
+// before reusing the Spec.
 type File struct {
 	GuestPath string
 	Content   io.Reader

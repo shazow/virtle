@@ -263,7 +263,7 @@
               },
               "tag": {
                 "type": "string",
-                "description": "Stable QEMU mount tag or device identifier."
+                "description": "Stable mount tag or device identifier."
               },
               "source": {
                 "type": "string",
@@ -318,7 +318,7 @@
               },
               "tag": {
                 "type": "string",
-                "description": "Stable QEMU mount tag or device identifier."
+                "description": "Stable mount tag or device identifier."
               },
               "source": {
                 "type": "string",
@@ -492,6 +492,20 @@
               "additionalProperties": false
             },
             "description": "Port forwarding rules for this network."
+          },
+          "dns": {
+            "type": [
+              "null",
+              "object"
+            ],
+            "properties": {
+              "upstream": {
+                "type": "string",
+                "description": "DNS upstream: host (the default) uses the host's configured DNS servers; an IP address with a port selects one server, such as 127.0.0.1:53 or [::1]:53."
+              }
+            },
+            "description": "DNS upstream for a virtle network; not supported on other network types or hotplugged networks.",
+            "additionalProperties": false
           }
         },
         "additionalProperties": false
@@ -762,7 +776,7 @@
         ],
         "additionalProperties": false
       },
-      "description": "Host-side processes started before QEMU and stopped during teardown."
+      "description": "Host-side processes started before the virtual machine and stopped during teardown."
     },
     "hotplug": {
       "type": "object",
@@ -780,7 +794,7 @@
                   },
                   "tag": {
                     "type": "string",
-                    "description": "Stable QEMU mount tag or device identifier."
+                    "description": "Stable mount tag or device identifier."
                   },
                   "source": {
                     "type": "string",
@@ -835,7 +849,7 @@
                   },
                   "tag": {
                     "type": "string",
-                    "description": "Stable QEMU mount tag or device identifier."
+                    "description": "Stable mount tag or device identifier."
                   },
                   "source": {
                     "type": "string",
@@ -990,6 +1004,20 @@
                   "additionalProperties": false
                 },
                 "description": "Port forwarding rules for this network."
+              },
+              "dns": {
+                "type": [
+                  "null",
+                  "object"
+                ],
+                "properties": {
+                  "upstream": {
+                    "type": "string",
+                    "description": "DNS upstream: host (the default) uses the host's configured DNS servers; an IP address with a port selects one server, such as 127.0.0.1:53 or [::1]:53."
+                  }
+                },
+                "description": "DNS upstream for a virtle network; not supported on other network types or hotplugged networks.",
+                "additionalProperties": false
               }
             },
             "additionalProperties": false

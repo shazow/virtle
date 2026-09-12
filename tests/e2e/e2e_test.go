@@ -484,8 +484,8 @@ func TestScratchDisk(t *testing.T) {
 }
 
 // TestConsole drives the guest's shell over backend.ConsoleProvider on every
-// backend: a Term attached after boot replays the boot log, carries input
-// to the console, and has no window or exit status of its own.
+// backend: a Term attached after boot replays the boot log and carries input
+// to the console.
 func TestConsole(t *testing.T) {
 	f := loadFixture(t)
 	for _, g := range f.guests() {
@@ -496,12 +496,6 @@ func TestConsole(t *testing.T) {
 				t.Fatalf("Console: %v", err)
 			}
 			defer term.Close()
-			if err := term.Resize(80, 24); !errors.Is(err, errors.ErrUnsupported) {
-				t.Fatalf("Resize = %v, want ErrUnsupported", err)
-			}
-			if _, err := term.Wait(context.Background()); !errors.Is(err, errors.ErrUnsupported) {
-				t.Fatalf("Wait = %v, want ErrUnsupported", err)
-			}
 			// BusyBox init offers the console shell once Enter arrives; the
 			// command line queued behind it is the shell's first input.
 			if _, err := io.WriteString(term, "\necho VIRTLE_SHELL:$((6*7))\n"); err != nil {

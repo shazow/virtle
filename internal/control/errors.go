@@ -21,10 +21,7 @@ func ResourceLimit(err error) error {
 	return &RPCError{Code: ErrResourceLimit, Message: err.Error()}
 }
 
-// IsSocketUnavailable reports whether err means no control socket is reachable.
+// IsSocketUnavailable reports whether no control socket is reachable.
 func IsSocketUnavailable(err error) bool {
-	if err == nil {
-		return false
-	}
 	return errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ECONNREFUSED)
 }

@@ -78,8 +78,9 @@ manifests have none), it
 first takes a DHCP
 lease with `udhcpc`, prints `VIRTLE_NET:<address>`, serves a TCP echo on port
 7, with `virtle.egress=PORT` on the command line connects to `allowed.test`
-and `blocked.test` on that port and prints the outcome, and with
-`virtle.inject=PORT` fetches `http://inject.test:PORT/echo` with
+and `blocked.test` on that port and prints the outcome. Adding
+`virtle.egress_denied=PORT` checks that the allowed name cannot connect to a
+disallowed port. With `virtle.inject=PORT` fetches `http://inject.test:PORT/echo` with
 `$VIRTLE_RANDOM$` in a header and the query, then with `$VIRTLE_REJECT$`, then
 `/forbidden`, and prints what came back each time. With `virtle.share=TAG` it
 mounts that virtio-fs share, prints `VIRTLE_SHARE:` followed by the `hello`

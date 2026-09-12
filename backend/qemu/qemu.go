@@ -1,8 +1,6 @@
 // Package qemu implements a virtle backend that launches virtual machines
 // with QEMU. Backend.RemoteControl selects the guest-control transport
-// wired into Machine.RemoteControl: QGA (the QEMU Guest Agent, equivalent
-// to the virtle CLI today) now, a virtle-native guest daemon transport
-// later.
+// wired into Machine.RemoteControl: QGA (the QEMU Guest Agent).
 //
 // # Resource limits
 //
@@ -115,8 +113,7 @@ type Backend struct {
 }
 
 // RemoteControl is a guest-control transport for Backend.RemoteControl.
-// It is sealed (unexported method): QGA today, the virtle-native guest
-// daemon later. Each transport carries its own knobs.
+// The supported transport is QGA.
 type RemoteControl interface{ remoteControl() }
 
 // QGA is the qemu-guest-agent transport: the guest image runs
@@ -148,10 +145,8 @@ func (b *Backend) consoleOutput() io.Writer {
 
 func (b *Backend) hasRemoteControl() bool { return b.RemoteControl != nil }
 
-// StateVersion implements backend.Resumer: it reports the suspend-state
-// version this backend's machinery stamps on saves and compares on
-// resume. Only an exact match is resumable, since the saved VM state is a
-// QEMU migration stream.
+// StateVersion reports the suspend-state format this backend writes and can
+// resume. The format includes the QEMU migration stream and host network state.
 func (b *Backend) StateVersion() string { return vmm.StateVersion }
 
 // NewBackendFromDocument is the bridge for the public manifest package:
@@ -320,8 +315,7 @@ func (m *Machine) Status(ctx context.Context) (backend.Status, error) {
 // Console implements backend.ConsoleProvider: a vm.Term over the guest's
 // serial port, available when Backend.Console is ConsolePrint. The session
 // replays the recent console output first, so one attached after boot still
-// sees what the guest printed; its Resize and Wait report
-// errors.ErrUnsupported. Closing it leaves the machine running.
+// sees what the guest printed. Closing it leaves the machine running.
 func (m *Machine) Console(ctx context.Context) (vm.Term, error) {
 	return m.vm.Console(ctx)
 }

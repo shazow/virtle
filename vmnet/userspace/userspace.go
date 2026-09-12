@@ -18,6 +18,7 @@ import (
 	"net"
 	"net/netip"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -33,23 +34,22 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
 
+	"github.com/shazow/virtle/internal/dnsproxy"
 	"github.com/shazow/virtle/vmnet"
 )
 
-// DNSMode selects how the gateway answers guest queries. In both modes AAAA
-// answers are empty, because the segment carries only IPv4, and queries for
-// other record types go to the host's resolver.
+// DNSMode selects the addresses in successful gateway DNS A answers.
+// Both modes authorize upstream queries through vmnet.DNSAuthorizer and
+// return empty AAAA answers because the guest segment carries IPv4 only.
 type DNSMode string
 
 const (
-	// DNSForward resolves names with the host's resolver and answers with
-	// the real addresses. An Egress then sees addresses, never names.
+	// DNSForward returns the upstream's real addresses. Egress sees flows
+	// addressed by IP, so hostname rules cannot match them.
 	DNSForward DNSMode = "forward"
-	// DNSFakeIP answers every name with a synthetic address from
-	// Config.FakeIPRange and remembers which name it stands for, so the
-	// Egress sees each flow's Host and resolves it itself when it dials:
-	// the mode for policies that decide by name (vmnet/egress). A name that
-	// does not exist fails at connect time rather than at resolution.
+	// DNSFakeIP returns synthetic addresses that preserve the queried name
+	// in each flow's Host. The name must resolve through DNSUpstream before
+	// a synthetic answer is issued; NXDOMAIN and NODATA remain unchanged.
 	DNSFakeIP DNSMode = "fakeip"
 )
 
@@ -85,7 +85,7 @@ const (
 	udpDialTimeout = 5 * time.Second
 	// udpIdleTimeout ends a UDP flow or forward peer with no traffic.
 	udpIdleTimeout = 90 * time.Second
-	// maxInFlight caps TCP handshakes waiting on an Egress dial.
+	// maxInFlight caps pending TCP handshakes per port and forwarder.
 	maxInFlight = 1024
 )
 
@@ -95,19 +95,24 @@ type Config struct {
 	Subnet netip.Prefix
 	// Gateway is the network's own address: it serves DHCP and DNS, is the
 	// guests' default route, and is what Listen binds. Default: the first
-	// address of Subnet.
+	// host address of Subnet.
 	Gateway netip.Addr
 	// MTU is the largest IP packet on the segment; a link must carry at
 	// least this much to attach. Default DefaultMTU.
 	MTU int
-	// DNS is the gateway's answering mode. Default DNSForward.
+	// DNS selects real or synthetic A answers. Default DNSForward.
 	DNS DNSMode
 	// FakeIPRange is where DNSFakeIP answers come from; it must not overlap
-	// Subnet. Default DefaultFakeIPRange.
+	// Subnet. Default DefaultFakeIPRange. Ignored in DNSForward mode.
 	FakeIPRange netip.Prefix
+	// DNSUpstream is the resolver used for DNS and outbound name resolution:
+	// "host" (the default) or an IP:port. Host uses nameservers from
+	// /etc/resolv.conf, not /etc/hosts or other system lookup sources.
+	// Remote queries require Egress to implement vmnet.DNSAuthorizer.
+	DNSUpstream string
 	// Egress dials guest-initiated flows. Default vmnet.Passthrough{}.
 	Egress vmnet.Egress
-	// Logger receives attach, flow, and drop events; nil discards them.
+	// Logger receives attach, flow, DNS, and drop events; nil discards them.
 	Logger *slog.Logger
 }
 
@@ -124,14 +129,16 @@ type Network struct {
 	egress    vmnet.Egress
 	logger    *slog.Logger
 
-	stack   *stack.Stack
-	ep      *channel.Endpoint
-	ctx     context.Context
-	cancel  context.CancelFunc
-	wg      sync.WaitGroup
-	dhcp    *dhcpServer
-	dns     *dnsServer
-	fakeIPs *fakeIPTable // set in DNSFakeIP mode
+	stack       *stack.Stack
+	ep          *channel.Endpoint
+	ctx         context.Context
+	cancel      context.CancelFunc
+	wg          sync.WaitGroup
+	dhcp        *dhcpServer
+	dns         *dnsServer
+	fakeIPs     *fakeIPTable
+	resolver    *dnsproxy.Resolver
+	dnsUpstream string
 
 	mu     sync.Mutex
 	closed bool
@@ -201,6 +208,15 @@ func New(cfg Config) (*Network, error) {
 	if n.logger == nil {
 		n.logger = slog.New(slog.DiscardHandler)
 	}
+	var err error
+	n.resolver, err = dnsproxy.New(cfg.DNSUpstream)
+	if err != nil {
+		return nil, fmt.Errorf("userspace: DNS upstream: %w", err)
+	}
+	n.dnsUpstream = strings.TrimSpace(cfg.DNSUpstream)
+	if n.dnsUpstream == "" {
+		n.dnsUpstream = "host"
+	}
 
 	n.ep = channel.New(stackQueue, uint32(n.mtu+header.EthernetMinimumSize), tcpip.LinkAddress(n.gatewayHW))
 	// Frames from a guest crossed a reliable stream, and a guest whose NIC
@@ -233,7 +249,7 @@ func New(cfg Config) (*Network, error) {
 
 func (n *Network) configureStack() error {
 	s := n.stack
-	if err := s.CreateNIC(nicID, ethernet.New(n.ep)); err != nil {
+	if err := s.CreateNIC(nicID, ethernet.New(&networkEndpoint{Endpoint: n.ep, n: n})); err != nil {
 		return tcpipError("create NIC", err)
 	}
 	if err := s.AddProtocolAddress(nicID, tcpip.ProtocolAddress{
@@ -262,12 +278,6 @@ func (n *Network) configureStack() error {
 // Gateway is the network's own address.
 func (n *Network) Gateway() netip.Addr { return n.gateway }
 
-// Subnet is the network guests live on.
-func (n *Network) Subnet() netip.Prefix { return n.subnet }
-
-// MTU is the segment's MTU.
-func (n *Network) MTU() int { return n.mtu }
-
 // DNS is the gateway's answering mode.
 func (n *Network) DNS() DNSMode {
 	if n.fakeIPs != nil {
@@ -276,8 +286,17 @@ func (n *Network) DNS() DNSMode {
 	return DNSForward
 }
 
+// Subnet is the network guests live on.
+func (n *Network) Subnet() netip.Prefix { return n.subnet }
+
+// MTU is the segment's MTU.
+func (n *Network) MTU() int { return n.mtu }
+
 // Attach implements vmnet.Network.
 func (n *Network) Attach(ctx context.Context, link vmnet.Link, opts vmnet.AttachOptions) (vmnet.Port, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if link.MTU() < n.mtu {
 		return nil, fmt.Errorf("userspace: link MTU %d is below the network's %d", link.MTU(), n.mtu)
 	}
@@ -285,13 +304,22 @@ func (n *Network) Attach(ctx context.Context, link vmnet.Link, opts vmnet.Attach
 	if err != nil {
 		return nil, err
 	}
-	// The pumps start before anything can fail, so Close always has
-	// goroutines to end and Network.Close has none to miss.
+	// Install the neighbor before reading guest frames. TCP teardown relies
+	// on a SYN-ACK reaching the link endpoint without waiting on ARP.
+	p.mu.Lock()
+	if p.closed {
+		err = net.ErrClosed
+	} else if terr := n.stack.AddStaticNeighbor(nicID, ipv4.ProtocolNumber, p.addr4, tcpip.LinkAddress(p.mac)); terr != nil {
+		err = tcpipError("add neighbor", terr)
+	}
+	p.mu.Unlock()
+	// newPort counts both pumps; start them even if attachment failed so
+	// Network.Close has no missing goroutines to wait for.
 	go n.portRx(p)
 	go n.portTx(p)
-	if err := n.stack.AddStaticNeighbor(nicID, ipv4.ProtocolNumber, p.addr4, tcpip.LinkAddress(p.mac)); err != nil {
+	if err != nil {
 		_ = p.Close()
-		return nil, tcpipError("add neighbor", err)
+		return nil, err
 	}
 	n.logger.Info("network port attached", "guest", p.name, "addr", p.addr, "mac", p.mac.String())
 	return p, nil
@@ -331,8 +359,13 @@ func (n *Network) newPort(link vmnet.Link, opts vmnet.AttachOptions) (*port, err
 	if _, used := n.byMAC[mac.String()]; used || mac.String() == n.gatewayHW.String() {
 		return nil, fmt.Errorf("userspace: MAC %s is in use", mac)
 	}
+	ctx, cancel := context.WithCancel(n.ctx)
 	p := &port{
 		n:         n,
+		ctx:       ctx,
+		cancel:    cancel,
+		attached:  n.stack.Clock().Now(),
+		flows:     make(map[*forwardedFlow]struct{}),
 		name:      opts.Name,
 		egress:    opts.Egress,
 		addr:      addr,
@@ -343,6 +376,11 @@ func (n *Network) newPort(link vmnet.Link, opts vmnet.AttachOptions) (*port, err
 		done:      make(chan struct{}),
 		exposures: make(map[forwardKey]*exposure),
 	}
+	// DNS has its own admission budget so pending external dials cannot
+	// exhaust this port's ability to resolve names over TCP.
+	p.dnsTCP = tcp.NewForwarder(n.stack, 0, maxInFlight, p.handleTCP)
+	p.tcpForwarder = tcp.NewForwarder(n.stack, 0, maxInFlight, p.handleTCP)
+	p.udpForwarder = udp.NewForwarder(n.stack, p.handleUDP)
 	n.byAddr[addr] = p
 	n.byMAC[mac.String()] = p
 	n.wg.Add(2)
@@ -413,6 +451,9 @@ func (n *Network) portByName(name string) *port {
 // "tcp" or "udp", and addr is a guest address or an attached machine's
 // name, with a port.
 func (n *Network) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	full, err := n.resolveGuest(network, addr)
 	if err != nil {
 		return nil, err
@@ -453,7 +494,10 @@ func (n *Network) resolveGuest(network, addr string) (tcpip.FullAddress, error) 
 
 // Listen serves TCP on the gateway address from the host, for a service
 // guests reach without leaving the network. addr is ":port" or the gateway
-// address with a port; network must be "tcp".
+// address with a port; network is "tcp" or "tcp4". Port 53 is reserved for
+// gateway DNS. The listener closes when the network closes.
+// Fragmented TCP and UDP packets to the gateway are rejected, so guests
+// must keep their packets within the segment MTU.
 func (n *Network) Listen(network, addr string) (net.Listener, error) {
 	switch network {
 	case "tcp", "tcp4":
@@ -473,6 +517,14 @@ func (n *Network) Listen(network, addr string) (net.Listener, error) {
 	port, err := strconv.ParseUint(portStr, 10, 16)
 	if err != nil {
 		return nil, fmt.Errorf("userspace: listen %s: %w", addr, err)
+	}
+	if port == dnsPort {
+		return nil, fmt.Errorf("userspace: listen %s: port is reserved for gateway DNS", addr)
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.closed {
+		return nil, net.ErrClosed
 	}
 	return gonet.ListenTCP(n.stack, tcpip.FullAddress{NIC: nicID, Addr: n.gateway4, Port: uint16(port)}, ipv4.ProtocolNumber)
 }

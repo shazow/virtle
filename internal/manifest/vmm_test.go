@@ -20,7 +20,7 @@ var qemuOnlyRejections = []rejectedSetting{
 	{"qemu hotplug ports", "[qemu]\nhotplug_ports = 2", "qemu"},
 	{"qemu shutdown timeout", "[qemu]\nshutdown_timeout = '5s'", "qemu"},
 	{"user network", "[[networks]]\ntype = 'user'", "user networking"},
-	{"virtle network", "[[networks]]\ntype = 'virtle'", "guest daemon"},
+	{"virtle network", "[[networks]]\ntype = 'virtle'", "host TAP networking"},
 	{"tap forward", "[[networks]]\ntype = 'tap'\ntap = 'tap0'\nforward = [{ host = '127.0.0.1:2222', guest = ':22' }]", "forward"},
 	{"tap without device", "[[networks]]\ntype = 'tap'", "tap is required"},
 	{"write files", "[[write_files]]\nguest_path = '/etc/motd'\ntext = 'hi'", "write_files"},
@@ -53,6 +53,7 @@ var microVMAccepted = []struct{ name, toml string }{
 	{"microvm", "[machine]\ntype = 'microvm'\nkvm = true"},
 	{"headless", "[graphics]\nbackend = 'headless'"},
 	{"image creation", "[[mounts]]\ntype = 'image'\nsource = 'scratch.img'\nimage.create = true\nimage.size = 256\nimage.label = 'scratch'"},
+	{"existing filesystem", "[[mounts]]\ntype = 'image'\nsource = 'data.img'\nimage.fs = 'xfs'"},
 }
 
 // testRejectsQEMUOnlySettings runs the shared rejection and acceptance

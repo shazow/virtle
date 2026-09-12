@@ -19,7 +19,6 @@ import (
 	"github.com/shazow/virtle/vmnet"
 )
 
-// defaultNetworkMTU is what a network that does not report an MTU gets.
 const defaultNetworkMTU = 1500
 
 // networkAttachment is one launch's guest NIC on a vmnet.Network: the port,
@@ -70,7 +69,14 @@ func managedNetDevice(mf *manifest.Manifest) *manifest.QEMUNetDevice {
 // the identity it was suspended with.
 func (m *manager) attachNetwork(ctx context.Context, plan *launch.Plan) (*networkAttachment, error) {
 	dev := managedNetDevice(plan.Manifest)
+	var checkpoint *vmnet.NetworkState
+	if plan.ResumeState != nil {
+		checkpoint = plan.ResumeState.NetworkState
+	}
 	if dev == nil {
+		if checkpoint != nil {
+			return nil, fmt.Errorf("saved network state requires a virtle network device: %w", errors.ErrUnsupported)
+		}
 		return nil, nil
 	}
 	if m.network == nil {
@@ -94,6 +100,15 @@ func (m *manager) attachNetwork(ctx context.Context, plan *launch.Plan) (*networ
 			return nil, fmt.Errorf("saved network identity: %w", err)
 		}
 		opts.MAC, opts.Addr = mac, addr
+	}
+	if checkpoint != nil {
+		network, ok := m.network.(vmnet.StatefulNetwork)
+		if !ok {
+			return nil, fmt.Errorf("network %q cannot restore saved network state: %w", dev.ID, errors.ErrUnsupported)
+		}
+		if err := network.RestoreNetworkState(*checkpoint); err != nil {
+			return nil, fmt.Errorf("restore network %q state: %w", dev.ID, err)
+		}
 	}
 	mtu := networkMTU(m.network)
 	hostEnd, guestEnd, err := framePair()
@@ -119,11 +134,13 @@ func (m *manager) attachNetwork(ctx context.Context, plan *launch.Plan) (*networ
 	return a, nil
 }
 
-// networkMTU asks the network for its MTU when it reports one; the guest is
-// told the same through host_mtu.
+// networkMTU uses the network's positive MTU when reported. Networks that
+// only implement Attach, or leave their MTU unset, use Ethernet's default.
 func networkMTU(n vmnet.Network) int {
-	if r, ok := n.(interface{ MTU() int }); ok && r.MTU() > 0 {
-		return r.MTU()
+	if reporter, ok := n.(interface{ MTU() int }); ok {
+		if mtu := reporter.MTU(); mtu > 0 {
+			return mtu
+		}
 	}
 	return defaultNetworkMTU
 }

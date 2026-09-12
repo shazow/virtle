@@ -14,7 +14,6 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -365,8 +364,6 @@ func TestLoadOrCreateCAIsStable(t *testing.T) {
 	}
 }
 
-var _ = vmnet.ErrDenied
-
 func TestInspectInjectsValues(t *testing.T) {
 	got := &seen{}
 	upstream := httptest.NewTLSServer(got.handler(t))
@@ -703,36 +700,49 @@ func TestInspectedFlowsEndWithTheConnection(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			p := inspectingPolicy(t, tc.upstream, &events{})
 			client := guestClient(p, nil, tc.h2)
-			get := func() {
-				t.Helper()
-				resp, err := client.Get(tc.url)
+			finished := make(chan struct{}, 1)
+			transport := client.Transport.(*http.Transport)
+			t.Cleanup(transport.CloseIdleConnections)
+			transport.DialContext = func(ctx context.Context, _, addr string) (net.Conn, error) {
+				host, portStr, err := net.SplitHostPort(addr)
+				if err != nil {
+					return nil, err
+				}
+				port, _ := strconv.Atoi(portStr)
+				guest, server := net.Pipe()
+				t.Cleanup(func() { _ = guest.Close() })
+				go func() {
+					p.serveInspected(context.WithoutCancel(ctx), server, namedFlow(host, uint16(port)), "*.test")
+					finished <- struct{}{}
+				}()
+				return guest, nil
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			for range 4 {
+				req, err := http.NewRequestWithContext(ctx, http.MethodGet, tc.url, nil)
 				if err != nil {
 					t.Fatal(err)
 				}
-				_, _ = io.Copy(io.Discard, resp.Body)
+				resp, err := client.Do(req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, err = io.Copy(io.Discard, resp.Body)
 				resp.Body.Close()
+				if err != nil {
+					t.Fatal(err)
+				}
 				if resp.StatusCode != 200 {
 					t.Fatalf("status %d", resp.StatusCode)
 				}
-			}
-			settled := func(limit int) bool {
-				deadline := time.Now().Add(5 * time.Second)
-				for runtime.NumGoroutine() > limit && time.Now().Before(deadline) {
-					time.Sleep(10 * time.Millisecond)
+				// Wait for this connection's serving goroutine itself to end,
+				// independently of unrelated goroutines in the test process.
+				select {
+				case <-finished:
+				case <-ctx.Done():
+					t.Fatal("inspection server did not end with its connection")
 				}
-				return runtime.NumGoroutine() <= limit
-			}
-			get() // whatever starts lazily is in the baseline
-			settled(0)
-			baseline := runtime.NumGoroutine()
-			const requests = 20
-			for i := 0; i < requests; i++ {
-				get()
-			}
-			// Each connection's server ends with it; only goroutines still
-			// winding down may remain.
-			if !settled(baseline + requests/4) {
-				t.Fatalf("%d goroutines after %d inspected connections, %d before them: the server of a closed connection lives on", runtime.NumGoroutine(), requests, baseline)
 			}
 		})
 	}

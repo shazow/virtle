@@ -1,58 +1,39 @@
 # Networking
 
-virtle gives a guest one NIC. What is behind it is a choice made per backend,
-in Go or in the manifest's `[[networks]]` entry:
+Start with a port forward, then add destination rules, DNS, and credential
+injection as needed. Each TOML example replaces the networking and egress
+sections of an existing boot manifest; the guest needs virtio-net and a DHCP
+client for the `user` and `virtle` examples.
 
-| `type` | Go | Frames go to | Backends |
-| --- | --- | --- | --- |
-| `user` (default) | `qemu.User{}` | QEMU's built-in user networking (slirp): NAT and `hostfwd` port forwards inside QEMU | QEMU |
-| `virtle` | a `vmnet.Network` on `qemu.Backend.Network` | a network virtle runs in userspace: fixed addresses, DHCP and DNS, host-side dialing, forwards, and an egress policy | QEMU (Firecracker and Cloud Hypervisor follow with the guest daemon) |
-| `tap` | `qemu.TAP{Name}`, `firecracker.TAP{Name}`, `cloudhypervisor.TAP{Name}` | a host TAP device the host kernel networks; the operator owns addressing, NAT, and forwards | QEMU, Firecracker, Cloud Hypervisor |
+| Network type | Use it for | Backends |
+| --- | --- | --- |
+| `user` | QEMU NAT and local port forwards; the QEMU default | QEMU |
+| `virtle` | An unprivileged userspace network with egress policy and HTTP inspection | QEMU |
+| `tap` | Host-managed bridging, routing, and NAT | QEMU, Firecracker, Cloud Hypervisor |
 
-`user` stays the default until the virtle network reaches parity with it. On
-QEMU any other `type` still reaches QEMU verbatim as its `-netdev` backend,
-forwards and all, and `type = "tap"` without a `tap` name still leaves the
-device and its ifup/ifdown scripts to QEMU, as before virtle knew the types.
+QEMU can mix NIC types, with at most one `virtle` NIC per machine. Firecracker
+and Cloud Hypervisor start without a NIC unless a TAP network is configured.
+For a complete working guest, see the [networking recipe](recipes/networking/README.md).
 
-## The virtle network
+## Forward a guest port
 
-`vmnet/userspace` is an in-process network on gVisor's netstack. Every
-attached machine is a port on one Ethernet segment with a fixed IPv4 address
-and MAC (a static DHCP lease keyed by the MAC), the gateway serves DHCP and
-DNS, guests on the same network reach each other, and every guest-initiated
-TCP connection or UDP exchange is terminated in userspace and dialed on the
-host through the network's **egress**. Nothing touches the host's network
-configuration and no privilege is needed.
+Use QEMU's built-in NAT to give the guest outbound connectivity and expose a
+service on the host. This maps host `127.0.0.1:2222` to the guest's SSH port;
+QEMU handles the traffic, so virtle egress rules do not apply.
 
-```go
-network, err := userspace.New(userspace.Config{}) // 192.168.127.0/24, DNS forwarded to the host resolver
-defer network.Close()
-
-b := &qemu.Backend{Network: network}
-m, err := b.Start(ctx, &vm.Spec{
-	Kernel: vm.Kernel{Path: "bzImage", Initrd: "initrd"},
-	Ports:  []vm.Forward{{HostAddr: "127.0.0.1:2222", GuestAddr: ":22"}},
-})
-
-status, _ := m.(backend.StatusReporter).Status(ctx)
-conn, err := network.DialContext(ctx, "tcp", status.Networks[0].Addr+":22") // no forward needed
+```toml
+[[networks]]
+type = "user"
+forward = [{ host = "127.0.0.1:2222", guest = ":22" }]
 ```
 
-- `Status.Networks` lists the guest's NICs; on a virtle network the entry is
-  `Attached` and carries the guest's address, known before the guest boots.
-- `Spec.Ports` are exposed on the port instead of becoming slirp `hostfwd`
-  options. `Attach(vm.Forward)` and `Detach` on the machine expose and remove
-  forwards at runtime with no hotplug ports involved; `Detach` also removes a
-  forward given in `Spec.Ports`.
-- `network.DialContext` dials a guest by address or by machine name;
-  `network.Listen` serves a host service on the gateway address, which guests
-  reach without leaving the network.
-- A suspended machine keeps its address and MAC and re-attaches with them on
-  resume, so the lease its kernel holds stays valid.
-- The segment carries IPv4 only. The gateway answers ping; nothing forwards
-  ICMP to the outside.
+## Move traffic through virtle
 
-In a manifest:
+Switch to `virtle` when you need to control outgoing connections: its gVisor
+stack provides an IPv4 segment, fixed DHCP leases, gateway DNS, and host-dialed
+TCP/UDP flows without changing host networking. With no `[egress]` section,
+external traffic may reach the public internet; gateway services and peers on
+the same network remain reachable independently of egress policy.
 
 ```toml
 [[networks]]
@@ -60,161 +41,192 @@ type = "virtle"
 forward = [{ host = "127.0.0.1:2222", guest = ":22" }]
 ```
 
-The loader builds the network and hands it to the backend, which owns it:
-close the backend (it implements `io.Closer`) when its machines are done. The
-network logs through the backend's `Logger`.
+The guest can ping the gateway, but external ICMP is not forwarded.
 
-### Guest side
+## Restrict outgoing connections
 
-The guest needs a virtio-net driver and a DHCP client; the lease carries the
-address, netmask, router, DNS server (the gateway), the segment MTU, and the
-machine's name as the hostname. Nothing else is required.
-
-## Egress policy
-
-`vmnet/egress.Policy` is the standard egress: rules allow destinations by
-name pattern, CIDR, or address, with optional ports; everything else is
-refused before the guest sees a connection open (a TCP reset, an ICMP port
-unreachable for UDP). Address ranges no flow may reach, loopback, link-local
-(and the cloud metadata services there), multicast, are checked on what a
-name resolves to as well as on addresses dialed directly, so a rebinding name
-cannot get through. Every decision is an `Event` for a `Recorder`, or a
-structured log line by default.
-
-`Policy.Reach` says what a flow no rule matches may reach: nothing
-(`ReachRules`, the zero value, an allowlist), the public internet
-(`ReachInternet`), or anything the host can (`ReachAll`). `ReachInternet`
-refuses every address in `egress.LocalPrefixes`, the private, carrier-grade
-NAT, loopback, link-local, multicast, reserved, and documentation ranges of
-both families, and every address the host itself holds, on what a name
-resolves to as well as on addresses dialed directly. A rule is an explicit
-decision and is not held to that, so a rule can still name a host on the
-LAN under `ReachInternet`.
-
-Name rules need names. The network's fake-IP DNS mode
-(`userspace.DNSFakeIP`) answers every query with a synthetic address it
-remembers, the flow to that address carries the name the guest resolved, and
-the egress resolves it when it dials. The manifest loader selects that mode
-for every virtle network.
-
-```go
-policy := &egress.Policy{
-	Rules:  []egress.Rule{{Hosts: []string{"*.github.com"}, Ports: []int{443}}},
-	Logger: logger,
-}
-network, err := userspace.New(userspace.Config{DNS: userspace.DNSFakeIP, Egress: policy})
-```
-
-A guest's own `vm.Spec.Egress` only narrows the network's policy: its `Allow`
-list is intersected with the rules, its `Deny` list wins, and only the
-`Secrets` it names are issued to it. One network can therefore serve several
-sandboxes with different rules.
-
-### Inspection, injections, and secrets
-
-A rule with `Inspect` terminates the flow's TLS with a certificate minted
-from the policy's CA (`egress.LoadOrCreateCA`) and reverse-proxies the HTTP
-inside to the real destination, recording each request's method, path, and
-status. The guest must trust the CA certificate (`Policy.CAPEM`,
-`Policy.GuestFiles`). Only TCP is inspected: a UDP flow to a host an
-inspecting rule matches (QUIC, say) is refused, so the guest falls back to
-what the policy can see.
-
-Inspected requests can be decided on and rewritten as they pass. An
-`Injection` is a token the guest writes and a function that computes its
-replacement when a request carries it, scoped by host, method, path, and
-placement (header, query, path, body, including bodies that stream). The
-value is computed once per request, only when the token is present, and can
-come from anywhere the host can reach at that moment; an error leaves the
-token as it was, and an error wrapping `vmnet.ErrDenied` refuses the request
-with 403. `Policy.Admit` decides on every inspected request before any token
-is replaced, with the same refusal. Both decisions are on record.
-
-```go
-policy.Injections = []egress.Injection{
-	{Token: "$VIRTLE_RANDOM$", Value: func(context.Context, egress.Request) (string, error) {
-		return newNonce(), nil // a fresh value per request
-	}},
-	{Token: "$VIRTLE_REJECT$", Value: func(context.Context, egress.Request) (string, error) {
-		return "", vmnet.ErrDenied // a request carrying it is refused
-	}},
-}
-policy.Admit = func(ctx context.Context, r egress.Request) error {
-	return decide(ctx, r.Flow.Guest, r.Method, r.URL, r.Header) // nil, or an error wrapping vmnet.ErrDenied
-}
-```
-
-Secrets are named injections: a guest never holds the credential, only a
-token generated per name (`Policy.GuestEnv`), and an inspected request to
-one of the hosts the injection names has the token replaced on the way
-out. The token is inert anywhere else, a guest's `vm.Egress.Secrets` lists
-the names it may use, and the recorded path is the one the guest sent, so a
-value never reaches a log. The library ships no values of its own; a
-program using it brings them, as the e2e scenario in `tests/e2e` does.
-
-A virtle network with no `[egress]` section reaches the internet and nothing
-on the host or its networks. In the section, `reach` says what lies beyond
-its entries: `rules` (only the allow entries, an allowlist), `internet` (the
-default), or `all` (anything the host can reach). Allow entries read as an
-allowlist and may or may not be one, so with any of them `reach` is required
-and its absence is an error. Deny entries always apply, and allow entries
-can reach the host's networks under any reach.
+Set `reach = "rules"` to make the allow entries the complete set of external
+destinations; `internet` additionally allows public destinations, and `all`
+allows host-reachable destinations, subject to denies. An explicit `reach` is
+required with allow entries, which accept hostname patterns, IPs, or CIDRs and
+optional ports; deny entries win, including against addresses resolved from an
+allowed name.
 
 ```toml
 [[networks]]
 type = "virtle"
 
 [egress]
-reach = "rules"   # only the entries below; "internet" would make them exceptions and inspection points
+reach = "rules"
+
+[[egress.allow]]
+host = "*.github.com" # subdomains, including api.github.com; not github.com itself
+ports = [443]
+
+[[egress.deny]]
+host = "uploads.github.com"
+```
+
+Explicit allows can reach LAN destinations, but the policy's
+[default address denies](../vmnet/egress/egress.go) still block loopback,
+link-local, multicast, and other special ranges under every `reach` setting.
+
+## Resolve private names
+
+Use a specific DNS server when allowed destinations live in a private zone.
+Manifest-managed networks authorize DNS queries before forwarding them and
+return synthetic A addresses to preserve the hostname for connection policy;
+the host then resolves approved connections through the same upstream.
+
+```toml
+[[networks]]
+type = "virtle"
+
+[networks.dns]
+upstream = "10.0.0.53:53" # IP:port; IPv6 addresses use brackets
+
+[egress]
+reach = "rules"
+
+[[egress.allow]]
+host = "packages.corp.example"
+ports = [443] # DNS permission follows the name, independently of service ports
+```
+
+Omit `upstream` or use `"host"` to read nameservers from `/etc/resolv.conf`;
+this is wire DNS, without `/etc/hosts`, NSS, or search suffixes. An explicit
+upstream never falls back, and guest TCP/UDP port 53 traffic to destinations
+other than the gateway is blocked.
+
+## Use a credential without putting it in the guest
+
+Inspection terminates TLS with a local CA and proxies HTTP to the authorized
+host and port; matching UDP traffic, including QUIC, is refused. The guest
+receives a placeholder token whose value is substituted on the host only
+within the secret's host, method, path, and placement constraints.
+
+```toml
+[[networks]]
+type = "virtle"
+
+[egress]
+reach = "rules"
+# ca_dir defaults to <state_dir>/egress-ca
+
 [[egress.allow]]
 host = "api.github.com"
 ports = [443]
 inspect = true
 
-[[egress.allow]]
-host = "*.githubusercontent.com"
-
-[[egress.deny]]
-host = "uploads.github.com"
-
 [[egress.secrets]]
 name = "GITHUB_TOKEN"
-from = "{{.Env.GITHUB_TOKEN}}"   # a template; {{fromFile "path"}} reads a file. The value never appears in the manifest.
+from = "{{.Env.GITHUB_TOKEN}}" # set this in the host environment before launch
 hosts = ["api.github.com"]
+methods = ["GET"]
+paths = ["/user"]
 in = ["header"]
 ```
 
-The loader creates the CA under the state directory (`ca_dir` overrides it),
-gives the guest the CA certificate at `/etc/virtle/ca.pem` and its tokens at
-`/etc/virtle/secrets.env` (shell `export` lines), and lowers the same entries
-to `Spec.Egress`. Add the CA to the guest's trust store
-(`update-ca-certificates`, `SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`, ...) and
-source the tokens into the workload's environment.
-Injections other than secrets, and `Admit`, have no manifest form yet.
+The loader delivers the CA certificate and token environment file through the
+guest agent; the workload must trust that CA and source the tokens. In the guest:
 
-## Kernel TAP
+```sh
+. /etc/virtle/secrets.env
+curl --cacert /etc/virtle/ca.pem \
+  -H "Authorization: Bearer $GITHUB_TOKEN" \
+  https://api.github.com/user
+```
 
-`type = "tap"` with `tap = "tap0"` (or `qemu.TAP{Name: "tap0"}`,
-`firecracker.TAP{Name: "tap0"}`, `cloudhypervisor.TAP{Name: "tap0"}`) hands
-an existing host TAP device to the VMM. Cloud Hypervisor opens it and brings
-it up itself, which needs `CAP_NET_ADMIN` unless the device exists, is the
-user's, and is already up; with that capability it also creates a missing
-device. The host kernel provides the network: bridging, NAT,
-addressing, and forwards are the operator's, so `Spec.Ports` and
-`[[networks.forward]]` are rejected, and `Status.Networks` reports the NIC's
-MAC with no address. It is how Firecracker and Cloud Hypervisor are deployed
-elsewhere and the only NIC they offer today.
+Suspend/resume preserves the NIC's MAC and IP, synthetic DNS bindings, and
+issued tokens; established connections are lost, and current policy supplies
+the secret values and permissions. See the [network state contract](../vmnet/state.go).
 
-## Writing a network or an egress
+## Compose a network in Go
 
-`vmnet` holds the contracts. A `Link` moves Ethernet frames for one guest
-NIC; backends build them from what their VMM offers (`vmnet.QEMUStream` for
-QEMU's stream netdev; a guest agent's frame tunnel will be another). A
-`Network` is what
-links attach to and returns a `Port` with the guest's address and MAC. An
-`Egress` is one method, `DialFlow`, that returns the connection a guest flow
-is spliced to, or an error wrapping `vmnet.ErrDenied` to refuse it before it
-opens; `vmnet.Passthrough` allows everything and `vmnet.DenyAll` nothing. A
-`Flow` carries the guest's name, its address, the destination as the guest
-addressed it, the name it resolved when the network knows it, and the guest's
-own `vm.Egress`.
+Supply a `userspace.Network` to a QEMU backend and keep it open until its
+machines exit; reuse it across backends to put guests on the same segment.
+Unlike manifests, `userspace.Config{}` defaults to passthrough egress and real
+DNS answers, so select `DNSFakeIP` for hostname rules and an explicit policy
+for restrictions (`egress.Policy{}` denies all external flows).
+
+```go
+// Inside a function with ctx context.Context and kernel vm.Kernel, returning error.
+policy := &egress.Policy{Reach: egress.ReachInternet}
+network, err := userspace.New(userspace.Config{
+	DNS:    userspace.DNSFakeIP,
+	Egress: policy,
+})
+if err != nil {
+	return err
+}
+defer network.Close()
+
+b := &qemu.Backend{HostName: "worker", Network: network}
+m, err := b.Start(ctx, &vm.Spec{Kernel: kernel})
+if err != nil {
+	return err
+}
+defer m.Kill()
+return m.Wait(ctx)
+```
+
+While the guest is running, `network.DialContext(ctx, "tcp", "worker:22")`
+reaches its SSH service directly, and `network.Listen("tcp", ":8080")` exposes
+a host service at `network.Gateway()`. A guest's `vm.Spec.Egress` can only narrow
+the shared policy; when using `manifest.Load` instead, close the returned
+backend (`io.Closer`), which owns its network.
+
+## Decide inspected requests in Go
+
+Add a per-request decision when destination rules are too coarse:
+`Policy.Admit` runs before token replacement, and `vmnet.ErrDenied` produces
+HTTP 403. Use this policy in the Go example above to allow only GET and HEAD
+requests to `api.github.com`:
+
+```go
+ca, err := egress.LoadOrCreateCA("./egress-ca")
+if err != nil {
+	return err
+}
+policy := &egress.Policy{
+	CA: ca,
+	Rules: []egress.Rule{{
+		Hosts: []string{"api.github.com"}, Ports: []int{443}, Inspect: true,
+	}},
+	Admit: func(_ context.Context, r egress.Request) error {
+		switch r.Method {
+		case "GET", "HEAD":
+			return nil
+		default:
+			return vmnet.ErrDenied
+		}
+	},
+}
+```
+
+Before `Start`, append `policy.GuestFiles()` to `vm.Spec.Files` and set
+`qemu.Backend.RemoteControl` to `qemu.QGA{}` to deliver the CA certificate; the
+guest must run the agent and trust the certificate. See
+[`egress.Policy`](../vmnet/egress/egress.go) and
+[`egress.Injection`](../vmnet/egress/inject.go) for request hooks and dynamic values,
+or [`vmnet`](../vmnet/vmnet.go) to implement a network or egress.
+
+## Connect to a host TAP network
+
+Use TAP when the guest should join a network managed by the host, or when
+running Firecracker or Cloud Hypervisor. Prepare an existing TAP device owned
+by the VMM user and bring it up; the operator supplies guest addressing,
+bridging or routing, NAT, and any port forwards.
+
+```toml
+backend = "cloud-hypervisor"
+
+[[networks]]
+type = "tap"
+tap = "tap0"
+```
+
+TAP networks reject manifest `forward` entries and Go `vm.Spec.Ports`; use
+host networking tools for those mappings. See the
+[Cloud Hypervisor setup](cloud-hypervisor.md#networking) and
+[Firecracker guide](firecracker.md) for backend requirements.

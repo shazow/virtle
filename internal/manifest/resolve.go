@@ -24,6 +24,8 @@ func (m *Manifest) ResolvedPersistenceDirectories() []string {
 	return dirs
 }
 
+// ResolvedPersistenceBaseDir resolves BaseDir against the working directory,
+// using the working directory itself when BaseDir is empty.
 func (m *Manifest) ResolvedPersistenceBaseDir() string {
 	if m.Persistence.BaseDir == "" {
 		return m.resolvePath(".")
@@ -31,6 +33,8 @@ func (m *Manifest) ResolvedPersistenceBaseDir() string {
 	return m.resolvePath(m.Persistence.BaseDir)
 }
 
+// ResolvedPersistenceStateDir resolves the persistent state location, falling
+// back to BaseDir when StateDir is empty. RuntimeDir is resolved separately.
 func (m *Manifest) ResolvedPersistenceStateDir() string {
 	if m.Persistence.StateDir != "" {
 		return m.resolvePath(m.Persistence.StateDir)

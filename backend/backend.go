@@ -25,9 +25,8 @@ type Backend interface {
 	Start(ctx context.Context, spec *vm.Spec) (Machine, error)
 }
 
-// Machine is a virtual machine started by a Backend. It deliberately says
-// nothing about processes, sockets, or protocols, so exec'd (QEMU) and
-// in-process (libkrun) backends satisfy it equally.
+// Machine is a virtual machine started by a Backend. Implementations own
+// the machine's runtime resources and release them when it exits.
 type Machine interface {
 	// Done closes after the machine exits and its runtime state is released.
 	Done() <-chan struct{}
@@ -41,10 +40,8 @@ type Machine interface {
 
 	// RemoteControl returns guest control for this machine, wired up by
 	// the backend, or an error wrapping errors.ErrUnsupported when the VM
-	// has no reachable guest agent. Most virtle functionality is built on
-	// the expectation that this succeeds. Whether the backend wires guest
-	// control eagerly at Start or lazily on first call is an implementation
-	// detail behind the backend's constructor.
+	// has no guest-control transport. A successful call does not imply that
+	// the guest agent is ready; Guest operations may wait for it to connect.
 	RemoteControl() (vm.Guest, error)
 }
 
@@ -140,10 +137,9 @@ type Suspender interface {
 type Resumer interface {
 	Resume(ctx context.Context, spec *vm.Spec) (Machine, error)
 
-	// StateVersion reports the backend's suspend-state version token
-	// (e.g. "qemu-v1"). Saved state is stamped with it and compared
-	// before restoring; only an exact match is resumable, since the
-	// saved state is a backend-owned format.
+	// StateVersion reports the backend's suspend-state format identifier.
+	// Callers can inspect it without starting or resuming a machine. The
+	// backend also checks saved state against this version during Resume.
 	StateVersion() string
 }
 
@@ -166,9 +162,8 @@ type DeviceAttacher interface {
 // machines offer it when their console is set to print; without one Console
 // returns an error wrapping errors.ErrUnsupported. The Term replays the
 // recent console output before live output, so a session attached after
-// boot still sees the boot log and readiness lines, and its Resize and Wait
-// report errors.ErrUnsupported (see vm.Term). Closing it leaves the machine
-// running.
+// boot still sees the boot log and readiness lines. Closing it leaves the
+// machine running.
 //
 // A session must keep reading: one whose reader falls 1 MiB behind the
 // guest is dropped rather than stalling the console. Its Read ends with an

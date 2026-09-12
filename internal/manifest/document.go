@@ -46,7 +46,7 @@ type Document struct {
 	VSock           VSockInput           `json:"vsock,omitempty" toml:"vsock" jsonschema:"Allowed runtime vsock CID allocation range."`
 	WriteFiles      []WriteFileInput     `json:"write_files,omitempty" toml:"write_files" jsonschema:"Files copied into or synchronized with the guest through qemu guest agent."`
 	Notifications   NotificationsInput   `json:"notifications,omitempty" toml:"notifications" jsonschema:"Host command hooks invoked for selected runtime notification states."`
-	Run             []RunInput           `json:"run,omitempty" toml:"run" jsonschema:"Host-side processes started before QEMU and stopped during teardown."`
+	Run             []RunInput           `json:"run,omitempty" toml:"run" jsonschema:"Host-side processes started before the virtual machine and stopped during teardown."`
 	Hotplug         HotplugInput         `json:"hotplug,omitempty" toml:"hotplug" jsonschema:"Devices that may be attached or detached after launch."`
 	Egress          *EgressInput         `json:"egress,omitempty" toml:"egress" jsonschema:"What the guest may reach through a network of type virtle, and the secrets it uses without holding them. Without this section such a network reaches the internet and nothing on the host or its networks."`
 }
@@ -234,7 +234,7 @@ func filterMounts[T MountEntry](mounts MountsInput) []T {
 }
 
 type MountInput struct {
-	Tag        string `json:"tag" toml:"tag" jsonschema:"Stable QEMU mount tag or device identifier."`
+	Tag        string `json:"tag" toml:"tag" jsonschema:"Stable mount tag or device identifier."`
 	SourcePath string `json:"source,omitempty" toml:"source" jsonschema:"Host path or image path backing this mount."`
 	ReadOnly   bool   `json:"read_only,omitempty" toml:"read_only" jsonschema:"Attach the mount or image read-only."`
 }
@@ -315,6 +315,12 @@ type NetworkInput struct {
 	MAC     string        `json:"mac,omitempty" toml:"mac" jsonschema:"Guest network interface MAC address; a virtle network allocates one when omitted."`
 	Tap     string        `json:"tap,omitempty" toml:"tap" jsonschema:"Host TAP device name, for type tap; QEMU picks and sets up the device itself when omitted."`
 	Forward []ForwardPort `json:"forward,omitempty" toml:"forward" jsonschema:"Port forwarding rules for this network."`
+	DNS     *DNSInput     `json:"dns,omitempty" toml:"dns" jsonschema:"DNS upstream for a virtle network; not supported on other network types or hotplugged networks."`
+}
+
+// DNSInput selects the upstream used by a virtle network's DNS service.
+type DNSInput struct {
+	Upstream string `json:"upstream,omitempty" toml:"upstream" jsonschema:"DNS upstream: host (the default) uses the host's configured DNS servers; an IP address with a port selects one server, such as 127.0.0.1:53 or [::1]:53."`
 }
 
 type ForwardPort struct {

@@ -1,6 +1,7 @@
 package egress
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -14,6 +15,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 )
 
@@ -33,22 +35,70 @@ const (
 )
 
 // LoadOrCreateCA returns the certificate authority in dir, creating one
-// (ca.pem and ca-key.pem, readable by the owner only) on first use. Guests
-// whose traffic a Policy inspects must trust ca.pem; see Policy.CAPEM.
+// (ca.pem and ca-key.pem, in a private directory) on first use. Concurrent
+// callers, including other processes, share one CA. The private key file
+// also holds its certificate, so an interrupted first publication can be
+// completed without changing the CA. Guests trust ca.pem; see Policy.CAPEM.
 func LoadOrCreateCA(dir string) (tls.Certificate, error) {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return tls.Certificate{}, fmt.Errorf("egress: create CA directory: %w", err)
+	}
+	// Keep the lock file: unlinking it would let another caller lock a
+	// different inode while existing waiters still hold this one.
+	lock, err := os.OpenFile(filepath.Join(dir, ".lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("egress: open CA lock: %w", err)
+	}
+	defer lock.Close()
+	for {
+		err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX)
+		if !errors.Is(err, syscall.EINTR) {
+			break
+		}
+	}
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("egress: lock CA: %w", err)
+	}
 	certPath, keyPath := filepath.Join(dir, caCertFile), filepath.Join(dir, caKeyFile)
-	cert, err := tls.LoadX509KeyPair(certPath, keyPath)
+	keyPEM, err := os.ReadFile(keyPath)
 	if err == nil {
-		if cert.Leaf, err = x509.ParseCertificate(cert.Certificate[0]); err != nil {
-			return tls.Certificate{}, fmt.Errorf("egress: parse %s: %w", certPath, err)
+		certPEM := caBundleCertificate(keyPEM)
+		if len(certPEM) == 0 {
+			// Older writers stored the certificate and key separately. Keep
+			// their identity and reject incomplete pairs instead of replacing
+			// a CA that a guest may already trust.
+			certPEM, err = os.ReadFile(certPath)
+			if err != nil {
+				return tls.Certificate{}, fmt.Errorf("egress: load existing CA certificate: %w", err)
+			}
+		}
+		cert, err := tls.X509KeyPair(certPEM, keyPEM)
+		if err != nil {
+			return tls.Certificate{}, fmt.Errorf("egress: load CA from %s: %w", dir, err)
+		}
+		cert.Leaf, err = x509.ParseCertificate(cert.Certificate[0])
+		if err != nil {
+			return tls.Certificate{}, fmt.Errorf("egress: parse CA certificate: %w", err)
+		}
+		published, err := os.ReadFile(certPath)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return tls.Certificate{}, fmt.Errorf("egress: read CA certificate: %w", err)
+		}
+		if !bytes.Equal(published, certPEM) {
+			if err := writeCAFile(certPath, certPEM, 0o644); err != nil {
+				return tls.Certificate{}, fmt.Errorf("egress: publish CA certificate: %w", err)
+			}
 		}
 		return cert, nil
 	}
 	if !errors.Is(err, os.ErrNotExist) {
 		return tls.Certificate{}, fmt.Errorf("egress: load CA from %s: %w", dir, err)
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return tls.Certificate{}, fmt.Errorf("egress: create CA directory: %w", err)
+	if _, err := os.Stat(certPath); !errors.Is(err, os.ErrNotExist) {
+		if err == nil {
+			err = errors.New("certificate exists without its private key")
+		}
+		return tls.Certificate{}, fmt.Errorf("egress: load CA from %s: %w", dir, err)
 	}
 	key, serial, err := newKeyAndSerial()
 	if err != nil {
@@ -75,11 +125,13 @@ func LoadOrCreateCA(dir string) (tls.Certificate, error) {
 		return tls.Certificate{}, err
 	}
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
-	if err := os.WriteFile(keyPath, keyPEM, 0o600); err != nil {
+	keyPEM = pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+	// The atomically replaced bundle is authoritative. ca.pem is a public
+	// copy that a later caller can finish publishing after an interruption.
+	if err := writeCAFile(keyPath, append(keyPEM, certPEM...), 0o600); err != nil {
 		return tls.Certificate{}, fmt.Errorf("egress: write CA key: %w", err)
 	}
-	if err := os.WriteFile(certPath, certPEM, 0o644); err != nil {
+	if err := writeCAFile(certPath, certPEM, 0o644); err != nil {
 		return tls.Certificate{}, fmt.Errorf("egress: write CA certificate: %w", err)
 	}
 	leaf, err := x509.ParseCertificate(der)
@@ -87,6 +139,52 @@ func LoadOrCreateCA(dir string) (tls.Certificate, error) {
 		return tls.Certificate{}, err
 	}
 	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key, Leaf: leaf}, nil
+}
+
+// caBundleCertificate extracts certificate blocks from a private key bundle.
+func caBundleCertificate(data []byte) []byte {
+	var certificates []byte
+	for {
+		block, rest := pem.Decode(data)
+		if block == nil {
+			return certificates
+		}
+		if block.Type == "CERTIFICATE" {
+			certificates = append(certificates, pem.EncodeToMemory(block)...)
+		}
+		data = rest
+	}
+}
+
+func writeCAFile(path string, data []byte, mode os.FileMode) error {
+	dir := filepath.Dir(path)
+	f, err := os.CreateTemp(dir, ".ca-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	defer f.Close()
+	if err := f.Chmod(mode); err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(f.Name(), path); err != nil {
+		return err
+	}
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
 }
 
 // newKeyAndSerial makes the key pair and the serial number of a certificate.

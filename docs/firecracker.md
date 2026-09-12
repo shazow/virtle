@@ -91,8 +91,8 @@ features it cannot honor fail `Start` with an error wrapping
 
 | Feature | Status |
 | --- | --- |
-| Guest control (`Machine.RemoteControl`), SSH, guest files, workspace mounts | No guest agent transport yet; see the [guest daemon design](https://github.com/shazow/virtle/pull/67). |
-| Port forwards, vsock, virtle networks | The guest NIC is a host TAP device (`[[networks]] type = "tap"`, `firecracker.TAP`) that the host kernel networks; the operator owns its addressing and forwards. Frames over vsock into a virtle network follow with the guest daemon. |
+| Guest control (`Machine.RemoteControl`), SSH, guest files, workspace mounts | The backend has no guest control transport. |
+| Port forwards, vsock, virtle networks | The guest NIC is a host TAP device (`[[networks]] type = "tap"`, `firecracker.TAP`) that the host kernel networks; the operator owns its addressing and forwards. |
 | virtiofs and 9p shares, qcow2, disk cache/serial options | Raw images only, created on demand as above. [Cloud Hypervisor](cloud-hypervisor.md) has virtio-fs shares, qcow2 images, and the disk options. |
 | Interactive console (`serial = "console"`) | Only `off` and `print`. |
 | Suspend/resume, balloon, hotplug | Capability interfaces are not implemented. |

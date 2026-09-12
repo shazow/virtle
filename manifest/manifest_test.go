@@ -249,9 +249,8 @@ hosts = ["api.github.com"]
 	}
 	qb := b.(*qemu.Backend)
 	defer qb.Close()
-	network, ok := qb.Network.(*userspace.Network)
-	if !ok || network.DNS() != userspace.DNSFakeIP {
-		t.Fatalf("network = %T; a policy needs the fake-IP DNS mode", qb.Network)
+	if network, ok := qb.Network.(*userspace.Network); !ok || network.DNS() != userspace.DNSFakeIP {
+		t.Fatalf("network = %T; want a userspace network with synthetic DNS for name policies", qb.Network)
 	}
 	if spec.Egress == nil || len(spec.Egress.Allow) != 1 || spec.Egress.Allow[0].Host != "api.github.com" || len(spec.Egress.Deny) != 1 || len(spec.Egress.Secrets) != 1 || spec.Egress.Secrets[0] != "GITHUB_TOKEN" {
 		t.Fatalf("Spec.Egress = %+v", spec.Egress)
@@ -290,11 +289,11 @@ func TestLoadVirtleNetworkReachesTheInternetByDefault(t *testing.T) {
 	}
 	qb := b.(*qemu.Backend)
 	defer qb.Close()
-	// The policy is there (the network resolves names for it), the guest
-	// has nothing of its own to add to it, and gets no files.
 	if network := qb.Network.(*userspace.Network); network.DNS() != userspace.DNSFakeIP {
-		t.Fatalf("DNS mode = %s; a virtle network carries a policy by default", network.DNS())
+		t.Fatalf("default managed network DNS = %s, want synthetic DNS for its policy", network.DNS())
 	}
+	// The network carries the policy, the guest
+	// has nothing of its own to add to it, and gets no files.
 	if spec.Egress != nil || len(spec.Files) != 0 {
 		t.Fatalf("Egress = %+v, Files = %+v; want the network's default policy and no files", spec.Egress, spec.Files)
 	}
@@ -316,5 +315,27 @@ func TestLoadVirtleNetworkReachesTheInternetByDefault(t *testing.T) {
 	// manifest has to say.
 	if _, _, err := Load(strings.NewReader(virtleNetworkManifest + "\n[egress]\n[[egress.allow]]\nhost = \"api.github.com\"\n")); err == nil || !strings.Contains(err.Error(), "reach is required") {
 		t.Fatalf("allow entries without a reach loaded: %v", err)
+	}
+}
+
+func TestLoadVirtleNetworkWithDNSUpstream(t *testing.T) {
+	for name, input := range map[string]string{
+		"toml": "[kernel]\npath = 'kernel'\n[[networks]]\ntype = 'virtle'\n[networks.dns]\nupstream = '192.0.2.1:5353'\n",
+		"json": `{"kernel":{"path":"kernel"},"networks":[{"type":"virtle","dns":{"upstream":"[2001:db8::1]:5353"}}]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, b, err := Load(strings.NewReader(input))
+			if err != nil {
+				t.Fatal(err)
+			}
+			qb, ok := b.(*qemu.Backend)
+			if !ok {
+				t.Fatalf("backend = %T, want QEMU", b)
+			}
+			defer qb.Close()
+			if _, ok := qb.Network.(*userspace.Network); !ok {
+				t.Fatalf("network = %T, want userspace network", qb.Network)
+			}
+		})
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"sync"
 	"syscall"
@@ -201,7 +202,8 @@ func Start(ctx context.Context, l Launch) (*Machine, error) {
 	case l.ConsoleInteractive:
 		// The guest's serial port is the process's own terminal: the VMM
 		// reads what the user types and prints where ConsoleOutput points.
-		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, l.ConsoleOutput, io.MultiWriter(m.diagnostics, l.ConsoleOutput)
+		serialized := &lockedWriter{writer: l.ConsoleOutput}
+		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, serialized, io.MultiWriter(m.diagnostics, serialized)
 	case l.Console:
 		// The guest's serial port rides the VMM's standard streams: the hub
 		// prints it, retains it, and serves Machine.Console sessions. The
@@ -615,8 +617,7 @@ func (m *Machine) RemoteControl() (vm.Guest, error) {
 // Console implements backend.ConsoleProvider: a vm.Term over the guest's
 // serial port, available when Launch.Console was set. The session replays
 // the recent console output first, so one attached after boot still sees
-// what the guest printed; its Resize and Wait report errors.ErrUnsupported.
-// Closing it leaves the machine running.
+// what the guest printed. Closing it leaves the machine running.
 func (m *Machine) Console(ctx context.Context) (vm.Term, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -635,7 +636,9 @@ func (m *Machine) Status(ctx context.Context) (backend.Status, error) {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.status, nil
+	status := m.status
+	status.Networks = slices.Clone(status.Networks)
+	return status, nil
 }
 
 var (

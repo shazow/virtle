@@ -9,10 +9,85 @@ import (
 	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
+	"gvisor.dev/gvisor/pkg/tcpip/link/channel"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
+	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
 
+	"github.com/shazow/virtle/vm"
 	"github.com/shazow/virtle/vmnet"
 )
+
+// networkEndpoint observes TCP endpoint publication before an outgoing
+// packet can be dropped. gVisor registers a passive TCP endpoint before
+// writing SYN-ACK, but CreateEndpoint returns only after the handshake.
+// This signal lets port teardown abort that endpoint without waiting on
+// the guest or racing an endpoint that has not been registered yet.
+type networkEndpoint struct {
+	*channel.Endpoint
+	n *Network
+}
+
+func (e *networkEndpoint) WritePackets(pkts stack.PacketBufferList) (int, tcpip.Error) {
+	hasDNS := false
+	for _, pkt := range pkts.AsSlice() {
+		if gatewayDNSReply(e.n, pkt) {
+			hasDNS = true
+		}
+		if pkt.TransportProtocolNumber != tcp.ProtocolNumber {
+			continue
+		}
+		h := header.TCP(pkt.TransportHeader().Slice())
+		if !h.Flags().Contains(header.TCPFlagSyn | header.TCPFlagAck) {
+			continue
+		}
+		ip := pkt.Network()
+		p := e.n.portByAddr(netipAddr(ip.DestinationAddress()))
+		if p == nil {
+			continue
+		}
+		p.mu.Lock()
+		for f := range p.flows {
+			if f.flow.Proto == vm.TCP && f.id.LocalAddress == ip.SourceAddress() && f.id.LocalPort == h.SourcePort() && f.id.RemotePort == h.DestinationPort() {
+				f.markPublished()
+			}
+		}
+		p.mu.Unlock()
+	}
+	if hasDNS {
+		written := 0
+		for _, pkt := range pkts.AsSlice() {
+			if gatewayDNSReply(e.n, pkt) {
+				// UDP WriteTo holds the owner's ingress barrier. Hand its
+				// reply directly to that port: the shared switch queue could
+				// otherwise deliver it after its address and MAC are reused.
+				if p := e.n.portByAddr(netipAddr(pkt.Network().DestinationAddress())); p != nil {
+					view := pkt.ToView()
+					p.enqueue(slices.Clone(view.AsSlice()))
+					view.Release()
+				}
+				written++
+				continue
+			}
+			var one stack.PacketBufferList
+			one.PushBack(pkt)
+			n, err := e.Endpoint.WritePackets(one)
+			written += n
+			if err != nil || n == 0 {
+				return written, err
+			}
+		}
+		return written, nil
+	}
+	return e.Endpoint.WritePackets(pkts)
+}
+
+func gatewayDNSReply(n *Network, pkt *stack.PacketBuffer) bool {
+	return pkt.NetworkProtocolNumber == header.IPv4ProtocolNumber &&
+		pkt.TransportProtocolNumber == header.UDPProtocolNumber &&
+		len(pkt.TransportHeader().Slice()) >= header.UDPMinimumSize &&
+		pkt.Network().SourceAddress() == n.gateway4 &&
+		header.UDP(pkt.TransportHeader().Slice()).SourcePort() == dnsPort
+}
 
 // The switch moves Ethernet frames between the stack's link endpoint and the
 // attached ports. Every port's MAC is known at attach, so there is no
@@ -59,6 +134,9 @@ func (n *Network) fromStack(frame []byte) {
 // come from the port's own MAC and address are dropped, so a guest cannot
 // speak for another one or for the gateway.
 func (n *Network) fromGuest(p *port, frame []byte) {
+	if p.isClosed() {
+		return
+	}
 	if len(frame) < header.EthernetMinimumSize {
 		return
 	}
@@ -72,6 +150,40 @@ func (n *Network) fromGuest(p *port, frame []byte) {
 		p.rejected.Add(1)
 		p.warnOnce(&p.warnedSpoof, "dropping frames from the guest with a source that is not its own")
 		return
+	}
+	if eth.Type() == header.IPv4ProtocolNumber {
+		ip := header.IPv4(frame[header.EthernetMinimumSize:])
+		if ip.DestinationAddress() == n.gateway4 {
+			// Gateway services must not inherit partial datagrams across
+			// address reuse. DNS can use TCP for messages above the MTU.
+			if (ip.Protocol() == uint8(header.TCPProtocolNumber) || ip.Protocol() == uint8(header.UDPProtocolNumber)) &&
+				(ip.FragmentOffset() != 0 || ip.Flags()&header.IPv4FlagMoreFragments != 0) {
+				p.rejected.Add(1)
+				return
+			}
+		}
+		// TODO: Bind external UDP admission and fragment reassembly to the
+		// originating attachment without holding ingress across Egress dialing.
+		if ip.DestinationAddress() == n.gateway4 || ip.Protocol() == uint8(header.TCPProtocolNumber) {
+			// TCP selects its port synchronously, then dispatches the SYN
+			// handler asynchronously. Keep that selection within the
+			// attachment's lifetime, including external destinations.
+			p.ingress.Lock()
+			defer p.ingress.Unlock()
+			if p.isClosed() {
+				return
+			}
+		}
+		// Drop the first fragment as well as whole packets; without it a
+		// peer cannot reassemble a DNS query that bypasses the gateway.
+		if ip.FragmentOffset() == 0 && ip.DestinationAddress() != n.gateway4 &&
+			(ip.Protocol() == uint8(header.TCPProtocolNumber) || ip.Protocol() == uint8(header.UDPProtocolNumber)) {
+			payload := ip.Payload()
+			if len(payload) >= 4 && uint16(payload[2])<<8|uint16(payload[3]) == dnsPort {
+				p.rejected.Add(1)
+				return
+			}
+		}
 	}
 	dst := eth.DestinationAddress()
 	switch {

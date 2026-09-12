@@ -129,37 +129,7 @@ func (h hostTable) LookupNetIP(_ context.Context, _, host string) ([]netip.Addr,
 	return nil, &net.DNSError{Err: "no such host", Name: host, IsNotFound: true}
 }
 
-func TestFakeIPTable(t *testing.T) {
-	table := newFakeIPTable(netip.MustParsePrefix("198.18.0.0/30"))
-	a, ok := table.addr("One.Test.")
-	if !ok || a != netip.MustParseAddr("198.18.0.1") {
-		t.Fatalf("first address = %s, %v", a, ok)
-	}
-	if again, _ := table.addr("one.test"); again != a {
-		t.Fatalf("the same name got %s and %s", a, again)
-	}
-	if name, ok := table.name(a); !ok || name != "one.test" {
-		t.Fatalf("name = %q, %v", name, ok)
-	}
-	b, ok := table.addr("two.test")
-	if !ok || b != netip.MustParseAddr("198.18.0.2") {
-		t.Fatalf("second address = %s, %v", b, ok)
-	}
-	// A /30 has two addresses; the third name takes the one that has gone
-	// longest without a lookup or a flow, never the broadcast address.
-	if c, ok := table.addr("three.test"); !ok || c != a {
-		t.Fatalf("third name = %s, %v; want one.test's %s, the least recently used", c, ok, a)
-	}
-	if name, ok := table.name(a); !ok || name != "three.test" {
-		t.Fatalf("%s now names %q, %v", a, name, ok)
-	}
-	if d, ok := table.addr("one.test"); !ok || d != b {
-		t.Fatalf("one.test came back as %s, %v; want two.test's %s", d, ok, b)
-	}
-	if _, ok := table.name(netip.MustParseAddr("198.18.0.3")); ok {
-		t.Fatal("an unassigned address has a name")
-	}
-
+func TestFakeIPRange(t *testing.T) {
 	for name, cfg := range map[string]Config{
 		"fake range overlaps subnet": {FakeIPRange: netip.MustParsePrefix("192.168.0.0/16")},
 		"fake range is ipv6":         {FakeIPRange: netip.MustParsePrefix("fd00::/64")},

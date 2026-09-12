@@ -188,6 +188,9 @@ func tapNetworks(backend string, networks, defaults []NetworkInput) ([]TapNetwor
 	result := make([]TapNetwork, 0, len(networks))
 	ids := make(map[string]bool, len(networks))
 	for i, network := range networks {
+		if network.DNS != nil {
+			return nil, unsupportedBy(backend, "manifest.networks[%d].dns requires a virtle network", i)
+		}
 		switch network.Type {
 		case NetworkTypeTAP:
 		case NetworkTypeVirtle:

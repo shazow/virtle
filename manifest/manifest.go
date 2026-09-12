@@ -91,14 +91,14 @@ func LoadDocument(doc imanifest.Document) (*vm.Spec, backend.Backend, error) {
 	// The backend is built after the network, so the network's logger looks
 	// the backend up when it logs rather than capturing it here.
 	var loaded *qemu.Backend
-	if slices.ContainsFunc(mf.QEMU.Devices.Network, func(d imanifest.QEMUNetDevice) bool { return d.Managed }) {
+	if i := slices.IndexFunc(mf.QEMU.Devices.Network, func(d imanifest.QEMUNetDevice) bool { return d.Managed }); i >= 0 {
 		logger := slog.New(delegatingHandler{get: func() slog.Handler {
 			if loaded != nil && loaded.Logger != nil {
 				return loaded.Logger.Handler()
 			}
 			return slog.DiscardHandler
 		}})
-		netCfg := userspace.Config{Logger: logger.With("package", "vmnet")}
+		netCfg := userspace.Config{Logger: logger.With("package", "vmnet"), DNSUpstream: mf.QEMU.Devices.Network[i].DNSUpstream}
 		if mf.Egress != nil {
 			policy, err := egressPolicy(mf.Egress, logger.With("package", "egress"))
 			if err != nil {

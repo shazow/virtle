@@ -9,17 +9,22 @@ compact before/after examples.
 
 ## 2026-09-12
 
-- Virtle networks answer DNS locally with synthetic A records, empty AAAA
-  records, and PTR records for known synthetic addresses. Queries requiring
-  external resolution, including TXT, CNAME, MX, NS, and SRV, are refused;
-  the egress resolves names only after approving a connection.
+- Virtle networks authorize DNS queries through their egress policy and
+  proxy them to host DNS by default. `[networks.dns].upstream` selects an
+  explicit IP:port for both DNS queries and outbound name resolution.
+  Guests retain synthetic A addresses, empty AAAA answers, and local
+  synthetic PTR records. Other ordinary record types are proxied; query
+  decisions and exchanges are logged, and direct guest DNS outside the
+  gateway is blocked.
 - Egress address and CIDR deny entries also apply after DNS resolution, and
   the default denied ranges include the IPv6 unspecified address. Inspected
   HTTP requests must match the authorized host and port before admission
   hooks or secret injection run.
 - Closing a network port ends its outgoing flows before releasing its
   address, so a replacement guest establishes connections under its own
-  policy.
+  policy. DNS requests are also bound to their originating port. Fragmented
+  TCP and UDP packets to the gateway are rejected; large DNS messages can
+  use TCP.
 
 ### Library changes
 
@@ -27,6 +32,12 @@ compact before/after examples.
   `Network.DNS` are removed: every userspace network uses synthetic DNS.
   Replace `userspace.Config{DNS: userspace.DNSFakeIP, Egress: policy}` with
   `userspace.Config{Egress: policy}`. `FakeIPRange` remains configurable.
+- `userspace.Config.DNSUpstream` selects `"host"` (the default) or an
+  explicit resolver IP:port. Custom egress implementations must implement
+  `vmnet.DNSAuthorizer` to permit upstream DNS queries. The standard Policy,
+  Passthrough, and DenyAll implementations support it; query filtering
+  follows hostname permissions, with service ports checked at connection
+  time. An explicit `Policy.Resolver` remains a Go-only lookup override.
 - `egress.Request.Host` exposes the validated HTTP authority to admission
   and injection callbacks.
 - Cloud Hypervisor's interactive console serializes writes to

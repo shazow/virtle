@@ -72,6 +72,12 @@ func TestManifestSchemaKeepsSemanticFeatures(t *testing.T) {
 		t.Fatalf("required kernel path must not carry a default, got %s", kernel.Properties["path"].Default)
 	}
 
+	// Network DNS configuration is inferred as a nested object.
+	dns := schema.Properties["networks"].Items.Properties["dns"]
+	if dns == nil || !slices.Contains(dns.Types, "object") || dns.Properties["upstream"] == nil || dns.Properties["upstream"].Type != "string" {
+		t.Fatalf("network DNS schema = %+v, want an object with a string upstream", dns)
+	}
+
 	// The mount tagged union keeps its three variants.
 	mounts := schema.Properties["mounts"]
 	if mounts.Type != "array" || mounts.Items == nil || len(mounts.Items.OneOf) != 3 {
@@ -95,18 +101,20 @@ func TestManifestSchemaValidatesDocuments(t *testing.T) {
 		"kernel": {"path": "/boot/vmlinuz", "initrd_path": "/boot/initrd"},
 		"machine": {"memory": 1024},
 		"qemu": {"guest_default_timeout": "30s"},
-		"mounts": [{"type": "image", "source": "/tmp/root.img"}]
+		"mounts": [{"type": "image", "source": "/tmp/root.img"}],
+		"networks": [{"type": "virtle", "dns": {"upstream": "127.0.0.1:53"}}]
 	}`)
 	if err := resolved.Validate(valid); err != nil {
 		t.Fatalf("valid manifest should pass schema validation: %v", err)
 	}
 
 	for name, document := range map[string]string{
-		"missing required kernel": `{}`,
-		"missing kernel path":     `{"kernel": {"initrd_path": "/boot/initrd"}}`,
-		"memory with wrong type":  `{"kernel": {"path": "/k", "initrd_path": "/i"}, "machine": {"memory": "lots"}}`,
-		"unknown property":        `{"kernel": {"path": "/k", "initrd_path": "/i"}, "kernell": {}}`,
-		"mount without type":      `{"kernel": {"path": "/k", "initrd_path": "/i"}, "mounts": [{"source": "/tmp/x.img"}]}`,
+		"missing required kernel":      `{}`,
+		"missing kernel path":          `{"kernel": {"initrd_path": "/boot/initrd"}}`,
+		"memory with wrong type":       `{"kernel": {"path": "/k", "initrd_path": "/i"}, "machine": {"memory": "lots"}}`,
+		"DNS upstream with wrong type": `{"kernel":{"path":"kernel"},"networks":[{"type":"virtle","dns":{"upstream":53}}]}`,
+		"unknown property":             `{"kernel": {"path": "/k", "initrd_path": "/i"}, "kernell": {}}`,
+		"mount without type":           `{"kernel": {"path": "/k", "initrd_path": "/i"}, "mounts": [{"source": "/tmp/x.img"}]}`,
 	} {
 		if err := resolved.Validate(decodeJSON(t, document)); err == nil {
 			t.Errorf("%s: expected schema validation to fail", name)

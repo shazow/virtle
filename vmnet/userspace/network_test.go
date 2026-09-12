@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/insomniacslk/dhcp/dhcpv4"
-	"github.com/miekg/dns"
 
 	"github.com/shazow/virtle/vm"
 	"github.com/shazow/virtle/vmnet"
@@ -154,7 +153,7 @@ func TestDeniedFlowIsRefusedBeforeAccept(t *testing.T) {
 	if time.Since(start) > testTimeout/2 {
 		t.Fatalf("the refusal took %s; the guest should see a reset, not a timeout", time.Since(start))
 	}
-	u, err := g.dialUDP(netip.MustParseAddrPort("203.0.113.10:53"))
+	u, err := g.dialUDP(netip.MustParseAddrPort("203.0.113.10:1234"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,6 +265,9 @@ func TestHostDialsAndServesGuests(t *testing.T) {
 	}
 	echo(t, c, "to a host service")
 	c.Close()
+	if _, err := n.Listen("tcp", ":53"); err == nil {
+		t.Fatal("gateway DNS port can be shadowed by a listener")
+	}
 	if _, err := n.Listen("tcp", g.addr.String()+":1"); err == nil {
 		t.Fatal("Listen bound an address that is not the gateway's")
 	}
@@ -352,71 +354,6 @@ func TestAddressesRunOut(t *testing.T) {
 	}
 	if p.Addr() != first {
 		t.Fatalf("reused %s, want the released %s", p.Addr(), first)
-	}
-}
-
-func TestDNSAnswersStayOnTheGateway(t *testing.T) {
-	n := newTestNetwork(t, Config{Egress: vmnet.DenyAll{}})
-	g := attachGuest(t, n, "vm1", vmnet.AttachOptions{Egress: &vm.Egress{}})
-	resolver := netip.AddrPortFrom(n.Gateway(), dnsPort)
-	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
-	defer cancel()
-
-	for _, network := range []string{"udp", "tcp"} {
-		t.Run(network, func(t *testing.T) {
-			var c net.Conn
-			var err error
-			if network == "udp" {
-				c, err = g.dialUDP(resolver)
-			} else {
-				c, err = g.dialTCP(ctx, resolver)
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer c.Close()
-			ask := func(name string, qtype uint16) *dns.Msg {
-				t.Helper()
-				m := new(dns.Msg)
-				m.SetQuestion(name, qtype)
-				m.SetEdns0(4096, false)
-				r, _, err := (&dns.Client{Timeout: testTimeout}).ExchangeWithConnContext(ctx, m, &dns.Conn{Conn: c})
-				if err != nil {
-					t.Fatalf("query %s %s: %v", name, dns.TypeToString[qtype], err)
-				}
-				return r
-			}
-			r := ask("example.test.", dns.TypeA)
-			if r.Rcode != dns.RcodeSuccess || len(r.Answer) != 1 {
-				t.Fatalf("A answer = %v", r)
-			}
-			a, ok := r.Answer[0].(*dns.A)
-			if !ok {
-				t.Fatalf("A record = %v", r.Answer[0])
-			}
-			addr, ok := netip.AddrFromSlice(a.A)
-			if !ok || !n.fakeIPs.contains(addr.Unmap()) {
-				t.Fatalf("A address = %v, want a synthetic address", a.A)
-			}
-			reverse, err := dns.ReverseAddr(a.A.String())
-			if err != nil {
-				t.Fatal(err)
-			}
-			if r := ask(reverse, dns.TypePTR); len(r.Answer) != 1 || r.Answer[0].(*dns.PTR).Ptr != "example.test." {
-				t.Fatalf("synthetic PTR = %v", r)
-			}
-			if r := ask("example.test.", dns.TypeAAAA); r.Rcode != dns.RcodeSuccess || len(r.Answer) != 0 {
-				t.Fatalf("AAAA answer = %v, want empty success", r)
-			}
-			for _, qtype := range []uint16{dns.TypeTXT, dns.TypeCNAME, dns.TypeMX, dns.TypeNS, dns.TypeSRV} {
-				if r := ask("example.test.", qtype); r.Rcode != dns.RcodeRefused {
-					t.Errorf("%s = %v, want REFUSED", dns.TypeToString[qtype], r)
-				}
-			}
-			if r := ask("7.2.0.192.in-addr.arpa.", dns.TypePTR); r.Rcode != dns.RcodeRefused {
-				t.Errorf("external PTR = %v, want REFUSED", r)
-			}
-		})
 	}
 }
 

@@ -25,7 +25,7 @@ host through the network's **egress**. Nothing touches the host's network
 configuration and no privilege is needed.
 
 ```go
-network, err := userspace.New(userspace.Config{}) // 192.168.127.0/24, local synthetic DNS
+network, err := userspace.New(userspace.Config{}) // 192.168.127.0/24, host DNS with synthetic guest addresses
 defer network.Close()
 
 b := &qemu.Backend{Network: network}
@@ -93,14 +93,52 @@ resolves to as well as on addresses dialed directly. A rule is an explicit
 decision and is not held to that, so a rule can still name a host on the
 LAN under `ReachInternet`.
 
-The gateway answers A queries locally with synthetic addresses. A flow to
-one of those addresses carries the requested name, and the egress resolves
-it only after approving the flow. AAAA answers are empty because the guest
-segment carries IPv4; PTR queries can return a known synthetic address's
-name. Queries requiring external resolution, including TXT, CNAME, MX, NS,
-and SRV, are refused. DNS therefore cannot send data outside the network
-before egress approves a connection. This behavior applies to every
-userspace network; there is no DNS mode to select.
+The gateway checks a DNS query against the guest's egress policy before
+contacting upstream DNS. Positive A answers become synthetic addresses;
+a flow to one carries the requested name, which the egress resolves again
+after approving the connection. Both use the same configured DNS upstream.
+Negative answers such as NXDOMAIN reach the guest. AAAA answers are empty
+because the guest segment carries IPv4; PTR queries for synthetic addresses
+are answered locally. Ordinary records such as TXT, CNAME, MX, NS, and SRV
+are proxied after authorization.
+
+DNS defaults to the host nameservers listed in `/etc/resolv.conf` when the
+network is created, including a local DNS stub when configured. Set an
+explicit resolver with one manifest option:
+
+```toml
+[[networks]]
+type = "virtle"
+
+[networks.dns]
+upstream = "10.0.0.53:53" # omitted or "host" uses host DNS
+```
+
+An explicit upstream must be an IP:port (IPv6 uses brackets), and failures
+never fall back to host or public DNS. The proxy supports UDP and TCP with
+bounded timeouts and TCP retry for truncated replies. The configured DNS
+service may be on a private or loopback address; connection destination
+checks still apply after resolution.
+
+DNS permissions use hostname allows without their service-port restrictions.
+Hostname denies without ports block queries; port-specific denies and IP
+restrictions apply when connecting. `reach = "rules"` with no hostname
+allows denies remote DNS, while `internet` and `all` allow it subject to
+guest restrictions. Other record types follow the same hostname policy.
+Custom Go egress implementations opt in through `vmnet.DNSAuthorizer`;
+without it, remote DNS is refused.
+
+The network's existing logger records DNS queries and decisions, including
+guest, source, name, type, response code, upstream, and duration. UDP/TCP
+port 53 traffic to destinations other than the gateway is blocked so it
+cannot bypass these checks. DNS carried over other protocols remains
+subject to ordinary egress rules.
+
+DNS requests belong to the port that sent them and are canceled when that
+port closes, including pending TCP connections. Fragmented TCP and UDP
+packets addressed to the gateway are rejected to keep fragment reassembly
+from crossing guest lifetimes. UDP replies fit the segment MTU and signal
+truncation when necessary, so clients can retry large DNS messages over TCP.
 
 ```go
 policy := &egress.Policy{
@@ -109,6 +147,10 @@ policy := &egress.Policy{
 }
 network, err := userspace.New(userspace.Config{Egress: policy})
 ```
+
+In Go, `userspace.Config.DNSUpstream` selects the same upstream as the
+manifest setting. An explicitly supplied `egress.Policy.Resolver` overrides
+address lookups for that policy; leave it unset to share the network's DNS.
 
 A guest's own `vm.Spec.Egress` only narrows the network's policy: its `Allow`
 list is intersected with the rules, its `Deny` list wins, and only the

@@ -18,6 +18,7 @@ import (
 	"net"
 	"net/netip"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -33,6 +34,7 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
 
+	"github.com/shazow/virtle/internal/dnsproxy"
 	"github.com/shazow/virtle/vmnet"
 )
 
@@ -86,9 +88,13 @@ type Config struct {
 	// FakeIPRange is where synthetic DNS answers come from; it must not overlap
 	// Subnet. Default DefaultFakeIPRange.
 	FakeIPRange netip.Prefix
+	// DNSUpstream is the resolver used for DNS and outbound name resolution:
+	// "host" (the default) or an IP:port. Guests still receive synthetic A
+	// addresses. Remote queries require Egress to implement vmnet.DNSAuthorizer.
+	DNSUpstream string
 	// Egress dials guest-initiated flows. Default vmnet.Passthrough{}.
 	Egress vmnet.Egress
-	// Logger receives attach, flow, and drop events; nil discards them.
+	// Logger receives attach, flow, DNS, and drop events; nil discards them.
 	Logger *slog.Logger
 }
 
@@ -105,14 +111,16 @@ type Network struct {
 	egress    vmnet.Egress
 	logger    *slog.Logger
 
-	stack   *stack.Stack
-	ep      *channel.Endpoint
-	ctx     context.Context
-	cancel  context.CancelFunc
-	wg      sync.WaitGroup
-	dhcp    *dhcpServer
-	dns     *dnsServer
-	fakeIPs *fakeIPTable
+	stack       *stack.Stack
+	ep          *channel.Endpoint
+	ctx         context.Context
+	cancel      context.CancelFunc
+	wg          sync.WaitGroup
+	dhcp        *dhcpServer
+	dns         *dnsServer
+	fakeIPs     *fakeIPTable
+	resolver    *dnsproxy.Resolver
+	dnsUpstream string
 
 	mu     sync.Mutex
 	closed bool
@@ -175,6 +183,15 @@ func New(cfg Config) (*Network, error) {
 	}
 	if n.logger == nil {
 		n.logger = slog.New(slog.DiscardHandler)
+	}
+	var err error
+	n.resolver, err = dnsproxy.New(cfg.DNSUpstream)
+	if err != nil {
+		return nil, fmt.Errorf("userspace: DNS upstream: %w", err)
+	}
+	n.dnsUpstream = strings.TrimSpace(cfg.DNSUpstream)
+	if n.dnsUpstream == "" {
+		n.dnsUpstream = "host"
 	}
 
 	n.ep = channel.New(stackQueue, uint32(n.mtu+header.EthernetMinimumSize), tcpip.LinkAddress(n.gatewayHW))
@@ -312,6 +329,7 @@ func (n *Network) newPort(link vmnet.Link, opts vmnet.AttachOptions) (*port, err
 		n:         n,
 		ctx:       ctx,
 		cancel:    cancel,
+		attached:  n.stack.Clock().Now(),
 		flows:     make(map[*forwardedFlow]struct{}),
 		name:      opts.Name,
 		egress:    opts.Egress,
@@ -323,6 +341,7 @@ func (n *Network) newPort(link vmnet.Link, opts vmnet.AttachOptions) (*port, err
 		done:      make(chan struct{}),
 		exposures: make(map[forwardKey]*exposure),
 	}
+	p.dnsTCP = tcp.NewForwarder(n.stack, 0, maxInFlight, func(r *tcp.ForwarderRequest) { n.dns.acceptTCP(p, r) })
 	n.byAddr[addr] = p
 	n.byMAC[mac.String()] = p
 	n.wg.Add(2)
@@ -453,6 +472,9 @@ func (n *Network) Listen(network, addr string) (net.Listener, error) {
 	port, err := strconv.ParseUint(portStr, 10, 16)
 	if err != nil {
 		return nil, fmt.Errorf("userspace: listen %s: %w", addr, err)
+	}
+	if port == dnsPort {
+		return nil, fmt.Errorf("userspace: listen %s: port is reserved for gateway DNS", addr)
 	}
 	return gonet.ListenTCP(n.stack, tcpip.FullAddress{NIC: nicID, Addr: n.gateway4, Port: uint16(port)}, ipv4.ProtocolNumber)
 }

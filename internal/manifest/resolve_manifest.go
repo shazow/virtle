@@ -813,6 +813,9 @@ func (m *Manifest) resolveOptionalBin(bin string, defaultBin string) string {
 }
 
 func resolveNetworkHotplug(entry NetworkInput, index int) (HotplugDevice, error) {
+	if entry.DNS != nil {
+		return HotplugDevice{}, fmt.Errorf("manifest.hotplug.networks[%d].dns is not supported; configure DNS on a launch-time virtle network", index)
+	}
 	id := entry.ID
 	if id == "" {
 		id = fmt.Sprintf("net%d", index)
@@ -902,6 +905,9 @@ func resolveNetwork(dir string, networks []NetworkInput, fwdTunnelExec []string,
 		if cpus.Set && cpus.Value > 1 && transport == "pci" {
 			mqVectors = 2*cpus.Value + 2
 		}
+		if network.DNS != nil && netType != NetworkTypeVirtle {
+			return nil, fmt.Errorf("manifest.networks[%d].dns applies to type virtle only", i)
+		}
 		if network.Tap != "" && netType != NetworkTypeTAP {
 			return nil, fmt.Errorf("manifest.networks[%d].tap applies to type tap only", i)
 		}
@@ -926,6 +932,11 @@ func resolveNetwork(dir string, networks []NetworkInput, fwdTunnelExec []string,
 			}
 			device.Backend = "stream"
 			device.Managed = true
+			upstream, err := resolveDNSUpstream(network.DNS)
+			if err != nil {
+				return nil, fmt.Errorf("manifest.networks[%d].dns.upstream: %w", i, err)
+			}
+			device.DNSUpstream = upstream
 			// The default MAC is the same address for every machine; on a
 			// shared network each port needs its own, so only a MAC the
 			// manifest chose is requested.

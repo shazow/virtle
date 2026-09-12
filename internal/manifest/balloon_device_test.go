@@ -1,6 +1,10 @@
 package manifest
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/shazow/virtle/units"
+)
 
 func TestApplyDefaultsCreatesHalfAllocationTarget(t *testing.T) {
 	device := &BalloonDevice{
@@ -13,16 +17,16 @@ func TestApplyDefaultsCreatesHalfAllocationTarget(t *testing.T) {
 	if device.Controller == nil {
 		t.Fatal("expected controller defaults to be created")
 	}
-	if got, want := device.Controller.MinActual.Int(), 1024; got != want {
+	if got, want := device.Controller.MinActual, units.MiB(1024); got != want {
 		t.Fatalf("unexpected minActualMiB: got %d want %d", got, want)
 	}
-	if got, want := device.Controller.MaxActual.Int(), 2048; got != want {
+	if got, want := device.Controller.MaxActual, units.MiB(2048); got != want {
 		t.Fatalf("unexpected maxActualMiB: got %d want %d", got, want)
 	}
-	if got, want := device.Controller.GrowBelowAvailable.Int(), 512; got != want {
+	if got, want := device.Controller.GrowBelowAvailable, units.MiB(512); got != want {
 		t.Fatalf("unexpected growBelowAvailableMiB: got %d want %d", got, want)
 	}
-	if got, want := device.Controller.ReclaimAboveAvailable.Int(), 1024; got != want {
+	if got, want := device.Controller.ReclaimAboveAvailable, units.MiB(1024); got != want {
 		t.Fatalf("unexpected reclaimAboveAvailableMiB: got %d want %d", got, want)
 	}
 	if got, want := device.Controller.Step, defaultBalloonControllerStep; got != want {
@@ -47,13 +51,13 @@ func TestApplyDefaultsDerivesThresholdsFromExplicitIdleTarget(t *testing.T) {
 
 	applyBalloonDefaults(2048, device)
 
-	if got, want := device.Controller.MaxActual.Int(), 2048; got != want {
+	if got, want := device.Controller.MaxActual, units.MiB(2048); got != want {
 		t.Fatalf("unexpected maxActualMiB: got %d want %d", got, want)
 	}
-	if got, want := device.Controller.GrowBelowAvailable.Int(), 384; got != want {
+	if got, want := device.Controller.GrowBelowAvailable, units.MiB(384); got != want {
 		t.Fatalf("unexpected growBelowAvailableMiB: got %d want %d", got, want)
 	}
-	if got, want := device.Controller.ReclaimAboveAvailable.Int(), 768; got != want {
+	if got, want := device.Controller.ReclaimAboveAvailable, units.MiB(768); got != want {
 		t.Fatalf("unexpected reclaimAboveAvailableMiB: got %d want %d", got, want)
 	}
 }

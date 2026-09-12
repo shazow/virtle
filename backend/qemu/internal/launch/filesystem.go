@@ -115,12 +115,6 @@ func createPrivateFile(path string, runAsUser string) (*os.File, error) {
 	return file, nil
 }
 
-// CreateVolumeImage creates a volume image and optionally assigns the new file
-// to the host account configured for privilege-dropped QEMU.
-func CreateVolumeImage(volume manifest.Volume, runAsUser string) error {
-	return diskimage.Create(volumeImage(volume, runAsUser))
-}
-
 // EnsureVolumeImage creates the volume image unless it already exists and
 // reports whether it did.
 func EnsureVolumeImage(volume manifest.Volume, runAsUser string) (bool, error) {

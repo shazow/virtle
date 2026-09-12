@@ -9,6 +9,10 @@ compact before/after examples.
 
 ## 2026-09-12
 
+- Resolved manifests omit the redundant `paths.runtimeDir` and
+  `persistence.baseDir` fields. Relative runtime sockets resolve under
+  `persistence.stateDir`, as they already did for loaded manifests on every
+  backend.
 - Firecracker and Cloud Hypervisor validate `[[run]]` helpers at manifest
   load, including empty commands, template syntax, and reserved variables.
   Existing disk images can use any filesystem; the ext4 restriction applies
@@ -52,6 +56,9 @@ compact before/after examples.
 
 ### Library changes
 
+- Removed unused `units.MiB.Int`, `units.Bytes.Kibibytes`, and
+  `units.Bytes.Gibibytes` accessors. Manifest schema generation owns its
+  scalar schema definitions; `units.JSONSchemaTypes` is removed.
 - Removed unused `vm.TermOptions`, `vm.GuestWithCopy`, `vm.CopyOptions`,
   `vm.ArchiveFS`, and `vm.Output`. Buffer guest output by supplying a
   `bytes.Buffer` as `GuestCmd.Stdout`. `GuestCmd.Stdin`, `Term.Resize`, and

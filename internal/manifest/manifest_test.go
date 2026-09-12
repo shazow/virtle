@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/adrg/xdg"
 	"github.com/shazow/virtle/units"
 )
 
@@ -1003,15 +1002,10 @@ func TestDocumentSSHAutoprovisionResolvesToManifest(t *testing.T) {
 	}
 }
 
-func TestManifestResolvesSocketsFromRuntimeDir(t *testing.T) {
-	runtimeDir := t.TempDir()
-	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
-	xdg.Reload()
-	t.Cleanup(xdg.Reload)
-
+func TestManifestResolvesSocketsFromStateDir(t *testing.T) {
 	tests := []struct {
 		name       string
-		runtimeDir RuntimeDir
+		stateDir   string
 		socketPath string
 		wantSocket string
 		wantQMP    string
@@ -1019,8 +1013,8 @@ func TestManifestResolvesSocketsFromRuntimeDir(t *testing.T) {
 		wantReady  string
 	}{
 		{
-			name:       "legacy working dir",
-			runtimeDir: RuntimeDir{},
+			name:       "working directory fallback",
+			stateDir:   "",
 			socketPath: "fs.sock",
 			wantSocket: "/tmp/work/fs.sock",
 			wantQMP:    "/tmp/work/qmp.sock",
@@ -1028,35 +1022,35 @@ func TestManifestResolvesSocketsFromRuntimeDir(t *testing.T) {
 			wantReady:  "/tmp/work/ssh-ready.sock",
 		},
 		{
-			name:       "default runtime dir",
-			runtimeDir: RuntimeDir{Mode: RuntimeDirXDG},
+			name:       "default state directory",
+			stateDir:   ".virtle",
 			socketPath: "fs.sock",
-			wantSocket: filepath.Join(runtimeDir, "agentspace", "agent-sandbox", "fs.sock"),
-			wantQMP:    filepath.Join(runtimeDir, "agentspace", "agent-sandbox", "qmp.sock"),
-			wantQGA:    filepath.Join(runtimeDir, "agentspace", "agent-sandbox", "qga.sock"),
-			wantReady:  filepath.Join(runtimeDir, "agentspace", "agent-sandbox", "ssh-ready.sock"),
+			wantSocket: "/tmp/work/.virtle/fs.sock",
+			wantQMP:    "/tmp/work/.virtle/qmp.sock",
+			wantQGA:    "/tmp/work/.virtle/qga.sock",
+			wantReady:  "/tmp/work/.virtle/ssh-ready.sock",
 		},
 		{
-			name:       "relative runtime dir",
-			runtimeDir: RuntimeDir{Mode: RuntimeDirPath, Path: "runtime"},
+			name:       "relative state directory",
+			stateDir:   "state",
 			socketPath: "fs.sock",
-			wantSocket: "/tmp/work/runtime/fs.sock",
-			wantQMP:    "/tmp/work/runtime/qmp.sock",
-			wantQGA:    "/tmp/work/runtime/qga.sock",
-			wantReady:  "/tmp/work/runtime/ssh-ready.sock",
+			wantSocket: "/tmp/work/state/fs.sock",
+			wantQMP:    "/tmp/work/state/qmp.sock",
+			wantQGA:    "/tmp/work/state/qga.sock",
+			wantReady:  "/tmp/work/state/ssh-ready.sock",
 		},
 		{
-			name:       "absolute runtime dir",
-			runtimeDir: RuntimeDir{Mode: RuntimeDirPath, Path: "/tmp/runtime"},
+			name:       "absolute state directory",
+			stateDir:   "/tmp/state",
 			socketPath: "fs.sock",
-			wantSocket: "/tmp/runtime/fs.sock",
-			wantQMP:    "/tmp/runtime/qmp.sock",
-			wantQGA:    "/tmp/runtime/qga.sock",
-			wantReady:  "/tmp/runtime/ssh-ready.sock",
+			wantSocket: "/tmp/state/fs.sock",
+			wantQMP:    "/tmp/state/qmp.sock",
+			wantQGA:    "/tmp/state/qga.sock",
+			wantReady:  "/tmp/state/ssh-ready.sock",
 		},
 		{
-			name:       "absolute socket path bypasses runtime dir",
-			runtimeDir: RuntimeDir{Mode: RuntimeDirXDG},
+			name:       "absolute socket path bypasses state directory",
+			stateDir:   ".virtle",
 			socketPath: "/tmp/explicit-fs.sock",
 			wantSocket: "/tmp/explicit-fs.sock",
 			wantQMP:    "/tmp/explicit-qmp.sock",
@@ -1068,12 +1062,12 @@ func TestManifestResolvesSocketsFromRuntimeDir(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			manifest := validManifest()
-			manifest.Paths.RuntimeDir = tt.runtimeDir
+			manifest.Persistence.StateDir = tt.stateDir
 			manifest.CleanupFiles = []string{tt.socketPath}
 			manifest.QEMU.Devices.VirtioFS[0].SocketPath = tt.socketPath
 			manifest.QEMU.GuestAgent.SocketPath = "qga.sock"
 			manifest.QEMU.SSHReady.SocketPath = "ssh-ready.sock"
-			if tt.name == "absolute socket path bypasses runtime dir" {
+			if tt.name == "absolute socket path bypasses state directory" {
 				manifest.QEMU.QMP.SocketPath = "/tmp/explicit-qmp.sock"
 				manifest.QEMU.GuestAgent.SocketPath = "/tmp/explicit-qga.sock"
 				manifest.QEMU.SSHReady.SocketPath = "/tmp/explicit-ready.sock"

@@ -23,7 +23,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/adrg/xdg"
 	doQMP "github.com/digitalocean/go-qemu/qmp"
 	rawQMP "github.com/digitalocean/go-qemu/qmp/raw"
 	diskfs "github.com/diskfs/go-diskfs"
@@ -255,7 +254,6 @@ func TestManifestValidate(t *testing.T) {
 func TestManagerPlanLaunchResolvesRuntimeInputs(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
-	cfg.Paths.RuntimeDir = manifest.RuntimeDir{Mode: manifest.RuntimeDirPath, Path: ".runtime"}
 	cfg.Persistence.StateDir = ".state"
 
 	manager := &manager{}
@@ -264,10 +262,10 @@ func TestManagerPlanLaunchResolvesRuntimeInputs(t *testing.T) {
 		t.Fatalf("plan launch: %v", err)
 	}
 
-	if got, want := plan.Paths.ControlSocket, filepath.Join(tmpDir, ".runtime", "virtle.sock"); got != want {
+	if got, want := plan.Paths.ControlSocket, filepath.Join(tmpDir, ".state", "virtle.sock"); got != want {
 		t.Fatalf("unexpected control socket path: got %q want %q", got, want)
 	}
-	if got, want := plan.Paths.QMPSocket, filepath.Join(tmpDir, ".runtime", "qmp.sock"); got != want {
+	if got, want := plan.Paths.QMPSocket, filepath.Join(tmpDir, ".state", "qmp.sock"); got != want {
 		t.Fatalf("unexpected qmp socket path: got %q want %q", got, want)
 	}
 	if got, want := plan.Paths.StateDir, filepath.Join(tmpDir, ".state"); got != want {
@@ -375,8 +373,8 @@ func TestManagerLaunchStartsRunCommands(t *testing.T) {
 		}
 	}
 	wantSocketWaits := [][]string{
-		{filepath.Join(tmpDir, "fs.sock")},
-		{filepath.Join(tmpDir, "qmp.sock")},
+		{filepath.Join(tmpDir, ".virtle", "fs.sock")},
+		{filepath.Join(tmpDir, ".virtle", "qmp.sock")},
 	}
 	if len(waiter.paths) < len(wantSocketWaits) {
 		t.Fatalf("expected at least %d socket waits, got %v", len(wantSocketWaits), waiter.paths)
@@ -403,7 +401,6 @@ func TestManagerLaunchFailsWhenRunStartFails(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
 	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
-	cfg.Paths.RuntimeDir = manifest.RuntimeDir{Mode: manifest.RuntimeDirPath, Path: ".virtle"}
 	cfg.Persistence.StateDir = ".virtle"
 	cfg.Volumes[0].AutoCreate = false
 	cfg.QEMU.Devices.VirtioFS = nil
@@ -559,7 +556,6 @@ func TestManagerLaunchRemovesEphemeralStateDir(t *testing.T) {
 			cfg := validManifest(tmpDir)
 			cfg.Persistence.StateDir = state
 			cfg.Paths.LockPath = filepath.Join(state, "virtle.lock")
-			cfg.Paths.RuntimeDir = manifest.RuntimeDir{Mode: manifest.RuntimeDirPath, Path: state}
 			cfg.Volumes[0].AutoCreate = false
 			cfg.QEMU.Devices.VirtioFS = nil
 			cfg.Run = []manifest.Run{{Exec: []string{"/bin/proxy"}}}
@@ -588,7 +584,7 @@ func TestManagerLaunchRemovesEphemeralStateDir(t *testing.T) {
 	}
 }
 
-func TestCreateVolumeImageCreatesNativeExt4(t *testing.T) {
+func TestEnsureVolumeImageCreatesNativeExt4(t *testing.T) {
 	account, err := user.Current()
 	if err != nil {
 		t.Fatalf("current user: %v", err)
@@ -613,7 +609,7 @@ func TestCreateVolumeImageCreatesNativeExt4(t *testing.T) {
 				runAsUser = account.Username
 			}
 
-			err := launch.CreateVolumeImage(manifest.Volume{
+			created, err := launch.EnsureVolumeImage(manifest.Volume{
 				ImagePath:  imagePath,
 				Size:       tt.sizeMiB,
 				FSType:     "ext4",
@@ -622,6 +618,9 @@ func TestCreateVolumeImageCreatesNativeExt4(t *testing.T) {
 			}, runAsUser)
 			if err != nil {
 				t.Fatalf("create volume image: %v", err)
+			}
+			if !created {
+				t.Fatal("volume image was not created")
 			}
 
 			info, err := os.Stat(imagePath)
@@ -664,7 +663,7 @@ func TestCreateVolumeImageCreatesNativeExt4(t *testing.T) {
 	}
 }
 
-func TestCreateVolumeImageRunsChattrBeforeSizingImage(t *testing.T) {
+func TestEnsureVolumeImageRunsChattrBeforeSizingImage(t *testing.T) {
 	tmpDir := t.TempDir()
 	binDir := filepath.Join(tmpDir, "bin")
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
@@ -679,7 +678,7 @@ func TestCreateVolumeImageRunsChattrBeforeSizingImage(t *testing.T) {
 	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
 
 	imagePath := filepath.Join(tmpDir, "volume.img")
-	if err := launch.CreateVolumeImage(manifest.Volume{
+	if _, err := launch.EnsureVolumeImage(manifest.Volume{
 		ImagePath:  imagePath,
 		Size:       256,
 		FSType:     "ext4",
@@ -1950,7 +1949,6 @@ func TestStartVMRefusesSuspendWithEphemeralState(t *testing.T) {
 	cfg := validManifest(tmpDir)
 	cfg.Persistence.StateDir = state
 	cfg.Paths.LockPath = filepath.Join(state, "virtle.lock")
-	cfg.Paths.RuntimeDir = manifest.RuntimeDir{Mode: manifest.RuntimeDirPath, Path: state}
 	cfg.QEMU.Devices.VirtioFS = nil
 	cfg.QEMU.Devices.Block = nil
 	cfg.QEMU.SSHReady.SocketPath = ""
@@ -2281,7 +2279,6 @@ func TestLaunchRuntimeRegistersHotplugAtControlPeriphery(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
 	cfg.Persistence.StateDir = ".virtle"
-	cfg.Paths.RuntimeDir = manifest.RuntimeDir{Mode: manifest.RuntimeDirPath, Path: ".virtle"}
 	cfg.QEMU.Hotplug.PCIEPorts = 1
 	cfg.Hotplug = []manifest.HotplugDevice{
 		{
@@ -2347,7 +2344,6 @@ func TestLaunchRuntimeRegistersGuestRPCsAtControlPeriphery(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
 	cfg.Persistence.StateDir = ".virtle"
-	cfg.Paths.RuntimeDir = manifest.RuntimeDir{Mode: manifest.RuntimeDirPath, Path: ".virtle"}
 	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
 	cfg.QEMU.QMP.SocketPath = "qmp.sock"
 	cfg.QEMU.GuestAgent.SocketPath = "qga.sock"
@@ -2449,7 +2445,6 @@ func TestLaunchRuntimeWithoutRemoteControlOmitsGuestRPCs(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := validManifest(tmpDir)
 	cfg.Persistence.StateDir = ".virtle"
-	cfg.Paths.RuntimeDir = manifest.RuntimeDir{Mode: manifest.RuntimeDirPath, Path: ".virtle"}
 	cfg.Paths.LockPath = filepath.Join(tmpDir, "virtle.lock")
 	cfg.QEMU.QMP.SocketPath = "qmp.sock"
 	cfg.QEMU.GuestAgent.SocketPath = ""
@@ -2794,14 +2789,11 @@ func TestBuildQEMUCommandAllowsInitrdApplianceWithoutStorageDevices(t *testing.T
 	}
 }
 
-func TestBuildQEMUCommandUsesRuntimeDirForRelativeQMP(t *testing.T) {
-	runtimeDir := t.TempDir()
-	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
-	xdg.Reload()
-	t.Cleanup(xdg.Reload)
+func TestBuildQEMUCommandUsesStateDirForRelativeSockets(t *testing.T) {
+	stateDir := t.TempDir()
 
 	cfg := validManifest("/tmp/work")
-	cfg.Paths.RuntimeDir = manifest.RuntimeDir{Mode: manifest.RuntimeDirXDG}
+	cfg.Persistence.StateDir = stateDir
 	cfg.QEMU.GuestAgent.SocketPath = "qga.sock"
 
 	spec, err := buildTestQEMUCommand(cfg, 42, false)
@@ -2809,29 +2801,26 @@ func TestBuildQEMUCommandUsesRuntimeDirForRelativeQMP(t *testing.T) {
 		t.Fatalf("build qemu command: %v", err)
 	}
 
-	wantQMP := filepath.Join(runtimeDir, "agentspace", cfg.Identity.HostName, "qmp.sock")
+	wantQMP := filepath.Join(stateDir, "qmp.sock")
 	if !containsString(commandArgs(spec), "unix:"+wantQMP+",server,nowait") {
 		t.Fatalf("expected qemu args to include runtime qmp socket %q: %v", wantQMP, commandArgs(spec))
 	}
-	wantQGA := filepath.Join(runtimeDir, "agentspace", cfg.Identity.HostName, "qga.sock")
+	wantQGA := filepath.Join(stateDir, "qga.sock")
 	if !containsString(commandArgs(spec), "socket,path="+wantQGA+",server=on,wait=off,id=qga0") {
 		t.Fatalf("expected qemu args to include runtime guest agent socket %q: %v", wantQGA, commandArgs(spec))
 	}
-	wantReady := filepath.Join(runtimeDir, "agentspace", cfg.Identity.HostName, "ready.sock")
+	wantReady := filepath.Join(stateDir, "ready.sock")
 	if !containsString(commandArgs(spec), "socket,path="+wantReady+",server=on,wait=off,id=ready_char") {
 		t.Fatalf("expected qemu args to include runtime ssh readiness socket %q: %v", wantReady, commandArgs(spec))
 	}
 }
 
 func TestStartRunsUsesNamedVirtioFSRunEnv(t *testing.T) {
-	runtimeDir := t.TempDir()
-	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
-	xdg.Reload()
-	t.Cleanup(xdg.Reload)
+	stateDir := t.TempDir()
 
 	cfg := validManifest(t.TempDir())
-	cfg.Paths.RuntimeDir = manifest.RuntimeDir{Mode: manifest.RuntimeDirXDG}
-	wantSocket := filepath.Join(runtimeDir, "agentspace", cfg.Identity.HostName, "fs.sock")
+	cfg.Persistence.StateDir = stateDir
+	wantSocket := filepath.Join(stateDir, "fs.sock")
 	cfg.Run[0].Vars["Socket"] = wantSocket
 
 	runner := &launchRunner{}

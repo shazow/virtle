@@ -52,9 +52,6 @@ compact before/after examples.
 
 ### Library changes
 
-- Removed the unimplemented `vm.GuestWithCopy`, `vm.CopyOptions`, and
-  `vm.TermOptions` placeholders. `vm.Guest` file operations, `vm.Term`, and
-  `vm.ArchiveFS` remain available.
 - Custom networks can implement `vmnet.StatefulNetwork` using the public
   `vmnet.NetworkState` and `vmnet.DNSBinding` types to participate in QEMU
   suspend/resume. Existing saved network state remains compatible.
@@ -381,7 +378,9 @@ if s, ok := m.(backend.Suspender); ok {
 
 Additional source migrations: `qemu.Config.Machine` is
 `qemu.Backend.MachineType`; `Config.KVM` is the `Backend.Accel` enum;
-`vm.Forward.Proto` is a `vm.Proto`.
+`vm.Forward.Proto` is a `vm.Proto`; `vm.TermOptions.TERM` is `TermType`; and
+setting ownership in `vm.CopyOptions` now requires `Chown: true` alongside
+integer `UID` and `GID` fields.
 
 ## 2026-08-31
 

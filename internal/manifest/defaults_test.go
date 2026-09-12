@@ -84,6 +84,9 @@ func TestDocumentWithDefaultsPreservesKeyResolvedDefaults(t *testing.T) {
 	if got := manifest.Paths.WorkingDir; got != "." {
 		t.Fatalf("working dir = %q, want %q", got, ".")
 	}
+	if got := manifest.Persistence.BaseDir; got != ".virtle" {
+		t.Fatalf("base dir = %q, want %q", got, ".virtle")
+	}
 	if got := manifest.Persistence.StateDir; got != ".virtle" {
 		t.Fatalf("state dir = %q, want %q", got, ".virtle")
 	}
@@ -139,6 +142,9 @@ func TestDocumentWithDefaultsPreservesExplicitOverridesForMovedDefaults(t *testi
 	}
 	if got, want := manifest.Paths.WorkingDir, "/custom/work"; got != want {
 		t.Fatalf("working dir = %q, want %q", got, want)
+	}
+	if got, want := manifest.Persistence.BaseDir, ".custom-state"; got != want {
+		t.Fatalf("base dir = %q, want %q", got, want)
 	}
 	if got, want := manifest.Persistence.StateDir, ".custom-state"; got != want {
 		t.Fatalf("state dir = %q, want %q", got, want)

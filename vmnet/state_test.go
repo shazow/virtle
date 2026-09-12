@@ -14,7 +14,7 @@ import (
 )
 
 func TestNetworkStateRoundTrip(t *testing.T) {
-	n, err := userspace.New(userspace.Config{
+	n, err := userspace.New(userspace.Config{DNS: userspace.DNSFakeIP,
 		DNSUpstream: "127.0.0.1:53",
 		Egress: &egress.Policy{Injections: []egress.Injection{
 			{

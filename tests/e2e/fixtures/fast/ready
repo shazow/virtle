@@ -19,6 +19,7 @@ done
 # A NIC is the virtle network: take its lease, report the address, serve a
 # TCP echo on port 7, and probe two names when the command line asks for it
 # (virtle.egress=PORT), so the host can see its policy decide by name.
+# virtle.egress_denied=PORT also checks transport denial on an allowed name.
 if [ -e /sys/class/net/eth0 ]; then
   ifconfig lo up
   # udhcpc needs the link up: on a down link it reopens its socket forever
@@ -36,7 +37,15 @@ if [ -e /sys/class/net/eth0 ]; then
     if echo ping | nc -w 5 blocked.test "$port" >/dev/null 2>&1; then
       blocked=open
     fi
-    echo "VIRTLE_EGRESS:allowed=$allowed,blocked=$blocked"
+    denied_port=$(sed -n 's/.*virtle\.egress_denied=\([0-9]*\).*/\1/p' /proc/cmdline)
+    port_result=unchecked
+    if [ -n "$denied_port" ]; then
+      port_result=refused
+      if echo ping | nc -w 5 allowed.test "$denied_port" >/dev/null 2>&1; then
+        port_result=open
+      fi
+    fi
+    echo "VIRTLE_EGRESS:allowed=$allowed,blocked=$blocked,port=$port_result"
   fi
   # With virtle.inject=PORT, fetch a page through the inspecting policy with
   # an injection token in a header and in the query, and report what the

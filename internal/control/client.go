@@ -11,6 +11,7 @@ import (
 	"io"
 	"io/fs"
 	"net"
+	"os"
 	"sync"
 	"time"
 
@@ -19,11 +20,21 @@ import (
 	"github.com/shazow/virtle/vm"
 )
 
+const legacyStatusPollInterval = 250 * time.Millisecond
+
 // Dial connects to a control socket and returns its remote machine. Dial
 // discovers server capabilities before returning and begins observing machine
 // exit immediately.
 func Dial(ctx context.Context, path string) (backend.Machine, error) {
-	c := &client{dial: unixDialer(path)}
+	c := &client{dial: unixDialer(path), completion: func() (bool, error) {
+		// Pre-wait servers unlink the socket during orderly teardown. A
+		// stale socket left by an abrupt exit is not proof of completion.
+		_, err := os.Stat(path)
+		if errors.Is(err, os.ErrNotExist) {
+			return true, nil
+		}
+		return false, err
+	}}
 	methods, err := callTyped[MethodsRequest, MethodsResponse](c, ctx, rpcMethods, MethodsRequest{})
 	if err != nil {
 		return nil, err
@@ -69,11 +80,43 @@ func (m *machine) supports(method rpcMethod) error {
 }
 
 func (m *machine) observeExit() {
-	_, err := callTyped[WaitRequest, WaitResponse](m.client, context.Background(), rpcWait, WaitRequest{})
+	err := m.waitForExit()
 	m.mu.Lock()
 	m.err = err
 	m.mu.Unlock()
 	close(m.done)
+}
+
+func (m *machine) waitForExit() error {
+	if m.methods[rpcWait] {
+		_, err := callTyped[WaitRequest, WaitResponse](m.client, context.Background(), rpcWait, WaitRequest{})
+		return err
+	}
+
+	// A CLI can connect to a VM launched by an older virtle binary. Those
+	// servers expose status but cannot hold a wait request open until exit.
+	ticker := time.NewTicker(legacyStatusPollInterval)
+	defer ticker.Stop()
+	for {
+		status, err := callTyped[StatusRequest, StatusResponse](m.client, context.Background(), rpcStatus, StatusRequest{})
+		if err != nil {
+			if m.client.completion != nil {
+				completed, completionErr := m.client.completion()
+				if completionErr != nil {
+					return fmt.Errorf("machine exited without status: %w", errors.Join(err, completionErr))
+				}
+				if completed {
+					return nil
+				}
+			}
+			if !IsSocketUnavailable(err) && !errors.Is(err, io.EOF) {
+				return fmt.Errorf("machine exited without status: %w", err)
+			}
+		} else if status.State == backend.StateStopped {
+			return nil
+		}
+		<-ticker.C
+	}
 }
 
 func (m *machine) Done() <-chan struct{} { return m.done }
@@ -107,8 +150,19 @@ func (m *machine) Shutdown(ctx context.Context) error {
 		return nil // already stopped; the contract makes repeated calls safe
 	default:
 	}
-	if err := m.supports(rpcShutdown); err != nil {
-		return err
+	if !m.methods[rpcShutdown] {
+		g, err := m.RemoteControl()
+		if err != nil {
+			return m.Kill()
+		}
+		if err := g.Shutdown(ctx); err != nil {
+			return errors.Join(context.Cause(ctx), m.Kill())
+		}
+		if err := m.Wait(ctx); err != nil && ctx.Err() != nil {
+			return errors.Join(err, m.Kill())
+		} else {
+			return err
+		}
 	}
 	_, err := callTyped[ShutdownRequest, ShutdownResponse](m.client, ctx, rpcShutdown, ShutdownRequest{})
 	if err != nil && ctx.Err() != nil {
@@ -275,7 +329,8 @@ var (
 )
 
 type client struct {
-	dial func(context.Context) (net.Conn, error)
+	dial       func(context.Context) (net.Conn, error)
+	completion func() (bool, error)
 }
 
 func callTyped[Req any, Resp any](c *client, ctx context.Context, method rpcMethod, req Req) (Resp, error) {

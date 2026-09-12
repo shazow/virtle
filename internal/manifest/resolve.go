@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+
+	"github.com/adrg/xdg"
 )
 
 func (m *Manifest) resolvePath(path string) string {
@@ -22,11 +24,22 @@ func (m *Manifest) ResolvedPersistenceDirectories() []string {
 	return dirs
 }
 
+// ResolvedPersistenceBaseDir resolves BaseDir against the working directory,
+// using the working directory itself when BaseDir is empty.
+func (m *Manifest) ResolvedPersistenceBaseDir() string {
+	if m.Persistence.BaseDir == "" {
+		return m.resolvePath(".")
+	}
+	return m.resolvePath(m.Persistence.BaseDir)
+}
+
+// ResolvedPersistenceStateDir resolves the persistent state location, falling
+// back to BaseDir when StateDir is empty. RuntimeDir is resolved separately.
 func (m *Manifest) ResolvedPersistenceStateDir() string {
 	if m.Persistence.StateDir != "" {
 		return m.resolvePath(m.Persistence.StateDir)
 	}
-	return m.resolvePath(".")
+	return m.ResolvedPersistenceBaseDir()
 }
 
 func (m *Manifest) resolveSocketPath(path string) (string, error) {
@@ -34,7 +47,20 @@ func (m *Manifest) resolveSocketPath(path string) (string, error) {
 		return path, nil
 	}
 
-	return filepath.Join(m.ResolvedPersistenceStateDir(), path), nil
+	switch m.Paths.RuntimeDir.Mode {
+	case RuntimeDirWorking:
+		return m.resolvePath(path), nil
+	case RuntimeDirXDG:
+		resolved, err := xdg.RuntimeFile(filepath.Join("agentspace", m.Identity.HostName, path))
+		if err != nil {
+			return "", fmt.Errorf("resolve runtime socket %q: %w", path, err)
+		}
+		return resolved, nil
+	case RuntimeDirPath:
+		return filepath.Join(m.resolvePath(m.Paths.RuntimeDir.Path), path), nil
+	default:
+		return "", fmt.Errorf("resolve runtime socket %q: invalid runtime dir mode %d", path, m.Paths.RuntimeDir.Mode)
+	}
 }
 
 func (m *Manifest) ResolvedCleanupFiles() ([]string, error) {

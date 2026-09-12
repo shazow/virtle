@@ -145,6 +145,10 @@ func (b *Backend) consoleOutput() io.Writer {
 
 func (b *Backend) hasRemoteControl() bool { return b.RemoteControl != nil }
 
+// StateVersion reports the suspend-state format this backend writes and can
+// resume. The format includes the QEMU migration stream and host network state.
+func (b *Backend) StateVersion() string { return vmm.StateVersion }
+
 // NewBackendFromDocument is the bridge for the public manifest package:
 // the returned backend starts from the loaded document, preserving
 // manifest sections that have no vm.Spec equivalent, and overlays the Spec

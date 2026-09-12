@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/miekg/dns"
 	"github.com/shazow/virtle/internal/dnsproxy"
@@ -136,6 +137,22 @@ func TestFlowResolutionUsesConfiguredDNS(t *testing.T) {
 			}
 		})
 	}
+	t.Run("explicit passthrough resolver", func(t *testing.T) {
+		var customDials atomic.Int32
+		custom := &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			customDials.Add(1)
+			return (&net.Dialer{}).DialContext(ctx, network, pc.LocalAddr().String())
+		}}
+		p := vmnet.Passthrough{Dialer: &net.Dialer{Resolver: custom}}
+		c, err := p.DialFlow(ctx, namedFlow("api.example.test", port))
+		if err != nil {
+			t.Fatal(err)
+		}
+		expectEcho(t, c)
+		if customDials.Load() == 0 {
+			t.Fatal("flow ignored the explicitly configured passthrough resolver")
+		}
+	})
 	before := queries.Load()
 	c, err := (vmnet.Passthrough{}).DialFlow(ctx, addrFlow(netip.AddrPortFrom(loopback, port)))
 	if err != nil {
@@ -151,5 +168,53 @@ func TestFlowResolutionUsesConfiguredDNS(t *testing.T) {
 			c.Close()
 		}
 		t.Fatalf("configured DNS resolved to loopback: %v, want ErrDenied", err)
+	}
+}
+
+func TestPassthroughBoundsConfiguredDNSLookup(t *testing.T) {
+	// A bound but silent UDP server leaves lookup pending until the dialer's
+	// deadline. No external resolver or simulated connection is involved.
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pc.Close()
+	resolver, err := dnsproxy.New(pc.LocalAddr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const timeout = 100 * time.Millisecond
+	for _, tc := range []struct {
+		name              string
+		timeout, deadline time.Duration
+		parentExpired     bool
+	}{
+		{name: "timeout", timeout: timeout},
+		{name: "negative timeout", timeout: -timeout},
+		{name: "deadline", deadline: timeout},
+		{name: "earlier timeout", timeout: timeout, deadline: time.Second},
+		{name: "earlier deadline", timeout: time.Second, deadline: timeout},
+		{name: "earlier context", timeout: time.Second, parentExpired: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := &net.Dialer{Timeout: tc.timeout}
+			if tc.deadline != 0 {
+				d.Deadline = time.Now().Add(tc.deadline)
+			}
+			parentTimeout := 2 * time.Second
+			if tc.parentExpired {
+				parentTimeout = -timeout
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), parentTimeout)
+			defer cancel()
+			_, err := (vmnet.Passthrough{Dialer: d}).DialFlow(dnsproxy.WithResolver(ctx, resolver), namedFlow("api.example.test", 443))
+			var timeoutErr net.Error
+			if !errors.As(err, &timeoutErr) || !timeoutErr.Timeout() {
+				t.Fatalf("lookup = %v, want a timeout", err)
+			}
+			if !tc.parentExpired && ctx.Err() != nil {
+				t.Fatal("lookup outlived the dialer's limit and reached the parent deadline")
+			}
+		})
 	}
 }

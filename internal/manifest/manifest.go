@@ -45,11 +45,35 @@ type Identity struct {
 type Paths struct {
 	WorkingDir string `json:"workingDir"`
 	LockPath   string `json:"lockPath"`
+	// RuntimeDir locates relative sockets independently of persistent VM
+	// state. Document loaders default it to Persistence.StateDir.
+	RuntimeDir RuntimeDir `json:"runtimeDir,omitempty"`
+}
+
+// RuntimeDirMode selects how relative runtime socket paths are resolved.
+type RuntimeDirMode int
+
+const (
+	RuntimeDirWorking RuntimeDirMode = iota // relative to Paths.WorkingDir
+	RuntimeDirXDG                           // in the user's XDG runtime directory
+	RuntimeDirPath                          // relative to RuntimeDir.Path
+)
+
+// RuntimeDir selects a location for sockets. It does not relocate persistent
+// state, and absolute socket paths bypass it. Path is used by RuntimeDirPath;
+// a relative Path resolves against Paths.WorkingDir.
+type RuntimeDir struct {
+	Mode RuntimeDirMode `json:"mode,omitempty"`
+	Path string         `json:"path,omitempty"`
 }
 
 type Persistence struct {
 	Directories []string `json:"directories"`
-	StateDir    string   `json:"stateDir,omitempty"`
+	// BaseDir is the fallback for an empty StateDir. An empty BaseDir falls
+	// back to Paths.WorkingDir; document loaders set both to state_dir.
+	BaseDir string `json:"baseDir,omitempty"`
+	// StateDir holds persistent VM state independently of runtime sockets.
+	StateDir string `json:"stateDir,omitempty"`
 }
 
 type SSH struct {

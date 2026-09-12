@@ -21,14 +21,16 @@ type tokenState interface {
 // SaveNetworkState captures synthetic names and issued tokens for suspend.
 // The caller must stop the guest before saving its host-side state.
 func (n *Network) SaveNetworkState() vmnet.NetworkState {
-	t := n.fakeIPs
-	t.mu.Lock()
-	state := vmnet.NetworkState{FakeIPRange: t.prefix}
-	for e := t.used.Front(); e != nil; e = e.Next() {
-		binding := e.Value.(*fakeIPEntry)
-		state.Bindings = append(state.Bindings, vmnet.DNSBinding{Name: binding.name, Addr: binding.addr})
+	var state vmnet.NetworkState
+	if t := n.fakeIPs; t != nil {
+		t.mu.Lock()
+		state.FakeIPRange = t.prefix
+		for e := t.used.Front(); e != nil; e = e.Next() {
+			binding := e.Value.(*fakeIPEntry)
+			state.Bindings = append(state.Bindings, vmnet.DNSBinding{Name: binding.name, Addr: binding.addr})
+		}
+		t.mu.Unlock()
 	}
-	t.mu.Unlock()
 	if policy, ok := n.egress.(tokenState); ok {
 		state.Tokens = policy.SaveTokens()
 	}
@@ -43,6 +45,12 @@ func (n *Network) RestoreNetworkState(state vmnet.NetworkState) error {
 	defer n.mu.Unlock()
 	if n.closed {
 		return net.ErrClosed
+	}
+	if n.fakeIPs == nil {
+		if state.FakeIPRange.IsValid() || len(state.Bindings) != 0 {
+			return fmt.Errorf("cannot restore synthetic DNS state on a forwarding network")
+		}
+		return n.restoreTokens(state.Tokens)
 	}
 	t := n.fakeIPs
 	t.mu.Lock()
@@ -68,16 +76,8 @@ func (n *Network) RestoreNetworkState(state vmnet.NetworkState) error {
 			return fmt.Errorf("saved DNS address %s belongs to another name on this network", b.Addr)
 		}
 	}
-	if len(state.Tokens) != 0 {
-		policy, ok := n.egress.(tokenState)
-		if !ok {
-			return fmt.Errorf("the current egress cannot restore saved secret tokens")
-		}
-		// Check and merge under the policy's token lock so concurrent token
-		// issuance cannot be overwritten on a network with attached guests.
-		if err := policy.RestoreTokens(state.Tokens, len(n.byAddr) == 0); err != nil {
-			return err
-		}
+	if err := n.restoreTokens(state.Tokens); err != nil {
+		return err
 	}
 	// The guest's cache clock may have stopped while suspended. Grant a
 	// full TTL from resume, regardless of how long the host was down.
@@ -94,6 +94,22 @@ func (n *Network) RestoreNetworkState(state vmnet.NetworkState) error {
 		e.Value.(*fakeIPEntry).expires = expires
 		if b.Addr.Compare(t.next) >= 0 {
 			t.next = b.Addr.Next()
+		}
+	}
+	return nil
+}
+
+// restoreTokens is called with n.mu held after validating DNS state.
+func (n *Network) restoreTokens(tokens map[string]string) error {
+	if len(tokens) != 0 {
+		policy, ok := n.egress.(tokenState)
+		if !ok {
+			return fmt.Errorf("the current egress cannot restore saved secret tokens")
+		}
+		// Check and merge under the policy's token lock so concurrent token
+		// issuance cannot be overwritten on a network with attached guests.
+		if err := policy.RestoreTokens(tokens, len(n.byAddr) == 0); err != nil {
+			return err
 		}
 	}
 	return nil

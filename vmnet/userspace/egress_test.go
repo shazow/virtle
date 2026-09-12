@@ -44,7 +44,7 @@ func TestFakeIPNamesReachThePolicy(t *testing.T) {
 		DenyPrefixes: []netip.Prefix{},
 		Recorder:     rec,
 	}
-	n := newTestNetwork(t, Config{Egress: policy, DNSUpstream: dnsUpstream(t, addressDNS)})
+	n := newTestNetwork(t, Config{DNS: DNSFakeIP, Egress: policy, DNSUpstream: dnsUpstream(t, addressDNS)})
 	g := attachGuest(t, n, "vm1", vmnet.AttachOptions{})
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
@@ -131,15 +131,15 @@ func (h hostTable) LookupNetIP(_ context.Context, _, host string) ([]netip.Addr,
 
 func TestFakeIPRange(t *testing.T) {
 	for name, cfg := range map[string]Config{
-		"fake range overlaps subnet": {FakeIPRange: netip.MustParsePrefix("192.168.0.0/16")},
-		"fake range is ipv6":         {FakeIPRange: netip.MustParsePrefix("fd00::/64")},
+		"fake range overlaps subnet": {DNS: DNSFakeIP, FakeIPRange: netip.MustParsePrefix("192.168.0.0/16")},
+		"fake range is ipv6":         {DNS: DNSFakeIP, FakeIPRange: netip.MustParsePrefix("fd00::/64")},
 	} {
 		if n, err := New(cfg); err == nil {
 			n.Close()
 			t.Errorf("New accepted %s", name)
 		}
 	}
-	n := newTestNetwork(t, Config{FakeIPRange: netip.MustParsePrefix("10.99.0.0/16")})
+	n := newTestNetwork(t, Config{DNS: DNSFakeIP, FakeIPRange: netip.MustParsePrefix("10.99.0.0/16")})
 	if !n.fakeIPs.contains(netip.MustParseAddr("10.99.3.4")) {
 		t.Fatal("the configured fake range is not in use")
 	}
@@ -148,7 +148,7 @@ func TestFakeIPRange(t *testing.T) {
 
 func TestUnknownFakeAddressesAreRefused(t *testing.T) {
 	egress := &recordingEgress{dial: vmnet.Passthrough{}.DialFlow}
-	n := newTestNetwork(t, Config{Egress: egress})
+	n := newTestNetwork(t, Config{DNS: DNSFakeIP, Egress: egress})
 	g := attachGuest(t, n, "vm1", vmnet.AttachOptions{})
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()

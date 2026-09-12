@@ -178,11 +178,17 @@ func (l *dnsLog) String() string {
 }
 
 func TestDNSProxyPreservesNamesAndRecords(t *testing.T) {
+	records := map[uint16]string{
+		dns.TypeTXT: "example.test. 123 IN TXT \"one\" \"two\"",
+		dns.TypeMX:  "example.test. 123 IN MX 10 mail.test.",
+		dns.TypeNS:  "example.test. 123 IN NS ns.test.",
+		dns.TypeSRV: "example.test. 123 IN SRV 1 2 443 service.test.",
+		dns.TypePTR: "7.2.0.192.in-addr.arpa. 123 IN PTR example.test.",
+	}
 	var requests atomic.Int64
 	upstream := dnsUpstream(t, func(w dns.ResponseWriter, r *dns.Msg) {
 		requests.Add(1)
-		m := new(dns.Msg)
-		m.SetReply(r)
+		m := new(dns.Msg).SetReply(r)
 		q := r.Question[0]
 		switch q.Name {
 		case ".":
@@ -193,79 +199,116 @@ func TestDNSProxyPreservesNamesAndRecords(t *testing.T) {
 			m.Rcode = dns.RcodeNameError
 		case "empty.test.":
 		default:
-			switch q.Qtype {
-			case dns.TypeA:
+			if q.Qtype == dns.TypeA {
 				addressDNS(w, r)
 				return
-			case dns.TypeTXT:
-				m.Answer = []dns.RR{&dns.TXT{Hdr: dns.RR_Header{Name: q.Name, Rrtype: q.Qtype, Class: dns.ClassINET, Ttl: 123}, Txt: []string{"one", "two"}}}
+			}
+			if text, ok := records[q.Qtype]; ok {
+				rr, err := dns.NewRR(text)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				m.Answer = []dns.RR{rr}
 			}
 		}
 		_ = w.WriteMsg(m)
 	})
-	log := new(dnsLog)
-	n := newTestNetwork(t, Config{DNSUpstream: upstream, Egress: &egress.Policy{Reach: egress.ReachAll}, Logger: slog.New(slog.NewJSONHandler(log, nil))})
-	g := attachGuest(t, n, "guest", vmnet.AttachOptions{})
-	for _, network := range []string{"udp", "tcp"} {
-		t.Run(network, func(t *testing.T) {
-			r := queryDNS(t, g, network, "example.test", dns.TypeA)
-			if r.Rcode != dns.RcodeSuccess || len(r.Answer) != 1 {
-				t.Fatalf("A reply = %v", r)
+	for _, mode := range []DNSMode{"", DNSForward, DNSFakeIP} {
+		t.Run(string(mode), func(t *testing.T) {
+			log := new(dnsLog)
+			n := newTestNetwork(t, Config{DNS: mode, DNSUpstream: upstream, Egress: &egress.Policy{Reach: egress.ReachAll}, Logger: slog.New(slog.NewJSONHandler(log, nil))})
+			wantMode := mode
+			if wantMode == "" {
+				wantMode = DNSForward
 			}
-			a := r.Answer[0].(*dns.A).A.String()
-			if !n.fakeIPs.contains(netip.MustParseAddr(a)) || r.AuthenticatedData {
-				t.Fatalf("A reply = %v; want an unsigned synthetic address", r)
+			if n.DNS() != wantMode {
+				t.Fatalf("DNS = %s, want %s", n.DNS(), wantMode)
 			}
-			reverse, _ := dns.ReverseAddr(a)
-			ptr := queryDNS(t, g, network, reverse, dns.TypePTR)
-			if len(ptr.Answer) != 1 || ptr.Answer[0].(*dns.PTR).Ptr != "example.test." {
-				t.Fatalf("PTR reply = %v", ptr)
+			g := attachGuest(t, n, "guest", vmnet.AttachOptions{})
+			for _, network := range []string{"udp", "tcp"} {
+				t.Run(network, func(t *testing.T) {
+					r := queryDNS(t, g, network, "example.test", dns.TypeA)
+					if r.Rcode != dns.RcodeSuccess || len(r.Answer) != 1 {
+						t.Fatalf("A reply = %v", r)
+					}
+					a := r.Answer[0].(*dns.A).A.String()
+					if mode == DNSFakeIP {
+						if !n.fakeIPs.contains(netip.MustParseAddr(a)) || r.AuthenticatedData {
+							t.Fatalf("A reply = %v; want an unsigned synthetic address", r)
+						}
+						reverse, _ := dns.ReverseAddr(a)
+						ptr := queryDNS(t, g, network, reverse, dns.TypePTR)
+						if len(ptr.Answer) != 1 || ptr.Answer[0].(*dns.PTR).Ptr != "example.test." {
+							t.Fatalf("PTR reply = %v", ptr)
+						}
+					} else if a != "127.0.0.1" {
+						t.Fatalf("forwarded A = %s, want upstream address", a)
+					}
+					before := requests.Load()
+					if r := queryDNS(t, g, network, "example.test", dns.TypeAAAA); r.Rcode != dns.RcodeSuccess || len(r.Answer) != 0 {
+						t.Fatalf("AAAA reply = %v", r)
+					}
+					for _, local := range []netip.Addr{n.Gateway(), g.addr} {
+						reverse, _ := dns.ReverseAddr(local.String())
+						if r := queryDNS(t, g, network, reverse, dns.TypePTR); r.Rcode != dns.RcodeNameError {
+							t.Fatalf("local PTR %s = %v", local, r)
+						}
+					}
+					if requests.Load() != before {
+						t.Error("local AAAA or PTR answer contacted upstream")
+					}
+					for typ, text := range records {
+						want, _ := dns.NewRR(text)
+						r := queryDNS(t, g, network, want.Header().Name, typ)
+						if r.Rcode != dns.RcodeSuccess || len(r.Answer) != 1 || r.Answer[0].String() != want.String() {
+							t.Fatalf("%s reply = %v, want %s", dns.Type(typ), r, want)
+						}
+					}
+					if r := queryDNS(t, g, network, "missing.test", dns.TypeA); r.Rcode != dns.RcodeNameError {
+						t.Fatalf("missing name = %v", r)
+					}
+					if r := queryDNS(t, g, network, "empty.test", dns.TypeA); r.Rcode != dns.RcodeSuccess || len(r.Answer) != 0 {
+						t.Fatalf("NODATA = %v", r)
+					}
+					if r := queryDNS(t, g, network, ".", dns.TypeNS); len(r.Answer) != 1 || r.Answer[0].(*dns.NS).Ns != "ns.test." {
+						t.Fatalf("root NS reply = %v", r)
+					}
+					r = queryDNS(t, g, network, "alias.test", dns.TypeCNAME)
+					if len(r.Answer) != 1 || r.Answer[0].(*dns.CNAME).Target != "example.test." {
+						t.Fatalf("CNAME reply = %v", r)
+					}
+					r = queryDNS(t, g, network, "alias.test", dns.TypeA)
+					if len(r.Answer) != 1 {
+						t.Fatalf("alias A reply = %v", r)
+					}
+					if mode == DNSFakeIP {
+						alias := netip.MustParseAddr(r.Answer[0].(*dns.A).A.String())
+						if name, ok := n.fakeIPs.name(alias); !ok || name != "alias.test" {
+							t.Fatalf("alias address %s maps to %q, want original name", alias, name)
+						}
+					} else if alias, ok := r.Answer[0].(*dns.CNAME); !ok || alias.Target != "example.test." {
+						t.Fatalf("forwarded alias = %v", r)
+					}
+				})
 			}
-			before := requests.Load()
-			if r := queryDNS(t, g, network, "example.test", dns.TypeAAAA); r.Rcode != dns.RcodeSuccess || len(r.Answer) != 0 {
-				t.Fatalf("AAAA reply = %v", r)
+			found := false
+			for _, line := range strings.Split(strings.TrimSpace(log.String()), "\n") {
+				var entry map[string]any
+				if err := json.Unmarshal([]byte(line), &entry); err != nil {
+					t.Fatal(err)
+				}
+				if entry["msg"] == "dns query" && entry["type"] == "TXT" {
+					found = true
+					if entry["guest"] != "guest" || entry["name"] != "example.test" || entry["decision"] != "allow" || entry["upstream"] != upstream || entry["rcode"] != "NOERROR" {
+						t.Errorf("query log = %v", entry)
+					}
+				}
 			}
-			if requests.Load() != before {
-				t.Error("empty guest AAAA answer contacted upstream")
-			}
-			txt := queryDNS(t, g, network, "example.test", dns.TypeTXT)
-			if len(txt.Answer) != 1 || txt.Answer[0].(*dns.TXT).Hdr.Ttl != 123 || strings.Join(txt.Answer[0].(*dns.TXT).Txt, ",") != "one,two" {
-				t.Fatalf("TXT reply = %v", txt)
-			}
-			if r := queryDNS(t, g, network, "missing.test", dns.TypeA); r.Rcode != dns.RcodeNameError {
-				t.Fatalf("missing name = %v", r)
-			}
-			if r := queryDNS(t, g, network, "empty.test", dns.TypeA); r.Rcode != dns.RcodeSuccess || len(r.Answer) != 0 {
-				t.Fatalf("NODATA = %v", r)
-			}
-			if r := queryDNS(t, g, network, ".", dns.TypeNS); len(r.Answer) != 1 || r.Answer[0].(*dns.NS).Ns != "ns.test." {
-				t.Fatalf("root NS reply = %v", r)
-			}
-			r = queryDNS(t, g, network, "alias.test", dns.TypeA)
-			if len(r.Answer) != 1 {
-				t.Fatalf("alias A reply = %v", r)
-			}
-			alias := netip.MustParseAddr(r.Answer[0].(*dns.A).A.String())
-			if name, ok := n.fakeIPs.name(alias); !ok || name != "alias.test" {
-				t.Fatalf("alias address %s maps to %q, want original name", alias, name)
+			if !found {
+				t.Fatal("no TXT query recorded")
 			}
 		})
-	}
-	found := false
-	for _, line := range strings.Split(strings.TrimSpace(log.String()), "\n") {
-		var entry map[string]any
-		if err := json.Unmarshal([]byte(line), &entry); err != nil {
-			t.Fatal(err)
-		}
-		if entry["msg"] == "dns query" && entry["type"] == "TXT" {
-			found = true
-			if entry["guest"] != "guest" || entry["name"] != "example.test" || entry["decision"] != "allow" || entry["upstream"] != upstream || entry["rcode"] != "NOERROR" {
-				t.Errorf("query log = %v", entry)
-			}
-		}
-	}
-	if !found {
-		t.Fatal("no TXT query recorded")
 	}
 }
 
@@ -284,17 +327,19 @@ func TestDNSAuthorizationPrecedesUpstream(t *testing.T) {
 		"custom without DNS": {egress: &recordingEgress{}},
 		"guest denied":       {egress: &egress.Policy{Reach: egress.ReachInternet}, guest: &vm.Egress{}},
 	} {
-		t.Run(name, func(t *testing.T) {
-			n := newTestNetwork(t, Config{DNSUpstream: upstream, Egress: tc.egress})
-			g := attachGuest(t, n, "guest", vmnet.AttachOptions{Egress: tc.guest})
-			for _, network := range []string{"udp", "tcp"} {
-				for _, qtype := range []uint16{dns.TypeA, dns.TypeTXT, dns.TypeMX, dns.TypeSRV} {
-					if r := queryDNS(t, g, network, "blocked.test", qtype); r.Rcode != dns.RcodeRefused {
-						t.Fatalf("%s reply = %v", dns.Type(qtype), r)
+		for _, mode := range []DNSMode{DNSForward, DNSFakeIP} {
+			t.Run(name+"/"+string(mode), func(t *testing.T) {
+				n := newTestNetwork(t, Config{DNS: mode, DNSUpstream: upstream, Egress: tc.egress})
+				g := attachGuest(t, n, "guest", vmnet.AttachOptions{Egress: tc.guest})
+				for _, network := range []string{"udp", "tcp"} {
+					for _, qtype := range []uint16{dns.TypeA, dns.TypeTXT, dns.TypeMX, dns.TypeSRV} {
+						if r := queryDNS(t, g, network, "blocked.test", qtype); r.Rcode != dns.RcodeRefused {
+							t.Fatalf("%s reply = %v", dns.Type(qtype), r)
+						}
 					}
 				}
-			}
-		})
+			})
+		}
 	}
 	if requests.Load() != 0 {
 		t.Fatalf("denied queries reached upstream %d times", requests.Load())

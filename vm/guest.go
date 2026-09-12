@@ -1,6 +1,8 @@
 package vm
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -42,4 +44,37 @@ func (e *ExitError) Error() string {
 		return ""
 	}
 	return fmt.Sprintf("guest command exited with status %d", e.Code)
+}
+
+// Output runs cmd and returns its standard output, like exec.Cmd.Output.
+// It returns an error when cmd already has a Stdout writer.
+func Output(ctx context.Context, g Guest, cmd *GuestCmd) ([]byte, error) {
+	if cmd == nil {
+		return nil, fmt.Errorf("guest command is required")
+	}
+	if cmd.Stdout != nil {
+		return nil, fmt.Errorf("guest command Stdout is already set")
+	}
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	defer func() { cmd.Stdout = nil }()
+	err := g.Run(ctx, cmd)
+	return stdout.Bytes(), err
+}
+
+// ArchiveFS returns a reader that produces a tar archive of fsys as it is
+// read. Callers can pass os.DirFS(path), an embed.FS, or a fstest.MapFS.
+// Generation errors surface from Read. Close the reader to release resources
+// when the archive is not read to completion.
+func ArchiveFS(fsys fs.FS) io.ReadCloser {
+	pr, pw := io.Pipe()
+	go func() {
+		tw := tar.NewWriter(pw)
+		err := tw.AddFS(fsys)
+		if err == nil {
+			err = tw.Close()
+		}
+		pw.CloseWithError(err)
+	}()
+	return pr
 }

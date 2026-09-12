@@ -83,7 +83,7 @@ func TestFakeIPUsesRefreshDNSLifetime(t *testing.T) {
 }
 
 func TestDNSFullSyntheticRangePreservesAnswers(t *testing.T) {
-	n := newTestNetwork(t, Config{FakeIPRange: netip.MustParsePrefix("198.18.0.0/30"), DNSUpstream: dnsUpstream(t, addressDNS)})
+	n := newTestNetwork(t, Config{DNS: DNSFakeIP, FakeIPRange: netip.MustParsePrefix("198.18.0.0/30"), DNSUpstream: dnsUpstream(t, addressDNS)})
 	g := attachGuest(t, n, "guest", vmnet.AttachOptions{})
 	one := queryDNS(t, g, "udp", "one.test", dns.TypeA)
 	two := queryDNS(t, g, "udp", "two.test", dns.TypeA)

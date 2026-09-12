@@ -25,7 +25,7 @@ host through the network's **egress**. Nothing touches the host's network
 configuration and no privilege is needed.
 
 ```go
-network, err := userspace.New(userspace.Config{}) // 192.168.127.0/24, host DNS with synthetic guest addresses
+network, err := userspace.New(userspace.Config{}) // 192.168.127.0/24, forwarded host DNS addresses
 defer network.Close()
 
 b := &qemu.Backend{Network: network}
@@ -45,14 +45,20 @@ conn, err := network.DialContext(ctx, "tcp", status.Networks[0].Addr+":22") // n
   forwards at runtime with no hotplug ports involved; `Detach` also removes a
   forward given in `Spec.Ports`.
 - `network.DialContext` dials a guest by address or by machine name.
+- `network.Gateway()` reports the gateway address. `network.Listen("tcp", ":8080")`
+  serves a host-side TCP service directly on that address, even with `vmnet.DenyAll{}`
+  as the egress. Port 53 is reserved for gateway DNS; packets to gateway services
+  must fit the segment MTU.
 - A suspended machine keeps its address and MAC and re-attaches with them on
   resume, so the lease its kernel holds stays valid. Its synthetic DNS
   bindings and issued secret tokens are saved too, including across CLI
   invocations, and restored before the NIC attaches. Saved bindings get a
   fresh TTL protection window because the guest's cache clock may have
   stopped. Conflicts with an active shared network fail resume.
-- Closing a port ends its outgoing connections before releasing the address;
-  a replacement guest establishes new flows under its own policy.
+- Closing a port ends its forwarded egress connections before releasing the
+  address; a replacement guest establishes new flows under its own policy.
+  Gateway listeners and guest-to-guest services have their own connection
+  lifetimes.
 - The segment carries IPv4 only. The gateway answers ping; nothing forwards
   ICMP to the outside.
 
@@ -66,7 +72,10 @@ forward = [{ host = "127.0.0.1:2222", guest = ":22" }]
 
 The loader builds the network and hands it to the backend, which owns it:
 close the backend (it implements `io.Closer`) when its machines are done. The
-network logs through the backend's `Logger`.
+network logs through the backend's `Logger`. Manifest-managed networks use
+synthetic DNS so the default and explicit egress policies retain destination
+names. The Go API instead defaults to `userspace.DNSForward`; set
+`userspace.Config.DNS` to `userspace.DNSFakeIP` for hostname-based policies.
 
 ### Guest side
 
@@ -96,9 +105,12 @@ decision and is not held to that, so a rule can still name a host on the
 LAN under `ReachInternet`.
 
 The gateway checks a DNS query against the guest's egress policy before
-contacting upstream DNS. Positive A answers become synthetic addresses;
+contacting upstream DNS in both modes. `DNSForward` returns the upstream's real
+A addresses; subsequent flows are addressed by IP, so hostname rules cannot
+match them. `DNSFakeIP` turns positive A answers into synthetic addresses;
 a flow to one carries the requested name, which the egress resolves again
-after approving the connection. Both use the same configured DNS upstream.
+after approving the connection. Both lookups use the same configured DNS
+upstream unless the Go egress has an explicit connection resolver.
 Negative answers such as NXDOMAIN reach the guest. AAAA answers are empty
 because the guest segment carries IPv4; PTR queries for synthetic addresses
 are answered locally. Ordinary records such as TXT, CNAME, MX, NS, and SRV
@@ -109,8 +121,10 @@ after a lookup or use. When the range fills, DNS returns SERVFAIL until a
 binding expires; cached addresses are never reassigned within that window.
 
 DNS defaults to the host nameservers listed in `/etc/resolv.conf` when the
-network is created, including a local DNS stub when configured. Set an
-explicit resolver with one manifest option:
+network is created, including a local DNS stub when configured. This is wire
+DNS forwarding: it does not consult `/etc/hosts`, NSS, or other system lookup
+sources, and sends already-qualified questions without host search suffixes.
+Set an explicit resolver with one manifest option:
 
 ```toml
 [[networks]]
@@ -151,12 +165,18 @@ policy := &egress.Policy{
 	Rules:  []egress.Rule{{Hosts: []string{"*.github.com"}, Ports: []int{443}}},
 	Logger: logger,
 }
-network, err := userspace.New(userspace.Config{Egress: policy})
+network, err := userspace.New(userspace.Config{DNS: userspace.DNSFakeIP, Egress: policy})
 ```
 
 In Go, `userspace.Config.DNSUpstream` selects the same upstream as the
 manifest setting. An explicitly supplied `egress.Policy.Resolver` overrides
-address lookups for that policy; leave it unset to share the network's DNS.
+connection address lookups for that policy; leave it unset to share the
+network's DNS. `vmnet.Passthrough.Dialer` configures outgoing connections, and
+an explicit `Dialer.Resolver` similarly overrides their name lookups. Neither
+override changes the gateway's DNS answers: a name must still exist at the
+configured `DNSUpstream` before the gateway issues a synthetic A answer.
+Use `vmnet.DenyAll{}` for a fixed policy denying outgoing flows and remote
+DNS; local gateway services and guest-to-guest traffic remain available.
 
 A guest's own `vm.Spec.Egress` only narrows the network's policy: its `Allow`
 list is intersected with the rules, its `Deny` list wins, and only the

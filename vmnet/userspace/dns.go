@@ -155,7 +155,7 @@ func (s *dnsServer) answer(ctx context.Context, m *dns.Msg, q dns.Question, f vm
 			m.Rcode = dns.RcodeNameError
 			return nil
 		}
-		if ok && s.n.fakeIPs.contains(addr) {
+		if ok && s.n.fakeIPs != nil && s.n.fakeIPs.contains(addr) {
 			if name, ok := s.n.fakeIPs.name(addr); ok {
 				m.Answer = append(m.Answer, &dns.PTR{Hdr: hdr, Ptr: dns.Fqdn(name)})
 			} else {
@@ -187,7 +187,7 @@ func (s *dnsServer) answer(ctx context.Context, m *dns.Msg, q dns.Question, f vm
 	if err != nil {
 		return err
 	}
-	if q.Qtype == dns.TypeA && reply.Rcode == dns.RcodeSuccess {
+	if q.Qtype == dns.TypeA && s.n.fakeIPs != nil && reply.Rcode == dns.RcodeSuccess {
 		hasAddress, hasAlias := false, false
 		for _, rr := range reply.Answer {
 			switch rr.(type) {

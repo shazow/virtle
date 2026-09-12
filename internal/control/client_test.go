@@ -3,10 +3,13 @@ package control
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
+	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/shazow/virtle/backend"
 	"github.com/shazow/virtle/backend/backendtest"
@@ -127,6 +130,109 @@ func TestDialCapabilitySkewReturnsUnsupported(t *testing.T) {
 	if !errors.Is(err, errors.ErrUnsupported) {
 		t.Fatalf("Attach error = %v, want errors.ErrUnsupported", err)
 	}
+}
+
+func TestLegacyMachineLifecycle(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		methods []string
+		action  rpcMethod
+	}{
+		{name: "suspend", methods: []string{"suspend"}, action: rpcSuspend},
+		{name: "guest shutdown", methods: []string{"guest-exec", "guest-read", "guest-write", "guest-shutdown"}, action: rpcGuestShutdown},
+		{name: "kill fallback", methods: []string{"kill"}, action: rpcKill},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			// The socket's disappearance is the old server's completion record,
+			// so this compatibility test needs a real Unix listener.
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			path, stop := legacyControlServer(t, test.methods, func(method rpcMethod, stop func()) (any, error) {
+				switch method {
+				case rpcStatus:
+					return StatusResponse{State: RuntimeReady}, nil
+				case test.action:
+					stop()
+					return SuspendResponse{Saved: true}, nil
+				default:
+					return nil, &RPCError{Code: ErrUnknownMethod, Message: "unknown method"}
+				}
+			})
+			defer stop()
+			m, err := Dial(ctx, path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			status, err := m.(backend.StatusReporter).Status(ctx)
+			if err != nil || status.State != RuntimeReady {
+				t.Fatalf("Status = %+v, %v", status, err)
+			}
+			select {
+			case <-m.Done():
+				t.Fatalf("machine reported exit while the old server was ready: %v", m.Err())
+			default:
+			}
+			if test.action == rpcSuspend {
+				err = m.(backend.Suspender).Suspend(ctx)
+			} else {
+				err = m.Shutdown(ctx)
+			}
+			if err != nil {
+				t.Fatalf("%s: %v", test.name, err)
+			}
+			if err := m.Wait(ctx); err != nil {
+				t.Fatalf("wait for old server teardown: %v", err)
+			}
+		})
+	}
+}
+
+// legacyControlServer serves the older method set over the real JSON transport.
+// The current Router requires wait, which these servers did not implement.
+func legacyControlServer(t *testing.T, methods []string, handle func(rpcMethod, func()) (any, error)) (string, func()) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "ctl")
+	listener, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop := func() { _ = listener.Close() }
+	accepted := make(chan struct{})
+	var handlers sync.WaitGroup
+	t.Cleanup(func() { stop(); <-accepted; handlers.Wait() })
+	go func() {
+		defer close(accepted)
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			handlers.Add(1)
+			go func() {
+				defer handlers.Done()
+				defer conn.Close()
+				var req requestEnvelope
+				if err := json.NewDecoder(conn).Decode(&req); err != nil {
+					return
+				}
+				var result any
+				var rpcErr error
+				if req.Method == rpcMethods {
+					result = MethodsResponse{Methods: append([]string{"methods", "status"}, methods...)}
+				} else {
+					result, rpcErr = handle(req.Method, stop)
+				}
+				response := responseEnvelope{ID: req.ID}
+				if rpcErr != nil {
+					_ = errors.As(rpcErr, &response.Error)
+				} else {
+					response.Result, _ = json.Marshal(result)
+				}
+				_ = json.NewEncoder(conn).Encode(response)
+			}()
+		}
+	}()
+	return path, stop
 }
 
 // pipeClient exercises the real control transport without a filesystem socket.

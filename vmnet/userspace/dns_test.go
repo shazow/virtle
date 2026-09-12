@@ -82,6 +82,15 @@ func exchangeDNS(t *testing.T, g *guest, network string, m *dns.Msg) *dns.Msg {
 
 func TestDNSResponseUsesGuestEDNS(t *testing.T) {
 	upstream := dnsUpstream(t, func(w dns.ResponseWriter, r *dns.Msg) {
+		if r.MsgHdr != (dns.MsgHdr{Id: r.Id, RecursionDesired: true}) || len(r.Question) != 1 || r.Question[0].Qclass != dns.ClassINET {
+			t.Errorf("upstream query header or question = %v", r)
+		}
+		if len(r.Answer) != 0 || len(r.Ns) != 0 || len(r.Extra) != 1 {
+			t.Errorf("guest sections reached upstream: %v", r)
+		}
+		if o := r.IsEdns0(); o == nil || o.Do() || len(o.Option) != 0 {
+			t.Errorf("upstream OPT = %v, want resolver's own capabilities", o)
+		}
 		m := new(dns.Msg).SetReply(r)
 		m.SetEdns0(4096, false)
 		m.IsEdns0().Option = []dns.EDNS0{&dns.EDNS0_LOCAL{Code: 65001, Data: []byte("upstream-only")}}
@@ -89,52 +98,76 @@ func TestDNSResponseUsesGuestEDNS(t *testing.T) {
 			m.Rcode = dns.RcodeBadVers
 		} else {
 			m.Answer = []dns.RR{&dns.TXT{Hdr: dns.RR_Header{Name: r.Question[0].Name, Rrtype: dns.TypeTXT, Class: dns.ClassINET}, Txt: []string{"answer"}}}
+			m.Ns = []dns.RR{&dns.NS{Hdr: dns.RR_Header{Name: "test.", Rrtype: dns.TypeNS, Class: dns.ClassINET}, Ns: "ns.test."}}
 			m.Extra = append(m.Extra, &dns.A{Hdr: dns.RR_Header{Name: "extra.test.", Rrtype: dns.TypeA, Class: dns.ClassINET}, A: net.IPv4(192, 0, 2, 1)})
 		}
 		_ = w.WriteMsg(m)
 	})
 	n := newTestNetwork(t, Config{DNSUpstream: upstream})
 	g := attachGuest(t, n, "guest", vmnet.AttachOptions{})
-	for _, edns := range []bool{false, true} {
-		for _, name := range []string{"records.test.", "extended.test."} {
-			q := new(dns.Msg).SetQuestion(name, dns.TypeTXT)
-			if edns {
-				q.SetEdns0(4096, false)
-			}
-			r := exchangeDNS(t, g, "udp", q)
-			opts, addresses := 0, 0
-			for _, rr := range r.Extra {
-				switch rr := rr.(type) {
-				case *dns.OPT:
-					opts++
-					if len(rr.Option) != 0 || int(rr.UDPSize()) != n.MTU()-28 {
-						t.Fatalf("gateway OPT = %v", rr)
+	for _, network := range []string{"udp", "tcp"} {
+		t.Run(network, func(t *testing.T) {
+			for _, edns := range []bool{false, true} {
+				for _, name := range []string{"Records.Test.", "Extended.Test."} {
+					q := new(dns.Msg).SetQuestion(name, dns.TypeTXT)
+					q.Id = 0x1234
+					q.RecursionDesired = false
+					q.AuthenticatedData, q.CheckingDisabled = true, true
+					q.Answer = []dns.RR{&dns.TXT{Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeTXT, Class: dns.ClassINET}, Txt: []string{"guest-only"}}}
+					q.Ns = []dns.RR{&dns.NS{Hdr: dns.RR_Header{Name: "test.", Rrtype: dns.TypeNS, Class: dns.ClassINET}, Ns: "guest-only.test."}}
+					q.Extra = []dns.RR{&dns.A{Hdr: dns.RR_Header{Name: "guest-only.test.", Rrtype: dns.TypeA, Class: dns.ClassINET}, A: net.IPv4(192, 0, 2, 2)}}
+					if edns {
+						q.SetEdns0(4096, true)
+						q.IsEdns0().Option = []dns.EDNS0{&dns.EDNS0_LOCAL{Code: 65002, Data: []byte("guest-only")}}
 					}
-				case *dns.A:
-					addresses++
+					r := exchangeDNS(t, g, network, q)
+					if r.Id != q.Id || len(r.Question) != 1 || r.Question[0] != q.Question[0] {
+						t.Fatalf("guest ID or question changed: %v", r)
+					}
+					opts, addresses := 0, 0
+					for _, rr := range r.Extra {
+						switch rr := rr.(type) {
+						case *dns.OPT:
+							opts++
+							if len(rr.Option) != 0 || rr.Do() || int(rr.UDPSize()) != n.MTU()-28 {
+								t.Fatalf("gateway OPT = %v", rr)
+							}
+						case *dns.A:
+							addresses++
+							if rr.Hdr.Name != "extra.test." || !rr.A.Equal(net.IPv4(192, 0, 2, 1)) {
+								t.Fatalf("additional address = %v", rr)
+							}
+						}
+					}
+					wantOpts := 0
+					if edns {
+						wantOpts = 1
+					}
+					if opts != wantOpts {
+						t.Fatalf("EDNS=%t: OPT count = %d, want %d", edns, opts, wantOpts)
+					}
+					if name == "Records.Test." {
+						if r.Rcode != dns.RcodeSuccess || len(r.Answer) != 1 || len(r.Ns) != 1 || addresses != 1 {
+							t.Fatalf("ordinary records were not preserved: %v", r)
+						}
+						if rr, ok := r.Answer[0].(*dns.TXT); !ok || rr.Hdr.Name != "records.test." || len(rr.Txt) != 1 || rr.Txt[0] != "answer" {
+							t.Fatalf("answer = %v", r.Answer)
+						}
+						if rr, ok := r.Ns[0].(*dns.NS); !ok || rr.Hdr.Name != "test." || rr.Ns != "ns.test." {
+							t.Fatalf("authority = %v", r.Ns)
+						}
+					} else {
+						want := dns.RcodeServerFailure
+						if edns {
+							want = dns.RcodeBadVers
+						}
+						if r.Rcode != want {
+							t.Fatalf("EDNS=%t: extended RCODE = %d, want %d", edns, r.Rcode, want)
+						}
+					}
 				}
 			}
-			wantOpts := 0
-			if edns {
-				wantOpts = 1
-			}
-			if opts != wantOpts {
-				t.Fatalf("EDNS=%t: OPT count = %d, want %d", edns, opts, wantOpts)
-			}
-			if name == "records.test." {
-				if r.Rcode != dns.RcodeSuccess || len(r.Answer) != 1 || addresses != 1 {
-					t.Fatalf("ordinary records were not preserved: %v", r)
-				}
-			} else {
-				want := dns.RcodeServerFailure
-				if edns {
-					want = dns.RcodeBadVers
-				}
-				if r.Rcode != want {
-					t.Fatalf("EDNS=%t: extended RCODE = %d, want %d", edns, r.Rcode, want)
-				}
-			}
-		}
+		})
 	}
 }
 
@@ -343,6 +376,40 @@ func TestDNSAuthorizationPrecedesUpstream(t *testing.T) {
 	}
 	if requests.Load() != 0 {
 		t.Fatalf("denied queries reached upstream %d times", requests.Load())
+	}
+}
+
+func TestDNSQueryBoundary(t *testing.T) {
+	var requests atomic.Int64
+	upstream := dnsUpstream(t, func(w dns.ResponseWriter, r *dns.Msg) {
+		requests.Add(1)
+		addressDNS(w, r)
+	})
+	n := newTestNetwork(t, Config{DNSUpstream: upstream})
+	g := attachGuest(t, n, "guest", vmnet.AttachOptions{})
+	question := dns.Question{Name: "example.test.", Qtype: dns.TypeA, Qclass: dns.ClassINET}
+	for _, network := range []string{"udp", "tcp"} {
+		for _, tc := range []struct {
+			name      string
+			questions []dns.Question
+			opcode    int
+			rcode     int
+		}{
+			{name: "IN query", questions: []dns.Question{question}, rcode: dns.RcodeSuccess},
+			{name: "CHAOS query", questions: []dns.Question{{Name: question.Name, Qtype: question.Qtype, Qclass: dns.ClassCHAOS}}, rcode: dns.RcodeRefused},
+			{name: "multiple questions", questions: []dns.Question{question, question}, rcode: dns.RcodeFormatError},
+			{name: "notify", questions: []dns.Question{question}, opcode: dns.OpcodeNotify, rcode: dns.RcodeFormatError},
+		} {
+			t.Run(network+"/"+tc.name, func(t *testing.T) {
+				q := &dns.Msg{MsgHdr: dns.MsgHdr{Id: dns.Id(), Opcode: tc.opcode}, Question: tc.questions}
+				if r := exchangeDNS(t, g, network, q); r.Rcode != tc.rcode {
+					t.Fatalf("reply = %v, want %s", r, dns.RcodeToString[tc.rcode])
+				}
+			})
+		}
+	}
+	if got := requests.Load(); got != 2 {
+		t.Fatalf("upstream received %d queries, want the two IN queries", got)
 	}
 }
 

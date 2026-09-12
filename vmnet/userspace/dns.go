@@ -180,10 +180,8 @@ func (s *dnsServer) answer(ctx context.Context, m *dns.Msg, q dns.Question, f vm
 	default:
 		return errors.New("too many DNS queries in flight")
 	}
-	request := new(dns.Msg)
-	request.SetQuestion(q.Name, q.Qtype)
 	resolver := s.n.resolver.WithLogger(s.n.logger.With("guest", f.Guest, "src", f.Src))
-	reply, err := resolver.Exchange(ctx, request)
+	reply, err := resolver.Query(ctx, q.Name, q.Qtype)
 	if err != nil {
 		return err
 	}
@@ -221,9 +219,11 @@ func (s *dnsServer) answer(ctx context.Context, m *dns.Msg, q dns.Question, f vm
 			return nil
 		}
 	}
-	id := m.Id
+	// The upstream exchange has its own ID and canonical question. Keep
+	// the guest's original question spelling and ID at this boundary.
+	id, question := m.Id, m.Question
 	*m = *reply
-	m.Id = id
+	m.Id, m.Question = id, question
 	return nil
 }
 

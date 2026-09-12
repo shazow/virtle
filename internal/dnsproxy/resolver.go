@@ -91,19 +91,28 @@ func readHost(r io.Reader) (*Resolver, error) {
 	return resolver, nil
 }
 
-// Exchange sends one IN QUERY question over UDP, retrying over TCP when the
+// Query sends one recursive IN question over UDP, retrying over TCP when the
 // reply is truncated. Host servers are tried in order on transport failures
 // or SERVFAIL; other replies, including NXDOMAIN, are returned unchanged.
 // The whole exchange is bounded by five seconds and the caller's context.
-// Guest message sections and EDNS options are never passed upstream.
-func (r *Resolver) Exchange(ctx context.Context, request *dns.Msg) (response *dns.Msg, err error) {
-	query, err := question(request)
-	if err != nil {
-		return nil, err
+// It constructs its own message and EDNS options from name and qtype.
+func (r *Resolver) Query(ctx context.Context, name string, qtype uint16) (response *dns.Msg, err error) {
+	if name == "" {
+		return nil, fmt.Errorf("dnsproxy: expected a question name")
+	}
+	switch qtype {
+	case 0, dns.TypeOPT, dns.TypeTKEY, dns.TypeTSIG, dns.TypeIXFR, dns.TypeAXFR, dns.TypeMAILB, dns.TypeMAILA, dns.TypeANY:
+		return nil, fmt.Errorf("dnsproxy: unsupported question type %d", qtype)
+	}
+	name = dns.CanonicalName(name)
+	if _, ok := dns.IsDomainName(name); !ok {
+		return nil, fmt.Errorf("dnsproxy: invalid question name %q", name)
 	}
 	if r == nil || len(r.servers) == 0 {
 		return nil, fmt.Errorf("dnsproxy: no upstream nameservers")
 	}
+	query := new(dns.Msg).SetQuestion(name, qtype)
+	query.SetEdns0(udpSize, false)
 	started := time.Now()
 	var upstream string
 	defer func() {
@@ -112,8 +121,8 @@ func (r *Resolver) Exchange(ctx context.Context, request *dns.Msg) (response *dn
 			if response != nil {
 				rcode = dns.RcodeToString[response.Rcode]
 			}
-			r.logger.InfoContext(ctx, "dns exchange", "name", query.Question[0].Name,
-				"type", query.Question[0].Qtype, "upstream", upstream, "rcode", rcode,
+			r.logger.InfoContext(ctx, "dns exchange", "name", name,
+				"type", qtype, "upstream", upstream, "rcode", rcode,
 				"duration", time.Since(started), "err", err)
 		}
 	}()
@@ -150,34 +159,9 @@ func (r *Resolver) Exchange(ctx context.Context, request *dns.Msg) (response *dn
 		if response.Rcode == dns.RcodeServerFailure && i+1 < len(r.servers) {
 			continue
 		}
-		response.Id = request.Id
-		response.Question = slices.Clone(request.Question)
 		return response, nil
 	}
 	return nil, lastErr
-}
-
-// question builds a fresh recursive query. Apart from its question, none of
-// the caller's fields are input to the upstream request.
-func question(request *dns.Msg) (*dns.Msg, error) {
-	if request == nil || request.Response || request.Opcode != dns.OpcodeQuery || len(request.Question) != 1 {
-		return nil, fmt.Errorf("dnsproxy: expected one DNS QUERY question")
-	}
-	q := request.Question[0]
-	if q.Qclass != dns.ClassINET || q.Name == "" {
-		return nil, fmt.Errorf("dnsproxy: expected a named IN question")
-	}
-	switch q.Qtype {
-	case 0, dns.TypeOPT, dns.TypeTKEY, dns.TypeTSIG, dns.TypeIXFR, dns.TypeAXFR, dns.TypeMAILB, dns.TypeMAILA, dns.TypeANY:
-		return nil, fmt.Errorf("dnsproxy: unsupported question type %d", q.Qtype)
-	}
-	name := dns.CanonicalName(q.Name)
-	if _, ok := dns.IsDomainName(name); !ok {
-		return nil, fmt.Errorf("dnsproxy: invalid question name %q", q.Name)
-	}
-	query := new(dns.Msg).SetQuestion(name, q.Qtype)
-	query.SetEdns0(udpSize, false)
-	return query, nil
 }
 
 func exchange(ctx context.Context, query *dns.Msg, server, network string) (*dns.Msg, error) {
@@ -197,7 +181,7 @@ func exchange(ctx context.Context, query *dns.Msg, server, network string) (*dns
 	if err != nil {
 		return nil, err
 	}
-	if !response.Response || response.Opcode != dns.OpcodeQuery || response.Id != query.Id || len(response.Question) != 1 {
+	if !response.Response || response.Opcode != dns.OpcodeQuery || len(response.Question) != 1 {
 		return nil, fmt.Errorf("dnsproxy: upstream response does not match its query")
 	}
 	got, want := response.Question[0], query.Question[0]
@@ -231,9 +215,6 @@ func (r *Resolver) LookupNetIP(ctx context.Context, network, host string) ([]net
 			return []netip.Addr{addr}, nil
 		}
 		return nil, &net.DNSError{Name: host, Err: "no address for requested family", IsNotFound: true}
-	}
-	if _, err := question(new(dns.Msg).SetQuestion(host, types[0])); err != nil {
-		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, lookupTimeout)
 	defer cancel()
@@ -273,16 +254,17 @@ func (r *Resolver) LookupNetIP(ctx context.Context, network, host string) ([]net
 }
 
 func (r *Resolver) lookup(ctx context.Context, host string, typ uint16) ([]netip.Addr, error) {
-	name := dns.CanonicalName(host)
-	seen := map[string]bool{name: true}
+	name := host
+	seen := map[string]bool{dns.CanonicalName(host): true}
 	for {
-		response, err := r.Exchange(ctx, new(dns.Msg).SetQuestion(name, typ))
+		response, err := r.Query(ctx, name, typ)
 		if err != nil {
 			return nil, err
 		}
 		if response.Rcode != dns.RcodeSuccess {
 			return nil, &net.DNSError{Name: host, Err: dns.RcodeToString[response.Rcode], IsNotFound: response.Rcode == dns.RcodeNameError, IsTemporary: response.Rcode == dns.RcodeServerFailure}
 		}
+		name = dns.CanonicalName(name)
 		current := name
 		for {
 			var addrs []netip.Addr

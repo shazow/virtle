@@ -11,7 +11,6 @@ import (
 	"net"
 	"net/netip"
 	"reflect"
-	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -115,7 +114,7 @@ func TestExplicitUpstream(t *testing.T) {
 	}
 }
 
-func TestExchangeNormalizesQuestionAndPreservesReply(t *testing.T) {
+func TestQueryNormalizesQuestionAndPreservesReply(t *testing.T) {
 	received := make(chan *dns.Msg, 1)
 	server := serve(t, func(w dns.ResponseWriter, q *dns.Msg) {
 		received <- q.Copy()
@@ -126,62 +125,58 @@ func TestExchangeNormalizesQuestionAndPreservesReply(t *testing.T) {
 		m.Extra = []dns.RR{record("ns.example.test. 42 IN A 192.0.2.53")}
 		_ = w.WriteMsg(m)
 	})
-	request := new(dns.Msg).SetQuestion("EXAMPLE.Test.", dns.TypeTXT)
-	request.Id = 17
-	request.CheckingDisabled, request.AuthenticatedData = true, true
-	request.Answer = []dns.RR{record("payload.example. 1 IN TXT \"guest-data\"")}
-	request.Ns = slices.Clone(request.Answer)
-	request.Extra = slices.Clone(request.Answer)
-	request.SetEdns0(4096, true)
-	request.IsEdns0().Option = []dns.EDNS0{&dns.EDNS0_LOCAL{Code: 65001, Data: []byte("guest-data")}}
-	before := request.String()
-	response, err := resolverAt(t, server).Exchange(t.Context(), request)
+	response, err := resolverAt(t, server).Query(t.Context(), "EXAMPLE.Test.", dns.TypeTXT)
 	if err != nil {
 		t.Fatal(err)
 	}
 	q := <-received
 	if q.Question[0] != (dns.Question{Name: "example.test.", Qtype: dns.TypeTXT, Qclass: dns.ClassINET}) || !q.RecursionDesired || q.CheckingDisabled || q.AuthenticatedData || len(q.Answer) != 0 || len(q.Ns) != 0 {
-		t.Fatalf("upstream query includes caller data: %s", q)
+		t.Fatalf("upstream recursive IN query = %s", q)
 	}
 	if opt := q.IsEdns0(); len(q.Extra) != 1 || opt == nil || opt.UDPSize() != udpSize || opt.Do() || len(opt.Option) != 0 {
 		t.Fatalf("upstream options = %v", q.Extra)
 	}
-	if response.Id != request.Id || !reflect.DeepEqual(response.Question, request.Question) || !response.Authoritative || len(response.Answer) != 1 || len(response.Ns) != 1 || len(response.Extra) != 1 || response.Answer[0].Header().Ttl != 42 {
+	if response.Id != q.Id || !reflect.DeepEqual(response.Question, q.Question) || !response.Authoritative || len(response.Answer) != 1 || len(response.Ns) != 1 || len(response.Extra) != 1 || response.Answer[0].Header().Ttl != 42 {
 		t.Fatalf("reply changed: %s", response)
-	}
-	if request.String() != before {
-		t.Fatal("Exchange mutated caller message")
 	}
 }
 
-func TestQuestionKinds(t *testing.T) {
+func TestQueryKinds(t *testing.T) {
+	var calls atomic.Int32
+	server := serve(t, func(w dns.ResponseWriter, q *dns.Msg) {
+		calls.Add(1)
+		_ = w.WriteMsg(new(dns.Msg).SetReply(q))
+	})
+	r := resolverAt(t, server)
 	for _, typ := range []uint16{dns.TypeA, dns.TypeAAAA, dns.TypeCNAME, dns.TypeMX, dns.TypeTXT, dns.TypeSRV, dns.TypeHTTPS, dns.TypeSOA} {
-		q, err := question(new(dns.Msg).SetQuestion("Example.Test", typ))
-		if err != nil || q.Question[0].Name != "example.test." {
-			t.Fatalf("type %d query = %v, %v", typ, q, err)
+		m, err := r.Query(t.Context(), "Example.Test", typ)
+		if err != nil {
+			t.Fatalf("type %d: %v", typ, err)
+		}
+		if want := (dns.Question{Name: "example.test.", Qtype: typ, Qclass: dns.ClassINET}); m.Question[0] != want {
+			t.Fatalf("question = %+v, want %+v", m.Question[0], want)
 		}
 	}
+	before := calls.Load()
 	for _, typ := range []uint16{0, dns.TypeAXFR, dns.TypeIXFR, dns.TypeANY, dns.TypeOPT, dns.TypeTSIG, dns.TypeTKEY, dns.TypeMAILA, dns.TypeMAILB} {
-		if _, err := question(new(dns.Msg).SetQuestion("example.test.", typ)); err == nil {
+		if _, err := r.Query(t.Context(), "example.test.", typ); err == nil {
 			t.Errorf("accepted meta/transfer type %d", typ)
 		}
 	}
-	for _, alter := range []func(*dns.Msg){
-		func(m *dns.Msg) { m.Opcode = dns.OpcodeUpdate },
-		func(m *dns.Msg) { m.Response = true },
-		func(m *dns.Msg) { m.Question = append(m.Question, m.Question[0]) },
-		func(m *dns.Msg) { m.Question[0].Qclass = dns.ClassCHAOS },
-		func(m *dns.Msg) { m.Question[0].Name = "bad..test." },
-	} {
-		m := new(dns.Msg).SetQuestion("example.test.", dns.TypeA)
-		alter(m)
-		if _, err := question(m); err == nil {
-			t.Fatalf("accepted invalid query: %v", m)
+	for _, name := range []string{"", "bad..test."} {
+		if _, err := r.Query(t.Context(), name, dns.TypeA); err == nil {
+			t.Errorf("accepted invalid name %q", name)
 		}
+		if _, err := r.LookupNetIP(t.Context(), "ip", name); err == nil {
+			t.Errorf("looked up invalid name %q", name)
+		}
+	}
+	if got := calls.Load() - before; got != 0 {
+		t.Errorf("invalid questions reached upstream %d times", got)
 	}
 }
 
-func TestExchangeRetriesTCPTruncation(t *testing.T) {
+func TestQueryRetriesTCPTruncation(t *testing.T) {
 	transports := make(chan string, 2)
 	server := serve(t, func(w dns.ResponseWriter, q *dns.Msg) {
 		transports <- w.RemoteAddr().Network()
@@ -193,7 +188,7 @@ func TestExchangeRetriesTCPTruncation(t *testing.T) {
 		}
 		_ = w.WriteMsg(m)
 	})
-	m, err := resolverAt(t, server).Exchange(t.Context(), new(dns.Msg).SetQuestion("example.test.", dns.TypeA))
+	m, err := resolverAt(t, server).Query(t.Context(), "example.test.", dns.TypeA)
 	if err != nil || m.Truncated || len(m.Answer) != 1 {
 		t.Fatalf("TCP fallback = %v, %v", m, err)
 	}
@@ -216,7 +211,7 @@ func TestHostServerFailover(t *testing.T) {
 				_ = w.WriteMsg(new(dns.Msg).SetReply(q))
 			})
 			r := &Resolver{servers: []string{first, second}}
-			m, err := r.Exchange(t.Context(), new(dns.Msg).SetQuestion("example.test.", dns.TypeA))
+			m, err := r.Query(t.Context(), "example.test.", dns.TypeA)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -231,34 +226,50 @@ func TestHostServerFailover(t *testing.T) {
 	}
 }
 
-func TestExchangeRejectsMismatchedQuestion(t *testing.T) {
+func TestQueryRejectsMismatchedQuestion(t *testing.T) {
 	server := serve(t, func(w dns.ResponseWriter, q *dns.Msg) {
 		m := new(dns.Msg).SetReply(q)
 		m.Question[0].Name = "other.test."
 		_ = w.WriteMsg(m)
 	})
-	if _, err := resolverAt(t, server).Exchange(t.Context(), new(dns.Msg).SetQuestion("example.test.", dns.TypeA)); err == nil || !strings.Contains(err.Error(), "does not match") {
+	if _, err := resolverAt(t, server).Query(t.Context(), "example.test.", dns.TypeA); err == nil || !strings.Contains(err.Error(), "does not match") {
 		t.Fatalf("mismatched reply = %v", err)
 	}
 }
 
-func TestExchangeMatchesID(t *testing.T) {
-	server := serve(t, func(w dns.ResponseWriter, q *dns.Msg) {
-		m := new(dns.Msg).SetReply(q)
-		m.Id++
-		m.Answer = []dns.RR{record("example.test. 60 IN TXT \"wrong-id\"")}
-		_ = w.WriteMsg(m)
-		m.Id = q.Id
-		m.Answer = []dns.RR{record("example.test. 60 IN TXT \"matching-id\"")}
-		_ = w.WriteMsg(m)
-	})
-	m, err := resolverAt(t, server).Exchange(t.Context(), new(dns.Msg).SetQuestion("example.test.", dns.TypeTXT))
-	if err != nil || len(m.Answer) != 1 || m.Answer[0].(*dns.TXT).Txt[0] != "matching-id" {
-		t.Fatalf("reply ID matching = %v, %v", m, err)
+func TestQueryMatchesID(t *testing.T) {
+	for _, network := range []string{"udp", "tcp"} {
+		t.Run(network, func(t *testing.T) {
+			server := serve(t, func(w dns.ResponseWriter, q *dns.Msg) {
+				m := new(dns.Msg).SetReply(q)
+				if network == "tcp" && w.RemoteAddr().Network() == "udp" {
+					m.Truncated = true
+					_ = w.WriteMsg(m)
+					return
+				}
+				m.Id++
+				m.Answer = []dns.RR{record("example.test. 60 IN TXT \"wrong-id\"")}
+				_ = w.WriteMsg(m)
+				if network == "udp" {
+					// Unrelated datagrams are ignored until the matching reply.
+					m.Id = q.Id
+					m.Answer = []dns.RR{record("example.test. 60 IN TXT \"matching-id\"")}
+					_ = w.WriteMsg(m)
+				}
+			})
+			m, err := resolverAt(t, server).Query(t.Context(), "example.test.", dns.TypeTXT)
+			if network == "tcp" {
+				if !errors.Is(err, dns.ErrId) {
+					t.Fatalf("mismatched TCP reply = %v, %v; want dns.ErrId", m, err)
+				}
+			} else if err != nil || len(m.Answer) != 1 || m.Answer[0].(*dns.TXT).Txt[0] != "matching-id" {
+				t.Fatalf("reply ID matching = %v, %v", m, err)
+			}
+		})
 	}
 }
 
-func TestExchangeTransportFailure(t *testing.T) {
+func TestQueryTransportFailure(t *testing.T) {
 	first := serve(t, func(w dns.ResponseWriter, q *dns.Msg) {
 		if w.RemoteAddr().Network() == "tcp" {
 			_ = w.Close() // terminate the connection before sending a response
@@ -269,16 +280,15 @@ func TestExchangeTransportFailure(t *testing.T) {
 		_ = w.WriteMsg(m)
 	})
 	second := serve(t, func(w dns.ResponseWriter, q *dns.Msg) { _ = w.WriteMsg(new(dns.Msg).SetReply(q)) })
-	q := new(dns.Msg).SetQuestion("example.test.", dns.TypeA)
-	if _, err := (&Resolver{servers: []string{first, second}}).Exchange(t.Context(), q); err != nil {
+	if _, err := (&Resolver{servers: []string{first, second}}).Query(t.Context(), "example.test.", dns.TypeA); err != nil {
 		t.Fatalf("transport failure did not try the next host server: %v", err)
 	}
-	if _, err := resolverAt(t, first).Exchange(t.Context(), q); err == nil {
+	if _, err := resolverAt(t, first).Query(t.Context(), "example.test.", dns.TypeA); err == nil {
 		t.Fatal("explicit upstream failure was hidden")
 	}
 }
 
-func TestExchangeCancellationClosesTCP(t *testing.T) {
+func TestQueryCancellationClosesTCP(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -316,7 +326,7 @@ func TestExchangeCancellationClosesTCP(t *testing.T) {
 	done := make(chan error, 1)
 	r := resolverAt(t, ln.Addr().String())
 	go func() {
-		_, err := r.Exchange(ctx, new(dns.Msg).SetQuestion("example.test.", dns.TypeA))
+		_, err := r.Query(ctx, "example.test.", dns.TypeA)
 		done <- err
 	}()
 	select {
@@ -451,7 +461,7 @@ func TestContextResolverAndLiteralLookup(t *testing.T) {
 	}
 }
 
-func TestExchangeLogsSelectedUpstream(t *testing.T) {
+func TestQueryLogsSelectedUpstream(t *testing.T) {
 	first := serve(t, func(w dns.ResponseWriter, q *dns.Msg) {
 		_ = w.WriteMsg(new(dns.Msg).SetRcode(q, dns.RcodeServerFailure))
 	})
@@ -462,7 +472,7 @@ func TestExchangeLogsSelectedUpstream(t *testing.T) {
 	if base.logger != nil {
 		t.Fatal("WithLogger changed the original resolver")
 	}
-	if _, err := r.Exchange(t.Context(), new(dns.Msg).SetQuestion("Example.TEST.", dns.TypeA)); err != nil {
+	if _, err := r.Query(t.Context(), "Example.TEST.", dns.TypeA); err != nil {
 		t.Fatal(err)
 	}
 	var entry map[string]any

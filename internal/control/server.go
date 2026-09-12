@@ -33,7 +33,6 @@ type Server struct {
 	done     chan struct{}
 	started  chan struct{}
 	start    sync.Once
-	handlers sync.WaitGroup
 	// Count accepted connections before decoding, then release requests that
 	// are not lifecycle RPCs before dispatching their handlers.
 	lifecycle sync.WaitGroup
@@ -102,12 +101,10 @@ func (s *Server) Serve(l net.Listener) error {
 			}
 			return err
 		}
-		s.handlers.Add(1)
 		s.lifecycle.Add(1)
 		select {
 		case handlerSlots <- struct{}{}:
 			go func() {
-				defer s.handlers.Done()
 				defer func() { <-handlerSlots }()
 				s.handleConn(conn, s.lifecycle.Done)
 			}()
@@ -115,7 +112,6 @@ func (s *Server) Serve(l net.Listener) error {
 			// Reject asynchronously so a peer that never reads its response
 			// cannot stall the accept loop for the write deadline.
 			go func() {
-				defer s.handlers.Done()
 				defer s.lifecycle.Done()
 				s.rejectConn(conn, &limits.Error{
 					Resource: "concurrent control requests",
@@ -145,17 +141,6 @@ func (s *Server) Close() error {
 	return listener.Close()
 }
 
-// Wait waits for Serve and all accepted connections, including response
-// writes, to finish. Call Close first and release any blocked handlers before
-// waiting. Close itself never waits, so handlers can safely initiate teardown.
-func (s *Server) Wait() {
-	if s == nil {
-		return
-	}
-	s.waitServe()
-	s.handlers.Wait()
-}
-
 // WaitLifecycle waits for Serve and accepted wait, kill, shutdown, and suspend
 // responses to finish. Unclassified requests and rejected connections are also
 // drained, bounded by the transport read/write deadlines. Other handlers are
@@ -172,8 +157,8 @@ func (s *Server) WaitLifecycle() {
 }
 
 func (s *Server) waitServe() {
-	// All acceptance counts are added by Serve before it returns, so neither
-	// drain can race a new WaitGroup.Add after Close has stopped acceptance.
+	// All acceptance counts are added by Serve before it returns, so the
+	// drain cannot race a new WaitGroup.Add after Close has stopped acceptance.
 	s.mu.Lock()
 	done := s.done
 	s.mu.Unlock()

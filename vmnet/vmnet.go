@@ -46,6 +46,9 @@ type Link interface {
 // use. A Network outlives the machines attached to it and is closed by its
 // owner.
 type Network interface {
+	// MTU is the largest IP packet on the network. Guest links must carry
+	// at least this much, and backends advertise it to the guest NIC.
+	MTU() int
 	Attach(ctx context.Context, link Link, opts AttachOptions) (Port, error)
 }
 
@@ -122,17 +125,14 @@ type DNSAuthorizer interface {
 	AuthorizeDNS(ctx context.Context, f Flow, qtype uint16) error
 }
 
-// Passthrough allows everything: it dials the flow's destination with the
-// Dialer (a zero Dialer when nil), by name when the network knows the name
-// the guest resolved and by address otherwise. It is the default Egress.
-type Passthrough struct{ Dialer *net.Dialer }
+// Passthrough allows everything: it dials the flow's destination by name
+// when the network knows the name the guest resolved and by address
+// otherwise. It is the default Egress.
+type Passthrough struct{}
 
 // DialFlow implements Egress.
-func (p Passthrough) DialFlow(ctx context.Context, f Flow) (net.Conn, error) {
-	d := p.Dialer
-	if d == nil {
-		d = &net.Dialer{}
-	}
+func (Passthrough) DialFlow(ctx context.Context, f Flow) (net.Conn, error) {
+	var d net.Dialer
 	if resolver := dnsproxy.FromContext(ctx); f.Host != "" && resolver != nil {
 		addrs, err := resolver.LookupNetIP(ctx, "ip", f.Host)
 		if err != nil {
@@ -169,18 +169,7 @@ func (f Flow) Target() string {
 	return f.Dst.String()
 }
 
-// DenyAll refuses every guest-initiated flow.
-type DenyAll struct{}
-
-// DialFlow implements Egress.
-func (DenyAll) DialFlow(context.Context, Flow) (net.Conn, error) { return nil, ErrDenied }
-
-// AuthorizeDNS refuses every forwarded query.
-func (DenyAll) AuthorizeDNS(context.Context, Flow, uint16) error { return ErrDenied }
-
 var (
 	_ Egress        = Passthrough{}
-	_ Egress        = DenyAll{}
 	_ DNSAuthorizer = Passthrough{}
-	_ DNSAuthorizer = DenyAll{}
 )

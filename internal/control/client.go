@@ -11,7 +11,6 @@ import (
 	"io"
 	"io/fs"
 	"net"
-	"os"
 	"sync"
 	"time"
 
@@ -24,20 +23,7 @@ import (
 // discovers server capabilities before returning and begins observing machine
 // exit immediately.
 func Dial(ctx context.Context, path string) (backend.Machine, error) {
-	c := &client{dial: unixDialer(path), completion: func() (bool, error) {
-		// Servers from v0.3.3 and earlier have no wait RPC, and virtle suspend
-		// or status may still talk to a VM launched by such a binary. Their
-		// Unix listener unlinks this endpoint during orderly teardown, while an
-		// abrupt exit leaves a stale socket behind, so disappearance is the
-		// persisted completion record. This fallback, the status polling in
-		// observeExit, and TestLegacyMachineTreatsRemovedSocketAsCompletion
-		// go together once pre-wait servers are out of support.
-		_, err := os.Stat(path)
-		if errors.Is(err, os.ErrNotExist) {
-			return true, nil
-		}
-		return false, err
-	}}
+	c := &client{dial: unixDialer(path)}
 	methods, err := callTyped[MethodsRequest, MethodsResponse](c, ctx, rpcMethods, MethodsRequest{})
 	if err != nil {
 		return nil, err
@@ -71,7 +57,6 @@ type machine struct {
 	client  *client
 	methods map[rpcMethod]bool
 	done    chan struct{}
-	once    sync.Once
 	mu      sync.Mutex
 	err     error
 }
@@ -83,52 +68,12 @@ func (m *machine) supports(method rpcMethod) error {
 	return fmt.Errorf("control method %q: %w", method, errors.ErrUnsupported)
 }
 
-func (m *machine) finish(err error) {
-	m.once.Do(func() {
-		m.mu.Lock()
-		m.err = err
-		m.mu.Unlock()
-		close(m.done)
-	})
-}
-
 func (m *machine) observeExit() {
-	if m.methods[rpcWait] {
-		_, err := callTyped[WaitRequest, WaitResponse](m.client, context.Background(), rpcWait, WaitRequest{})
-		m.finish(err)
-		return
-	}
-
-	ticker := time.NewTicker(250 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		status, err := callTyped[StatusRequest, StatusResponse](m.client, context.Background(), rpcStatus, StatusRequest{})
-		if err != nil {
-			// A v0.3.3-or-earlier server closes its listener before it can expose
-			// stopped via status. Reconcile that EOF/dial failure with the socket
-			// record before treating it as an unreported exit.
-			completed, completionErr := m.client.completed()
-			if completionErr != nil {
-				m.finish(fmt.Errorf("machine exited without status: %w", errors.Join(err, completionErr)))
-				return
-			}
-			if completed {
-				m.finish(nil)
-				return
-			}
-			if !IsSocketUnavailable(err) && !errors.Is(err, io.EOF) {
-				m.finish(fmt.Errorf("machine exited without status: %w", err))
-				return
-			}
-			<-ticker.C
-			continue
-		}
-		if status.State == backend.StateStopped {
-			m.finish(nil)
-			return
-		}
-		<-ticker.C
-	}
+	_, err := callTyped[WaitRequest, WaitResponse](m.client, context.Background(), rpcWait, WaitRequest{})
+	m.mu.Lock()
+	m.err = err
+	m.mu.Unlock()
+	close(m.done)
 }
 
 func (m *machine) Done() <-chan struct{} { return m.done }
@@ -162,27 +107,16 @@ func (m *machine) Shutdown(ctx context.Context) error {
 		return nil // already stopped; the contract makes repeated calls safe
 	default:
 	}
-	if m.methods[rpcShutdown] {
-		_, err := callTyped[ShutdownRequest, ShutdownResponse](m.client, ctx, rpcShutdown, ShutdownRequest{})
-		if err != nil && ctx.Err() != nil {
-			// The graceful request did not complete within ctx; fall back to
-			// the hard stop the Machine contract promises.
-			return errors.Join(err, m.Kill())
-		}
+	if err := m.supports(rpcShutdown); err != nil {
 		return err
 	}
-	g, err := m.RemoteControl()
-	if err != nil {
-		return m.Kill()
-	}
-	if err := g.Shutdown(ctx); err != nil {
-		return m.Kill()
-	}
-	if err := m.Wait(ctx); err != nil && ctx.Err() != nil {
+	_, err := callTyped[ShutdownRequest, ShutdownResponse](m.client, ctx, rpcShutdown, ShutdownRequest{})
+	if err != nil && ctx.Err() != nil {
+		// The graceful request did not complete within ctx; fall back to
+		// the hard stop the Machine contract promises.
 		return errors.Join(err, m.Kill())
-	} else {
-		return err
 	}
+	return err
 }
 
 func (m *machine) Suspend(ctx context.Context) error {
@@ -255,9 +189,6 @@ type guest struct{ machine *machine }
 func (g *guest) Run(ctx context.Context, cmd *vm.GuestCmd) error {
 	if cmd == nil || cmd.Path == "" {
 		return fmt.Errorf("guest command path is required")
-	}
-	if cmd.Stdin != nil {
-		return fmt.Errorf("guest command stdin over control socket: %w", errors.ErrUnsupported)
 	}
 	req := GuestExecRequest{Path: cmd.Path, Args: cmd.Args, Env: cmd.Env, Dir: cmd.Dir, CaptureOutput: true}
 	if deadline, ok := ctx.Deadline(); ok {
@@ -334,8 +265,6 @@ func (g *guest) Shutdown(ctx context.Context) error {
 	return err
 }
 
-func (*guest) Close() error { return nil }
-
 var (
 	_ backend.Machine        = (*machine)(nil)
 	_ backend.Suspender      = (*machine)(nil)
@@ -346,15 +275,7 @@ var (
 )
 
 type client struct {
-	dial       func(context.Context) (net.Conn, error)
-	completion func() (bool, error)
-}
-
-func (c *client) completed() (bool, error) {
-	if c == nil || c.completion == nil {
-		return false, nil
-	}
-	return c.completion()
+	dial func(context.Context) (net.Conn, error)
 }
 
 func callTyped[Req any, Resp any](c *client, ctx context.Context, method rpcMethod, req Req) (Resp, error) {

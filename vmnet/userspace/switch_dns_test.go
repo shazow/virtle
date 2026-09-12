@@ -13,10 +13,11 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 
 	"github.com/shazow/virtle/vmnet"
+	"github.com/shazow/virtle/vmnet/egress"
 )
 
 func TestGuestDNSUsesTheGateway(t *testing.T) {
-	n := newTestNetwork(t, Config{Egress: vmnet.DenyAll{}})
+	n := newTestNetwork(t, Config{Egress: &egress.Policy{}})
 	attached, err := n.Attach(context.Background(), idleLink(t, n.MTU()), vmnet.AttachOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -119,7 +120,7 @@ func TestDNSRepliesStayWithTheirPort(t *testing.T) {
 }
 
 func TestGatewayRejectsTrailingDNSFragments(t *testing.T) {
-	n := newTestNetwork(t, Config{Egress: vmnet.DenyAll{}})
+	n := newTestNetwork(t, Config{Egress: &egress.Policy{}})
 	attached, err := n.Attach(t.Context(), idleLink(t, n.MTU()), vmnet.AttachOptions{})
 	if err != nil {
 		t.Fatal(err)

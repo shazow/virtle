@@ -212,14 +212,3 @@ func TestHistoryIsBounded(t *testing.T) {
 		t.Fatalf("history length %d, suffix %q; want %d bytes ending in tail", len(data), data[max(0, len(data)-4):], historyLimit)
 	}
 }
-
-func TestSerialTermHasNoWindowOrExitStatus(t *testing.T) {
-	term := newTestHub(t, nil).Attach()
-	defer term.Close()
-	if err := term.Resize(80, 24); !errors.Is(err, errors.ErrUnsupported) {
-		t.Fatalf("Resize = %v", err)
-	}
-	if _, err := term.Wait(t.Context()); !errors.Is(err, errors.ErrUnsupported) {
-		t.Fatalf("Wait = %v", err)
-	}
-}

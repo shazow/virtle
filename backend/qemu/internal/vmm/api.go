@@ -245,8 +245,7 @@ func (v *VM) DialGuestAgent(ctx context.Context) (qga.Client, error) {
 
 // Console returns a vm.Term over the guest's serial port when the console
 // is printed (kernel.serial = "print"); see backend.ConsoleProvider. The
-// session replays recent output before live output; Resize and Wait report
-// errors.ErrUnsupported.
+// session replays recent output before live output.
 func (v *VM) Console(ctx context.Context) (vm.Term, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

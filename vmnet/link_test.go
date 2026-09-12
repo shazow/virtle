@@ -13,7 +13,7 @@ import (
 	"github.com/shazow/virtle/vm"
 )
 
-func TestFramedLinksRoundTrip(t *testing.T) {
+func TestQEMUStreamRoundTrip(t *testing.T) {
 	a, b := net.Pipe()
 	la, lb := QEMUStream(a, 1500), QEMUStream(b, 1500)
 	defer la.Close()
@@ -41,7 +41,7 @@ func TestFramedLinksRoundTrip(t *testing.T) {
 	}
 }
 
-func TestFramedLinkSkipsFramesThatDoNotFit(t *testing.T) {
+func TestQEMUStreamSkipsFramesThatDoNotFit(t *testing.T) {
 	a, b := net.Pipe()
 	la, lb := QEMUStream(a, 1500), QEMUStream(b, 1500)
 	defer la.Close()
@@ -83,7 +83,7 @@ func TestFramedLinkSkipsFramesThatDoNotFit(t *testing.T) {
 	}
 }
 
-func TestPassthroughAndDenyAll(t *testing.T) {
+func TestPassthrough(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -108,9 +108,6 @@ func TestPassthroughAndDenyAll(t *testing.T) {
 	defer c.Close()
 	if got, _ := io.ReadAll(c); string(got) != "hi" {
 		t.Fatalf("read %q", got)
-	}
-	if _, err := (DenyAll{}).DialFlow(context.Background(), flow); !errors.Is(err, ErrDenied) {
-		t.Fatalf("DenyAll = %v, want ErrDenied", err)
 	}
 	if (Flow{Proto: vm.UDP}).Network() != "udp" {
 		t.Fatal("UDP flow network")

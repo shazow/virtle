@@ -7,7 +7,6 @@
 package console
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -229,17 +228,6 @@ func (t *Term) Close() error {
 	t.cond.Broadcast()
 	t.mu.Unlock()
 	return nil
-}
-
-// Resize reports errors.ErrUnsupported: a serial console has no window.
-func (t *Term) Resize(cols, rows int) error {
-	return fmt.Errorf("serial console has no window size: %w", errors.ErrUnsupported)
-}
-
-// Wait reports errors.ErrUnsupported: a serial console has no exit status
-// of its own; wait for the machine instead.
-func (t *Term) Wait(ctx context.Context) (int, error) {
-	return 0, fmt.Errorf("serial console has no exit status: %w", errors.ErrUnsupported)
 }
 
 var _ vm.Term = (*Term)(nil)

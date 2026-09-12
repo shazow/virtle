@@ -35,8 +35,7 @@ type Config struct {
 // StateVersion is the qemu suspend-state version this machinery stamps on
 // saves and compares on resume; only an exact match is resumable, since
 // the save combines a QEMU migration stream with host network state.
-// Bump the revision when the format changes incompatibly. Surfaced publicly
-// through the qemu backend's Resumer.StateVersion.
+// Bump the revision when the format changes incompatibly.
 const StateVersion = "qemu-v2"
 
 func mergeConfig(base Config, override Config) Config {

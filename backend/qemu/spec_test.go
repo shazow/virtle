@@ -392,6 +392,8 @@ func TestSpecDocumentOverlaysBase(t *testing.T) {
 // fakeVMNet stands in for a vmnet.Network that is never attached to.
 type fakeVMNet struct{}
 
+func (fakeVMNet) MTU() int { return 1500 }
+
 func (fakeVMNet) Attach(context.Context, vmnet.Link, vmnet.AttachOptions) (vmnet.Port, error) {
 	return nil, errors.New("not attached in this test")
 }

@@ -45,12 +45,10 @@ func (c *apiClient) dial(ctx context.Context) (net.Conn, error) {
 	return (&net.Dialer{}).DialContext(ctx, "unix", c.socket)
 }
 
-// call sends one request for the named endpoint (vm.create, vm.boot, ...):
-// body, when non-nil, as JSON; a 200 response, when out is non-nil, decoded
-// into it. Actions answer 204 and reads 200; anything else is an error
-// carrying the VMM's messages, bounded and quoted, since even a local VMM's
-// response is untrusted.
-func (c *apiClient) call(ctx context.Context, method, name string, body, out any) error {
+// put sends one action to the named endpoint (vm.create, vm.boot, ...),
+// with body, when non-nil, as JSON. It accepts 200 or 204 and discards the
+// response body; other statuses report the VMM's messages, bounded and quoted.
+func (c *apiClient) put(ctx context.Context, name string, body any) error {
 	var reader io.Reader = http.NoBody
 	if body != nil {
 		data, err := json.Marshal(body)
@@ -59,7 +57,7 @@ func (c *apiClient) call(ctx context.Context, method, name string, body, out any
 		}
 		reader = bytes.NewReader(data)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, "http://localhost"+apiPrefix+name, reader)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, "http://localhost"+apiPrefix+name, reader)
 	if err != nil {
 		return err
 	}
@@ -68,7 +66,7 @@ func (c *apiClient) call(ctx context.Context, method, name string, body, out any
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("cloud-hypervisor %s %s: %w", method, name, err)
+		return fmt.Errorf("cloud-hypervisor PUT %s: %w", name, err)
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize+1))
@@ -78,15 +76,8 @@ func (c *apiClient) call(ctx context.Context, method, name string, body, out any
 	if len(data) > maxResponseSize {
 		return fmt.Errorf("cloud-hypervisor %s response exceeds %d bytes", name, maxResponseSize)
 	}
-	switch resp.StatusCode {
-	case http.StatusOK, http.StatusNoContent:
-	default:
-		return fmt.Errorf("cloud-hypervisor %s %s: HTTP %d: %q", method, name, resp.StatusCode, errorMessages(data))
-	}
-	if out != nil && resp.StatusCode == http.StatusOK {
-		if err := json.Unmarshal(data, out); err != nil {
-			return fmt.Errorf("decode cloud-hypervisor %s response: %w", name, err)
-		}
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("cloud-hypervisor PUT %s: HTTP %d: %q", name, resp.StatusCode, errorMessages(data))
 	}
 	return nil
 }
@@ -106,10 +97,10 @@ func errorMessages(body []byte) string {
 
 // configure creates the VM from the resolved manifest and boots it.
 func (c *apiClient) configure(ctx context.Context, cfg *imanifest.CloudHypervisor) error {
-	if err := c.call(ctx, http.MethodPut, "vm.create", vmConfig(cfg), nil); err != nil {
+	if err := c.put(ctx, "vm.create", vmConfig(cfg)); err != nil {
 		return err
 	}
-	return c.call(ctx, http.MethodPut, "vm.boot", nil, nil)
+	return c.put(ctx, "vm.boot", nil)
 }
 
 // The VmConfig subset virtle sends, spelled as Cloud Hypervisor's API expects

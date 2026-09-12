@@ -166,7 +166,6 @@ func installSSHKey(ctx context.Context, m backend.Machine, mf *manifest.Manifest
 	if err != nil {
 		return sshAutoprovisionError(err)
 	}
-	defer guest.Close()
 	plan := sshtools.NewAuthorizedKeysInstallPlan(mf.SSH.User, key.AuthorizedKey)
 	run := func(ctx context.Context, subject string, path string, args []string) error {
 		commandCtx, cancel := mf.GuestCommandContext(ctx)

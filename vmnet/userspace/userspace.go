@@ -17,7 +17,6 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -78,9 +77,8 @@ const (
 type Config struct {
 	// Subnet is the IPv4 network guests live on. Default DefaultSubnet.
 	Subnet netip.Prefix
-	// Gateway is the network's own address: it serves DHCP and DNS, is the
-	// guests' default route, and is what Listen binds. Default: the first
-	// host address of Subnet.
+	// Gateway is the network's own address: it serves DHCP and DNS and is
+	// the guests' default route. Default: the first host address of Subnet.
 	Gateway netip.Addr
 	// MTU is the largest IP packet on the segment; a link must carry at
 	// least this much to attach. Default DefaultMTU.
@@ -250,9 +248,6 @@ func (n *Network) configureStack() error {
 	s.SetRouteTable([]tcpip.Route{{Destination: sub, NIC: nicID}})
 	return nil
 }
-
-// Gateway is the network's own address.
-func (n *Network) Gateway() netip.Addr { return n.gateway }
 
 // Subnet is the network guests live on.
 func (n *Network) Subnet() netip.Prefix { return n.subnet }
@@ -454,35 +449,6 @@ func (n *Network) resolveGuest(network, addr string) (tcpip.FullAddress, error) 
 		return tcpip.FullAddress{}, fmt.Errorf("userspace: dial %s: %s is outside %s", addr, a, n.subnet)
 	}
 	return tcpip.FullAddress{NIC: nicID, Addr: addr4(a), Port: uint16(port)}, nil
-}
-
-// Listen serves TCP on the gateway address from the host, for a service
-// guests reach without leaving the network. addr is ":port" or the gateway
-// address with a port; network must be "tcp".
-func (n *Network) Listen(network, addr string) (net.Listener, error) {
-	switch network {
-	case "tcp", "tcp4":
-	default:
-		return nil, fmt.Errorf("userspace: listen %s: %w", network, net.UnknownNetworkError(network))
-	}
-	host, portStr, err := net.SplitHostPort(addr)
-	if err != nil {
-		return nil, fmt.Errorf("userspace: listen %s: %w", addr, err)
-	}
-	if host != "" {
-		a, err := netip.ParseAddr(host)
-		if err != nil || a.Unmap() != n.gateway {
-			return nil, fmt.Errorf("userspace: listen %s: only the gateway address %s can be bound", addr, n.gateway)
-		}
-	}
-	port, err := strconv.ParseUint(portStr, 10, 16)
-	if err != nil {
-		return nil, fmt.Errorf("userspace: listen %s: %w", addr, err)
-	}
-	if port == dnsPort {
-		return nil, fmt.Errorf("userspace: listen %s: port is reserved for gateway DNS", addr)
-	}
-	return gonet.ListenTCP(n.stack, tcpip.FullAddress{NIC: nicID, Addr: n.gateway4, Port: uint16(port)}, ipv4.ProtocolNumber)
 }
 
 // Close closes every attached port and stops the gateway services. It is

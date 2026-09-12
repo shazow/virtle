@@ -24,7 +24,7 @@ import (
 )
 
 // Guest-initiated flows reach the forwarders when no endpoint on the stack
-// claims them: everything except the gateway's own services and Listen.
+// claims them: everything except the gateway's own services.
 // Each flow is dialed through the Egress before the guest sees it accepted.
 
 func (n *Network) installForwarders() {

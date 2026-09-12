@@ -61,7 +61,7 @@ func exchangeDNS(t *testing.T, g *guest, network string, m *dns.Msg) *dns.Msg {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), testTimeout)
 	defer cancel()
-	addr := netip.AddrPortFrom(g.n.Gateway(), dnsPort)
+	addr := netip.AddrPortFrom(g.n.gateway, dnsPort)
 	var c net.Conn
 	var err error
 	if network == "tcp" {
@@ -279,7 +279,7 @@ func TestDNSAuthorizationPrecedesUpstream(t *testing.T) {
 		egress vmnet.Egress
 		guest  *vm.Egress
 	}{
-		"deny all":           {egress: vmnet.DenyAll{}},
+		"deny all":           {egress: &egress.Policy{}},
 		"hostname denied":    {egress: &egress.Policy{Rules: []egress.Rule{{Hosts: []string{"allowed.test"}}}}},
 		"custom without DNS": {egress: &recordingEgress{}},
 		"guest denied":       {egress: &egress.Policy{Reach: egress.ReachInternet}, guest: &vm.Egress{}},
@@ -311,7 +311,7 @@ func TestNetworkCloseCancelsDNS(t *testing.T) {
 	defer close(release)
 	n := newTestNetwork(t, Config{DNSUpstream: upstream})
 	g := attachGuest(t, n, "guest", vmnet.AttachOptions{})
-	u, err := g.dialUDP(netip.AddrPortFrom(n.Gateway(), dnsPort))
+	u, err := g.dialUDP(netip.AddrPortFrom(n.gateway, dnsPort))
 	if err != nil {
 		t.Fatal(err)
 	}

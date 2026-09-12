@@ -2,8 +2,6 @@ package control
 
 import (
 	"errors"
-	"os"
-	"syscall"
 	"testing"
 )
 
@@ -26,16 +24,5 @@ func TestResourceLimit(t *testing.T) {
 	}
 	if rpcErr.Code != ErrResourceLimit || rpcErr.Message != "too much" {
 		t.Fatalf("unexpected rpc error: %+v", rpcErr)
-	}
-}
-
-func TestIsSocketUnavailable(t *testing.T) {
-	for _, err := range []error{os.ErrNotExist, syscall.ENOENT, syscall.ECONNREFUSED} {
-		if !IsSocketUnavailable(err) {
-			t.Fatalf("expected unavailable for %v", err)
-		}
-	}
-	if IsSocketUnavailable(errors.New("other")) {
-		t.Fatalf("did not expect unavailable for arbitrary error")
 	}
 }

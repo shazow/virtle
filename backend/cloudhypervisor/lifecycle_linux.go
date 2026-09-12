@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"os/exec"
 
 	"github.com/shazow/virtle/backend"
@@ -73,7 +72,7 @@ func (b *Backend) start(ctx context.Context, mf *imanifest.Manifest, ephemeralSt
 			return nil
 		},
 		Graceful: func(ctx context.Context, socket string) error {
-			return newAPIClient(socket).call(ctx, http.MethodPut, "vm.power-button", nil, nil)
+			return newAPIClient(socket).put(ctx, "vm.power-button", nil)
 		},
 	})
 	if err != nil {

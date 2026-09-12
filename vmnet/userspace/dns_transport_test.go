@@ -35,7 +35,7 @@ func TestDNSRequestsKeepTheirGuest(t *testing.T) {
 
 			// Complete a local request before installing the scheduling
 			// barrier, so the DNS servers have finished their startup reads.
-			local, _ := dns.ReverseAddr(n.Gateway().String())
+			local, _ := dns.ReverseAddr(n.gateway.String())
 			queryDNS(t, first, transport, local, dns.TypePTR)
 			paused, release, handled := make(chan struct{}), make(chan struct{}), make(chan struct{})
 			var releaseOnce sync.Once
@@ -56,7 +56,7 @@ func TestDNSRequestsKeepTheirGuest(t *testing.T) {
 			}
 			var conn net.Conn
 			var err error
-			dst := netip.AddrPortFrom(n.Gateway(), dnsPort)
+			dst := netip.AddrPortFrom(n.gateway, dnsPort)
 			if transport == "udp" {
 				conn, err = first.dialUDP(dst)
 			} else {
@@ -99,7 +99,7 @@ func TestDNSRequestsKeepTheirGuest(t *testing.T) {
 }
 
 func TestDNSDatagramsKeepTheirAttachment(t *testing.T) {
-	n := newTestNetwork(t, Config{Egress: vmnet.DenyAll{}})
+	n := newTestNetwork(t, Config{Egress: &egress.Policy{}})
 	first := attachGuest(t, n, "first", vmnet.AttachOptions{})
 	// A separately bound gateway socket gives the test control over when
 	// queued datagrams are read, while using the ordinary guest packet path.
@@ -120,7 +120,7 @@ func TestDNSDatagramsKeepTheirAttachment(t *testing.T) {
 	ready, notified := waiter.NewChannelEntry(waiter.ReadableEvents)
 	wq.EventRegister(&ready)
 	defer wq.EventUnregister(&ready)
-	old, dialErr := first.dialUDP(netip.AddrPortFrom(n.Gateway(), port))
+	old, dialErr := first.dialUDP(netip.AddrPortFrom(n.gateway, port))
 	if dialErr != nil {
 		t.Fatal(dialErr)
 	}
@@ -145,7 +145,7 @@ func TestDNSDatagramsKeepTheirAttachment(t *testing.T) {
 	if addr.(*dnsAddr).p != nil {
 		t.Fatal("queued datagram was assigned to the replacement guest")
 	}
-	current, dialErr := second.dialUDP(netip.AddrPortFrom(n.Gateway(), port))
+	current, dialErr := second.dialUDP(netip.AddrPortFrom(n.gateway, port))
 	if dialErr != nil {
 		t.Fatal(dialErr)
 	}
@@ -173,7 +173,7 @@ func TestPortCloseCancelsDNS(t *testing.T) {
 			defer close(release)
 			n := newTestNetwork(t, Config{DNSUpstream: upstream})
 			g := attachGuest(t, n, "first", vmnet.AttachOptions{})
-			local, _ := dns.ReverseAddr(n.Gateway().String())
+			local, _ := dns.ReverseAddr(n.gateway.String())
 			queryDNS(t, g, transport, local, dns.TypePTR)
 			handler := dns.HandlerFunc(func(w dns.ResponseWriter, r *dns.Msg) {
 				n.dns.ServeDNS(w, r)
@@ -190,7 +190,7 @@ func TestPortCloseCancelsDNS(t *testing.T) {
 			defer cancel()
 			var c net.Conn
 			var err error
-			dst := netip.AddrPortFrom(n.Gateway(), dnsPort)
+			dst := netip.AddrPortFrom(n.gateway, dnsPort)
 			if transport == "udp" {
 				c, err = g.dialUDP(dst)
 			} else {
@@ -225,7 +225,7 @@ func TestPortCloseCancelsDNS(t *testing.T) {
 }
 
 func TestPortCloseDuringDNSHandshake(t *testing.T) {
-	n := newTestNetwork(t, Config{Egress: vmnet.DenyAll{}})
+	n := newTestNetwork(t, Config{Egress: &egress.Policy{}})
 	var link *stalledSYNACK
 	g := attachGuestLink(t, n, "first", vmnet.AttachOptions{}, func(base vmnet.Link) vmnet.Link {
 		link = &stalledSYNACK{Link: base, seen: make(chan struct{}), done: make(chan struct{})}
@@ -236,7 +236,7 @@ func TestPortCloseDuringDNSHandshake(t *testing.T) {
 	finished := make(chan struct{})
 	go func() {
 		defer close(finished)
-		if c, err := g.dialTCP(ctx, netip.AddrPortFrom(n.Gateway(), dnsPort)); err == nil {
+		if c, err := g.dialTCP(ctx, netip.AddrPortFrom(n.gateway, dnsPort)); err == nil {
 			_ = c.Close()
 		}
 	}()
@@ -256,7 +256,7 @@ func TestPortCloseDuringDNSHandshake(t *testing.T) {
 		t.Fatal("port close waited for the guest's handshake")
 	}
 	next := attachGuest(t, n, "second", vmnet.AttachOptions{Addr: g.addr})
-	local, _ := dns.ReverseAddr(n.Gateway().String())
+	local, _ := dns.ReverseAddr(n.gateway.String())
 	if r := queryDNS(t, next, "tcp", local, dns.TypePTR); r.Rcode != dns.RcodeNameError {
 		t.Fatalf("replacement DNS connection = %v", r)
 	}
@@ -265,16 +265,16 @@ func TestPortCloseDuringDNSHandshake(t *testing.T) {
 }
 
 func TestDNSKeepsTCPConnectionsOpen(t *testing.T) {
-	n := newTestNetwork(t, Config{Egress: vmnet.DenyAll{}})
+	n := newTestNetwork(t, Config{Egress: &egress.Policy{}})
 	g := attachGuest(t, n, "guest", vmnet.AttachOptions{})
 	ctx, cancel := context.WithTimeout(t.Context(), testTimeout)
 	defer cancel()
-	c, err := g.dialTCP(ctx, netip.AddrPortFrom(n.Gateway(), dnsPort))
+	c, err := g.dialTCP(ctx, netip.AddrPortFrom(n.gateway, dnsPort))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer c.Close()
-	local, _ := dns.ReverseAddr(n.Gateway().String())
+	local, _ := dns.ReverseAddr(n.gateway.String())
 	conn := &dns.Conn{Conn: c}
 	for range 130 {
 		m := new(dns.Msg).SetQuestion(local, dns.TypePTR)

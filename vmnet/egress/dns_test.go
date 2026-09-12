@@ -62,14 +62,11 @@ func TestDNSAuthorization(t *testing.T) {
 	}
 }
 
-func TestDNSAuthorizerDefaults(t *testing.T) {
+func TestPassthroughAuthorizesDNS(t *testing.T) {
 	f := namedFlow("api.example.test", 53)
 	f.Egress = &vm.Egress{}
 	if err := (vmnet.Passthrough{}).AuthorizeDNS(context.Background(), f, dns.TypeTXT); err != nil {
 		t.Fatalf("passthrough DNS: %v", err)
-	}
-	if err := (vmnet.DenyAll{}).AuthorizeDNS(context.Background(), f, dns.TypeTXT); !errors.Is(err, vmnet.ErrDenied) {
-		t.Fatalf("deny-all DNS: %v, want ErrDenied", err)
 	}
 }
 

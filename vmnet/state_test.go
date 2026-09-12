@@ -13,22 +13,6 @@ import (
 	"github.com/shazow/virtle/vmnet/userspace"
 )
 
-// checkpointNetwork shows that a consumer's network adapter can implement
-// checkpoint methods using only public types while delegating its NICs.
-type checkpointNetwork struct {
-	*userspace.Network
-}
-
-func (n *checkpointNetwork) SaveNetworkState() vmnet.NetworkState {
-	return n.Network.SaveNetworkState()
-}
-
-func (n *checkpointNetwork) RestoreNetworkState(state vmnet.NetworkState) error {
-	return n.Network.RestoreNetworkState(state)
-}
-
-var _ vmnet.StatefulNetwork = (*checkpointNetwork)(nil)
-
 func TestNetworkStateRoundTrip(t *testing.T) {
 	n, err := userspace.New(userspace.Config{
 		DNSUpstream: "127.0.0.1:53",
@@ -48,8 +32,7 @@ func TestNetworkStateRoundTrip(t *testing.T) {
 	if err := json.NewDecoder(bytes.NewBufferString(checkpoint)).Decode(&saved); err != nil {
 		t.Fatal(err)
 	}
-	adapter := &checkpointNetwork{Network: n}
-	var network vmnet.StatefulNetwork = adapter
+	var network vmnet.StatefulNetwork = n
 	if err := network.RestoreNetworkState(saved); err != nil {
 		t.Fatal(err)
 	}

@@ -617,8 +617,7 @@ func (m *Machine) RemoteControl() (vm.Guest, error) {
 // Console implements backend.ConsoleProvider: a vm.Term over the guest's
 // serial port, available when Launch.Console was set. The session replays
 // the recent console output first, so one attached after boot still sees
-// what the guest printed; its Resize and Wait report errors.ErrUnsupported.
-// Closing it leaves the machine running.
+// what the guest printed. Closing it leaves the machine running.
 func (m *Machine) Console(ctx context.Context) (vm.Term, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

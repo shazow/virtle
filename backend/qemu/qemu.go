@@ -145,12 +145,6 @@ func (b *Backend) consoleOutput() io.Writer {
 
 func (b *Backend) hasRemoteControl() bool { return b.RemoteControl != nil }
 
-// StateVersion implements backend.Resumer: it reports the suspend-state
-// version this backend's machinery stamps on saves and compares on
-// resume. Only an exact match is resumable, since the saved VM state is a
-// QEMU migration stream.
-func (b *Backend) StateVersion() string { return vmm.StateVersion }
-
 // NewBackendFromDocument is the bridge for the public manifest package:
 // the returned backend starts from the loaded document, preserving
 // manifest sections that have no vm.Spec equivalent, and overlays the Spec
@@ -317,8 +311,7 @@ func (m *Machine) Status(ctx context.Context) (backend.Status, error) {
 // Console implements backend.ConsoleProvider: a vm.Term over the guest's
 // serial port, available when Backend.Console is ConsolePrint. The session
 // replays the recent console output first, so one attached after boot still
-// sees what the guest printed; its Resize and Wait report
-// errors.ErrUnsupported. Closing it leaves the machine running.
+// sees what the guest printed. Closing it leaves the machine running.
 func (m *Machine) Console(ctx context.Context) (vm.Term, error) {
 	return m.vm.Console(ctx)
 }

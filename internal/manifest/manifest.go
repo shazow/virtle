@@ -43,27 +43,12 @@ type Identity struct {
 }
 
 type Paths struct {
-	WorkingDir string     `json:"workingDir"`
-	LockPath   string     `json:"lockPath"`
-	RuntimeDir RuntimeDir `json:"runtimeDir,omitempty"`
-}
-
-type RuntimeDirMode int
-
-const (
-	RuntimeDirWorking RuntimeDirMode = iota
-	RuntimeDirXDG
-	RuntimeDirPath
-)
-
-type RuntimeDir struct {
-	Mode RuntimeDirMode `json:"mode,omitempty"`
-	Path string         `json:"path,omitempty"`
+	WorkingDir string `json:"workingDir"`
+	LockPath   string `json:"lockPath"`
 }
 
 type Persistence struct {
 	Directories []string `json:"directories"`
-	BaseDir     string   `json:"baseDir,omitempty"`
 	StateDir    string   `json:"stateDir,omitempty"`
 }
 

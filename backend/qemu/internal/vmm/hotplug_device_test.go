@@ -13,9 +13,9 @@ import (
 func TestAdHocHotplugDevicesReceiveExecutablePlansAndDefaults(t *testing.T) {
 	tmpDir := t.TempDir()
 	resolver := &manifest.Manifest{
+		Persistence: manifest.Persistence{StateDir: filepath.Join(tmpDir, "state")},
 		Paths: manifest.Paths{
 			WorkingDir: tmpDir,
-			RuntimeDir: manifest.RuntimeDir{Mode: manifest.RuntimeDirPath, Path: filepath.Join(tmpDir, "state")},
 		},
 	}
 	share, err := hotplugDeviceFor(resolver, vm.Share{Tag: "data", HostPath: "/host/data", GuestPath: "/data"})

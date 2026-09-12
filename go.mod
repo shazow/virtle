@@ -4,7 +4,6 @@ go 1.25.13
 
 require (
 	github.com/BurntSushi/toml v1.6.0
-	github.com/adrg/xdg v0.5.3
 	github.com/digitalocean/go-qemu v0.0.0-20250212194115-ee9b0668d242
 	github.com/diskfs/go-diskfs v1.9.2
 	github.com/google/jsonschema-go v0.4.3

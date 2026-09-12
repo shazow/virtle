@@ -74,7 +74,6 @@ type NotificationSink interface {
 
 type RuntimePaths struct {
 	StateDir         string
-	RuntimeDir       string
 	ControlSocket    string
 	QMPSocket        string
 	GuestAgentSocket string

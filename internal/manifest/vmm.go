@@ -271,13 +271,12 @@ func (d Document) resolveVMM(p vmmProfile, in vmmInput) (*Manifest, *VMM, error)
 		Backend:     p.backend,
 		Identity:    Identity{HostName: d.HostName},
 		Paths:       Paths{WorkingDir: d.WorkingDir},
-		Persistence: Persistence{BaseDir: d.StateDir, StateDir: d.StateDir},
+		Persistence: Persistence{StateDir: d.StateDir},
 		// Workspace directories are template data for the [[run]] helpers
 		// here; mounting the launch directory needs a guest transport.
 		Workspace: resolveWorkspace(d.Workspace),
 	}
 	m.Paths.LockPath = filepath.Join(m.Persistence.StateDir, m.Identity.HostName+".lock")
-	m.Paths.RuntimeDir = RuntimeDir{Mode: RuntimeDirPath, Path: m.Persistence.StateDir}
 	// Host helpers start before the VMM and stop after it, as on QEMU.
 	m.Run = resolveRun(d.Run)
 	for i, run := range m.Run {

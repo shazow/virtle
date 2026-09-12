@@ -136,7 +136,6 @@ func TestStartWithPlanAttachesVirtleNetwork(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := managedManifest(tmpDir)
 	cfg.Persistence.StateDir = ".virtle"
-	cfg.Paths.RuntimeDir = manifest.RuntimeDir{Mode: manifest.RuntimeDirPath, Path: ".virtle"}
 
 	var qemuStarted, attachedFirst atomic.Bool
 	var extraFiles int
@@ -326,7 +325,6 @@ func (n *checkpointNetwork) RestoreNetworkState(state vmnet.NetworkState) error 
 func TestNetworkCheckpointResume(t *testing.T) {
 	cfg := managedManifest(t.TempDir())
 	cfg.Persistence.StateDir = ".virtle"
-	cfg.Paths.RuntimeDir = manifest.RuntimeDir{Mode: manifest.RuntimeDirPath, Path: ".virtle"}
 	checkpoint := vmnet.NetworkState{
 		FakeIPRange: netip.MustParsePrefix("198.18.0.0/15"),
 		Bindings:    []vmnet.DNSBinding{{Name: "api.example", Addr: netip.MustParseAddr("198.18.0.1")}},

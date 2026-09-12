@@ -78,7 +78,6 @@ func (d Document) ManifestWithOptions(options ResolveOptions) (*Manifest, error)
 			WorkingDir: d.WorkingDir,
 		},
 		Persistence: Persistence{
-			BaseDir:  d.StateDir,
 			StateDir: d.StateDir,
 		},
 		SSH: SSH{
@@ -100,7 +99,6 @@ func (d Document) ManifestWithOptions(options ResolveOptions) (*Manifest, error)
 	virtioFSMounts := d.Mounts.VirtioFS()
 	m.Persistence.Directories = persistenceDirectories(imageMounts, m.Persistence.StateDir)
 	m.Paths.LockPath = filepath.Join(m.Persistence.StateDir, m.Identity.HostName+".lock")
-	m.Paths.RuntimeDir = RuntimeDir{Mode: RuntimeDirPath, Path: m.Persistence.StateDir}
 	if d.QEMU.HotplugPorts < 0 {
 		return nil, fmt.Errorf("manifest.qemu.hotplug_ports must not be negative, got %d", d.QEMU.HotplugPorts)
 	}

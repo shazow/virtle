@@ -13,11 +13,13 @@ package vmnet
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/netip"
 	"strconv"
 
+	"github.com/shazow/virtle/internal/dnsproxy"
 	"github.com/shazow/virtle/vm"
 )
 
@@ -110,6 +112,16 @@ type Egress interface {
 	DialFlow(ctx context.Context, f Flow) (net.Conn, error)
 }
 
+// DNSAuthorizer is an optional Egress capability that admits a DNS query
+// before the network forwards it. Host is the question name; Guest, Src,
+// and Egress identify the originating guest. There is no destination
+// service port to infer from a DNS query. qtype is the DNS record type.
+// A refusal wraps ErrDenied. An Egress without this capability cannot
+// authorize forwarded DNS.
+type DNSAuthorizer interface {
+	AuthorizeDNS(ctx context.Context, f Flow, qtype uint16) error
+}
+
 // Passthrough allows everything: it dials the flow's destination with the
 // Dialer (a zero Dialer when nil), by name when the network knows the name
 // the guest resolved and by address otherwise. It is the default Egress.
@@ -121,8 +133,32 @@ func (p Passthrough) DialFlow(ctx context.Context, f Flow) (net.Conn, error) {
 	if d == nil {
 		d = &net.Dialer{}
 	}
+	if resolver := dnsproxy.FromContext(ctx); f.Host != "" && resolver != nil {
+		addrs, err := resolver.LookupNetIP(ctx, "ip", f.Host)
+		if err != nil {
+			return nil, fmt.Errorf("resolve %s: %w", f.Host, err)
+		}
+		var firstErr error
+		for _, addr := range addrs {
+			upstream := netip.AddrPortFrom(addr.Unmap(), f.Dst.Port())
+			conn, err := d.DialContext(ctx, f.Network(), upstream.String())
+			if err == nil {
+				return conn, nil
+			}
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+		if firstErr == nil {
+			firstErr = fmt.Errorf("%s resolves to no address", f.Host)
+		}
+		return nil, firstErr
+	}
 	return d.DialContext(ctx, f.Network(), f.Target())
 }
+
+// AuthorizeDNS permits every query, as Passthrough permits every flow.
+func (Passthrough) AuthorizeDNS(context.Context, Flow, uint16) error { return nil }
 
 // Target is the "host:port" an Egress dials for the flow: the resolved name
 // with the destination port when the network knows it, else the address.
@@ -139,7 +175,12 @@ type DenyAll struct{}
 // DialFlow implements Egress.
 func (DenyAll) DialFlow(context.Context, Flow) (net.Conn, error) { return nil, ErrDenied }
 
+// AuthorizeDNS refuses every forwarded query.
+func (DenyAll) AuthorizeDNS(context.Context, Flow, uint16) error { return ErrDenied }
+
 var (
-	_ Egress = Passthrough{}
-	_ Egress = DenyAll{}
+	_ Egress        = Passthrough{}
+	_ Egress        = DenyAll{}
+	_ DNSAuthorizer = Passthrough{}
+	_ DNSAuthorizer = DenyAll{}
 )

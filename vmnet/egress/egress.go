@@ -28,6 +28,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/shazow/virtle/internal/dnsproxy"
 	"github.com/shazow/virtle/vm"
 	"github.com/shazow/virtle/vmnet"
 )
@@ -124,8 +125,8 @@ type Policy struct {
 	Logger *slog.Logger
 	// Dialer dials allowed flows; nil means a zero Dialer.
 	Dialer *net.Dialer
-	// Resolver resolves the names of allowed flows; nil means
-	// net.DefaultResolver.
+	// Resolver resolves the names of allowed flows. Nil uses the network's
+	// DNS resolver from the flow context, or net.DefaultResolver when absent.
 	Resolver Resolver
 
 	// Injections are tokens inspected requests carry in place of a value
@@ -259,7 +260,11 @@ func (p *Policy) dial(ctx context.Context, f vmnet.Flow, public bool) (net.Conn,
 	}
 	resolver := p.Resolver
 	if resolver == nil {
-		resolver = net.DefaultResolver
+		if configured := dnsproxy.FromContext(ctx); configured != nil {
+			resolver = configured
+		} else {
+			resolver = net.DefaultResolver
+		}
 	}
 	host := normalizeName(f.Host)
 	addrs, err := resolver.LookupNetIP(ctx, "ip", host)

@@ -9,14 +9,9 @@ import (
 	"io/fs"
 )
 
-// Guest performs operations inside a running VM. Implemented today by
-// backend/qemu's QEMU Guest Agent adapter; a virtle-native guest daemon
-// client is planned. Shapes are os/exec- and io/fs-flavored, never
-// protocol-flavored. Implementations must be safe for concurrent use.
-//
-// Daemon-only features (file-tree copy, streaming exec, file watching, ...)
-// are GuestWithX extension interfaces discovered by type assertion; they
-// are never added to Guest itself.
+// Guest performs operations inside a running VM. The QEMU backend implements
+// it through the QEMU Guest Agent. Implementations must be safe for concurrent
+// use.
 type Guest interface {
 	// Run executes a command to completion. A non-zero exit status is returned
 	// as an error satisfying errors.As(err, *ExitError).
@@ -70,41 +65,10 @@ func Output(ctx context.Context, g Guest, cmd *GuestCmd) ([]byte, error) {
 	return stdout.Bytes(), err
 }
 
-// GuestWithCopy streams file trees between host and guest as tar archives.
-// Both directions speak the same shape (the Docker CopyToContainer /
-// CopyFromContainer model), so a guest->guest copy is a direct pipe with no
-// host filesystem and no buffering, and transforms compose as ordinary
-// io.Reader middleware. No in-tree implementation exists yet; it is
-// reserved for the planned guest daemon client.
-type GuestWithCopy interface {
-	CopyToGuest(ctx context.Context, guestPath string, archive io.Reader, opts CopyOptions) error
-	CopyFromGuest(ctx context.Context, guestPath string) (io.ReadCloser, error)
-}
-
-// CopyOptions carries the options prior art shows are necessary for safe
-// usage; nice-to-haves (preserve-times, mode masks, exclusions) wait until
-// a consumer needs them. The zero value is the safe default.
-//
-// One safety rule is an invariant, not an option: extraction rejects
-// entries and symlinks that escape the target root (the zip-slip /
-// docker cp CVE-2018-15664 class).
-type CopyOptions struct {
-	// Overwrite replaces existing files instead of failing with an error
-	// satisfying errors.Is(err, fs.ErrExist) — the os.CopyFS default.
-	Overwrite bool
-
-	// Chown applies UID and GID to created entries. When false, extraction
-	// keeps the archive's recorded owners.
-	Chown    bool
-	UID, GID int
-}
-
-// ArchiveFS adapts the common host case — "copy this directory" — to the
-// stream API: it returns a reader that lazily produces a tar stream of
-// fsys as it is read, so nothing is buffered. Callers pass os.DirFS(path),
-// an embed.FS, or a fstest.MapFS. Generation errors surface from Read.
-//
-//	err := g.CopyToGuest(ctx, "/workspace", vm.ArchiveFS(os.DirFS(src)), opts)
+// ArchiveFS returns a reader that produces a tar archive of fsys as it is
+// read. Callers can pass os.DirFS(path), an embed.FS, or a fstest.MapFS.
+// Generation errors surface from Read. Close the reader to release resources
+// when the archive is not read to completion.
 func ArchiveFS(fsys fs.FS) io.ReadCloser {
 	pr, pw := io.Pipe()
 	go func() {

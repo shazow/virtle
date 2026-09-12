@@ -122,8 +122,7 @@ host kernel networks; the operator owns its addressing and forwards, so
 the device itself and brings it up, which needs `CAP_NET_ADMIN` unless the
 device already exists, is owned by the user running virtle, and is already
 up; a device it creates gets `192.168.249.1/24` on the host side, an existing
-one keeps its addresses. Frames over vsock into a
-virtle network follow with the guest daemon, as on Firecracker; see
+one keeps its addresses. For the supported network types, see
 [docs/networking.md](networking.md).
 
 ## Not supported
@@ -134,7 +133,7 @@ features it cannot honor fail `Start` with an error wrapping
 
 | Feature | Status |
 | --- | --- |
-| Guest control (`Machine.RemoteControl`), SSH, guest files, workspace mounts | No guest agent transport yet; see the [guest daemon design](https://github.com/shazow/virtle/pull/67). |
+| Guest control (`Machine.RemoteControl`), SSH, guest files, workspace mounts | The backend has no guest control transport. |
 | Port forwards, vsock, virtle networks | The NIC is a host TAP device; see above. |
 | 9p shares | Shares are virtio-fs. |
 | Suspend/resume, balloon, hotplug | Capability interfaces are not implemented. |
@@ -155,7 +154,7 @@ capability but virtle does not wire it yet, what would close the gap:
 | Interactive console (`serial = "console"`) | yes | no | yes |
 | Networking | `user`, `virtle`, `tap` | `tap` | `tap` |
 | Port forwards, egress policy, host-side dialing | yes | no | no |
-| Guest control, SSH, guest files, workspace, `write_files` | yes (qemu-guest-agent) | no | no (the VMM has vsock for the guest daemon) |
+| Guest control, SSH, guest files, workspace, `write_files` | yes (qemu-guest-agent) | no | no |
 | Graceful shutdown | guest agent, then QMP quit | Ctrl-Alt-Del (x86_64 only) | ACPI power button |
 | Suspend and resume | yes | no (the VMM has a snapshot API) | no (`vm.snapshot` and `vm.restore` exist) |
 | Memory resize | balloon | no | no (a balloon, or `hotplug_size` with `vm.resize`, exist) |

@@ -1,8 +1,6 @@
 // Package qemu implements a virtle backend that launches virtual machines
 // with QEMU. Backend.RemoteControl selects the guest-control transport
-// wired into Machine.RemoteControl: QGA (the QEMU Guest Agent, equivalent
-// to the virtle CLI today) now, a virtle-native guest daemon transport
-// later.
+// wired into Machine.RemoteControl: QGA (the QEMU Guest Agent).
 //
 // # Resource limits
 //
@@ -115,8 +113,7 @@ type Backend struct {
 }
 
 // RemoteControl is a guest-control transport for Backend.RemoteControl.
-// It is sealed (unexported method): QGA today, the virtle-native guest
-// daemon later. Each transport carries its own knobs.
+// The supported transport is QGA.
 type RemoteControl interface{ remoteControl() }
 
 // QGA is the qemu-guest-agent transport: the guest image runs

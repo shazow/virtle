@@ -80,7 +80,7 @@ type Config struct {
 	Subnet netip.Prefix
 	// Gateway is the network's own address: it serves DHCP and DNS, is the
 	// guests' default route, and is what Listen binds. Default: the first
-	// address of Subnet.
+	// host address of Subnet.
 	Gateway netip.Addr
 	// MTU is the largest IP packet on the segment; a link must carry at
 	// least this much to attach. Default DefaultMTU.
@@ -262,6 +262,9 @@ func (n *Network) MTU() int { return n.mtu }
 
 // Attach implements vmnet.Network.
 func (n *Network) Attach(ctx context.Context, link vmnet.Link, opts vmnet.AttachOptions) (vmnet.Port, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if link.MTU() < n.mtu {
 		return nil, fmt.Errorf("userspace: link MTU %d is below the network's %d", link.MTU(), n.mtu)
 	}
@@ -412,6 +415,9 @@ func (n *Network) portByName(name string) *port {
 // "tcp" or "udp", and addr is a guest address or an attached machine's
 // name, with a port.
 func (n *Network) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	full, err := n.resolveGuest(network, addr)
 	if err != nil {
 		return nil, err

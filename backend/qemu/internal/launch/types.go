@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/shazow/virtle/internal/manifest"
-	"github.com/shazow/virtle/internal/networkstate"
 	"github.com/shazow/virtle/vm"
+	"github.com/shazow/virtle/vmnet"
 )
 
 type ResumeMode string
@@ -65,7 +65,7 @@ type SuspendState struct {
 	NetworkAddr string `json:"networkAddr,omitempty"`
 	// NetworkState preserves synthetic DNS addresses and guest secret tokens
 	// that remain cached in the saved VM's memory.
-	NetworkState *networkstate.State `json:"networkState,omitempty"`
+	NetworkState *vmnet.NetworkState `json:"networkState,omitempty"`
 }
 
 type NotificationSink interface {

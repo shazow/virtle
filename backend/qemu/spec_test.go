@@ -455,3 +455,57 @@ func TestSpecDocumentAppliesLink(t *testing.T) {
 		t.Fatalf("forwards = %+v, want %+v", devices[0].Forward, want)
 	}
 }
+
+func TestResolveSpecKeepsManifestNetworkTypes(t *testing.T) {
+	doc, err := imanifest.DecodeDocumentBytes([]byte(`
+[kernel]
+path = "vmlinuz"
+
+[[networks]]
+id = "managed"
+type = "virtle"
+
+[[networks]]
+id = "default"
+
+[[networks]]
+id = "slirp"
+type = "user"
+forward = [{ from = "guest", host = "127.0.0.1:2000", guest = "10.0.2.15:20" }]
+
+[[networks]]
+id = "host"
+type = "tap"
+tap = "tap0"
+`), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The loader sets Network for the virtle NIC and leaves Link nil. Use
+	// the same backend construction and resolution path that Start uses.
+	b := NewBackendFromDocument(doc, Backend{Network: fakeVMNet{}}).(*Backend)
+	mf, err := b.resolveSpec(&vm.Spec{}, "", b.logger())
+	if err != nil {
+		t.Fatalf("resolve mixed network manifest: %v", err)
+	}
+	devices := mf.QEMU.Devices.Network
+	want := []struct {
+		id, backend string
+		managed     bool
+		options     []string
+	}{
+		{id: "managed", backend: "stream", managed: true},
+		{id: "default", backend: "user"},
+		{id: "slirp", backend: "user", options: []string{"guestfwd=tcp:10.0.2.15:20-cmd:nc 127.0.0.1 2000"}},
+		{id: "host", backend: "tap", options: []string{"ifname=tap0", "script=no", "downscript=no"}},
+	}
+	if len(devices) != len(want) {
+		t.Fatalf("network devices = %+v, want %d", devices, len(want))
+	}
+	for i, expected := range want {
+		got := devices[i]
+		if got.ID != expected.id || got.Backend != expected.backend || got.Managed != expected.managed || !slices.Equal(got.NetdevOptions, expected.options) {
+			t.Errorf("network %d = %+v, want %+v", i, got, expected)
+		}
+	}
+}

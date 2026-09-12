@@ -405,6 +405,7 @@ func TestConfigValidation(t *testing.T) {
 		"gateway is network":   {Gateway: netip.MustParseAddr("192.168.127.0")},
 		"gateway is broadcast": {Gateway: netip.MustParseAddr("192.168.127.255")},
 		"mtu too small":        {MTU: 100},
+		"unknown DNS mode":     {DNS: "magic"},
 	} {
 		if n, err := New(cfg); err == nil {
 			n.Close()
@@ -469,5 +470,59 @@ func TestExposeRacesWithClose(t *testing.T) {
 			t.Fatalf("Expose during Close = %v", err)
 		}
 		guestEnd.Close()
+	}
+}
+
+func TestHostServesGuests(t *testing.T) {
+	for _, network := range []string{"tcp", "tcp4"} {
+		t.Run(network, func(t *testing.T) {
+			n := newTestNetwork(t, Config{Gateway: netip.MustParseAddr("192.168.127.10"), Egress: vmnet.DenyAll{}})
+			g := attachGuest(t, n, "guest", vmnet.AttachOptions{})
+			for _, addr := range []string{":0", net.JoinHostPort(n.Gateway().String(), "0")} {
+				ln, err := n.Listen(network, addr)
+				if err != nil {
+					t.Fatalf("Listen %s: %v", addr, err)
+				}
+				t.Cleanup(func() { _ = ln.Close() })
+				go serveEcho(ln)
+				ctx, cancel := context.WithTimeout(t.Context(), testTimeout)
+				defer cancel()
+				port := uint16(ln.Addr().(*net.TCPAddr).Port)
+				c, err := g.dialTCP(ctx, netip.AddrPortFrom(n.Gateway(), port))
+				if err != nil {
+					t.Fatalf("guest dial the gateway service: %v", err)
+				}
+				echo(t, c, "to a host service")
+				_ = c.Close()
+				_ = ln.Close()
+			}
+			for _, addr := range []string{":53", net.JoinHostPort(n.Gateway().String(), "53"), net.JoinHostPort(g.addr.String(), "80"), ":65536"} {
+				if ln, err := n.Listen(network, addr); err == nil {
+					_ = ln.Close()
+					t.Errorf("Listen accepted %s", addr)
+				}
+			}
+			ln, err := n.Listen(network, ":0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = ln.Close() })
+			finished := make(chan error, 1)
+			go func() { _, err := ln.Accept(); finished <- err }()
+			if err := n.Close(); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case err := <-finished:
+				if err == nil {
+					t.Fatal("closed network accepted a connection")
+				}
+			case <-time.After(testTimeout):
+				t.Fatal("network close left gateway listener waiting")
+			}
+			if _, err := n.Listen(network, ":0"); !errors.Is(err, net.ErrClosed) {
+				t.Fatalf("Listen after Close = %v", err)
+			}
+		})
 	}
 }

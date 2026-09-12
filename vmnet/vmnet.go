@@ -18,6 +18,7 @@ import (
 	"net"
 	"net/netip"
 	"strconv"
+	"time"
 
 	"github.com/shazow/virtle/internal/dnsproxy"
 	"github.com/shazow/virtle/vm"
@@ -44,11 +45,9 @@ type Link interface {
 // MAC; serves DHCP and DNS to the guest; dials guest traffic through its
 // Egress; and exposes host->guest forwards. Attach is safe for concurrent
 // use. A Network outlives the machines attached to it and is closed by its
-// owner.
+// owner. A network may also report MTU() int; QEMU uses a positive result
+// for its guest link, otherwise it defaults to an MTU of 1500.
 type Network interface {
-	// MTU is the largest IP packet on the network. Guest links must carry
-	// at least this much, and backends advertise it to the guest NIC.
-	MTU() int
 	Attach(ctx context.Context, link Link, opts AttachOptions) (Port, error)
 }
 
@@ -70,8 +69,8 @@ type AttachOptions struct {
 // Port is one attached guest NIC. Its address and MAC are fixed at Attach
 // (a static DHCP lease keyed by MAC), so a consumer can dial the guest
 // before it has booted. Expose rejects a duplicate forward and returns
-// net.ErrClosed after Close. Close cancels pending guest dials and closes
-// outgoing flows before releasing the address, forwards, and link.
+// net.ErrClosed after Close. Close cancels pending egress dials and closes
+// forwarded egress flows before releasing the address, forwards, and link.
 // It is idempotent; concurrent calls wait for the same cleanup.
 type Port interface {
 	Addr() netip.Addr
@@ -127,13 +126,32 @@ type DNSAuthorizer interface {
 
 // Passthrough allows everything: it dials the flow's destination by name
 // when the network knows the name the guest resolved and by address
-// otherwise. It is the default Egress.
-type Passthrough struct{}
+// otherwise. Dialer configures those connections; nil uses a zero net.Dialer.
+// An explicit Dialer.Resolver overrides outbound name lookup; otherwise the
+// network's configured DNS resolver is used when present in the flow context.
+// It is the default Egress.
+type Passthrough struct{ Dialer *net.Dialer }
 
 // DialFlow implements Egress.
-func (Passthrough) DialFlow(ctx context.Context, f Flow) (net.Conn, error) {
-	var d net.Dialer
-	if resolver := dnsproxy.FromContext(ctx); f.Host != "" && resolver != nil {
+func (p Passthrough) DialFlow(ctx context.Context, f Flow) (net.Conn, error) {
+	d := p.Dialer
+	if d == nil {
+		d = &net.Dialer{}
+	}
+	if resolver := dnsproxy.FromContext(ctx); f.Host != "" && resolver != nil && d.Resolver == nil {
+		// net.Dialer normally budgets lookup and all address attempts
+		// together. Preserve that bound when using the network resolver.
+		deadline := d.Deadline
+		if d.Timeout != 0 {
+			if timeout := time.Now().Add(d.Timeout); deadline.IsZero() || timeout.Before(deadline) {
+				deadline = timeout
+			}
+		}
+		if !deadline.IsZero() {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithDeadline(ctx, deadline)
+			defer cancel()
+		}
 		addrs, err := resolver.LookupNetIP(ctx, "ip", f.Host)
 		if err != nil {
 			return nil, fmt.Errorf("resolve %s: %w", f.Host, err)
@@ -169,7 +187,18 @@ func (f Flow) Target() string {
 	return f.Dst.String()
 }
 
+// DenyAll refuses every guest-initiated flow and forwarded DNS query.
+type DenyAll struct{}
+
+// DialFlow refuses the flow before connecting.
+func (DenyAll) DialFlow(context.Context, Flow) (net.Conn, error) { return nil, ErrDenied }
+
+// AuthorizeDNS refuses the query before contacting an upstream.
+func (DenyAll) AuthorizeDNS(context.Context, Flow, uint16) error { return ErrDenied }
+
 var (
+	_ Egress        = DenyAll{}
+	_ DNSAuthorizer = DenyAll{}
 	_ Egress        = Passthrough{}
 	_ DNSAuthorizer = Passthrough{}
 )

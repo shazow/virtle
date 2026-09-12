@@ -16,6 +16,7 @@ func TestAdHocHotplugDevicesReceiveExecutablePlansAndDefaults(t *testing.T) {
 		Persistence: manifest.Persistence{StateDir: filepath.Join(tmpDir, "state")},
 		Paths: manifest.Paths{
 			WorkingDir: tmpDir,
+			RuntimeDir: manifest.RuntimeDir{Mode: manifest.RuntimeDirPath, Path: filepath.Join(tmpDir, "runtime")},
 		},
 	}
 	share, err := hotplugDeviceFor(resolver, vm.Share{Tag: "data", HostPath: "/host/data", GuestPath: "/data"})
@@ -25,7 +26,7 @@ func TestAdHocHotplugDevicesReceiveExecutablePlansAndDefaults(t *testing.T) {
 	if share.ID != "data" || share.VirtioFS.Source != "/host/data" || share.VirtioFS.Target != "/data" || share.VirtioFS.Bin != "virtiofsd" {
 		t.Errorf("share device = %+v", share)
 	}
-	if got, want := share.VirtioFS.SocketPath, filepath.Join(tmpDir, "state", "data.sock"); got != want {
+	if got, want := share.VirtioFS.SocketPath, filepath.Join(tmpDir, "runtime", "data.sock"); got != want {
 		t.Errorf("share socket = %q, want %q", got, want)
 	}
 	if got, want := share.VirtioFS.Args, manifest.DefaultVirtioFSArgs(share.VirtioFS.SocketPath, "/host/data", "data", false); !reflect.DeepEqual(got, want) {

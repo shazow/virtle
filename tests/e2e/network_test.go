@@ -33,7 +33,7 @@ import (
 
 // The network scenarios run on QEMU only: a virtle network needs frames from
 // the guest NIC, which Firecracker and Cloud Hypervisor hand to a host TAP
-// device instead (the guest daemon will carry them over vsock).
+// device instead.
 
 // networkGuest is the QEMU guest with its NIC on network.
 func (f fixture) networkGuest(t *testing.T, network vmnet.Network) guest {
@@ -235,12 +235,14 @@ func (l *eventLog) Record(e egress.Event) {
 }
 
 // TestEgressPolicy puts a policy on the guest's network: the guest resolves
-// two names through DNS and tries to connect to both; the allowed name
-// reaches a host listener and the other is refused at DNS, with both
-// decisions on record.
+// two names through DNS and tries to connect to both. The allowed name
+// reaches a host listener, the other is refused at DNS, and a disallowed
+// port on the allowed name is refused at connection time. All three
+// decisions are recorded.
 func TestEgressPolicy(t *testing.T) {
 	f := loadFixture(t)
 	port := lineEcho(t)
+	deniedPort := lineEcho(t)
 	events := &eventLog{}
 	loopback := netip.MustParseAddr("127.0.0.1")
 	policy := &egress.Policy{
@@ -249,7 +251,7 @@ func TestEgressPolicy(t *testing.T) {
 		Recorder:     events,
 	}
 	dnsEvents := new(consoleLog)
-	network, err := userspace.New(userspace.Config{Egress: policy,
+	network, err := userspace.New(userspace.Config{DNS: userspace.DNSFakeIP, Egress: policy,
 		DNSUpstream: fixtureDNS(t, map[string]netip.Addr{"allowed.test": loopback, "blocked.test": loopback}),
 		Logger:      slog.New(slog.NewJSONHandler(dnsEvents, nil)),
 	})
@@ -260,19 +262,21 @@ func TestEgressPolicy(t *testing.T) {
 	defer func() { _ = network.Close(); step("network close") }()
 	g := f.networkGuest(t, network)
 	spec := g.spec(t)
-	spec.Kernel.Cmdline = fmt.Sprintf("%s virtle.egress=%d", fixtureCmdline, port)
+	spec.Kernel.Cmdline = fmt.Sprintf("%s virtle.egress=%d virtle.egress_denied=%d", fixtureCmdline, port, deniedPort)
 	_, log := startReady(t, g, spec)
 	step("ready")
 
-	if want := "VIRTLE_EGRESS:allowed=ping,blocked=refused"; !strings.Contains(log.String(), want) {
+	if want := "VIRTLE_EGRESS:allowed=ping,blocked=refused,port=refused"; !strings.Contains(log.String(), want) {
 		t.Fatalf("guest did not report %q\n--- console ---\n%s", want, log.String())
 	}
 	events.mu.Lock()
 	defer events.mu.Unlock()
-	var allowed *egress.Event
+	var allowed, denied *egress.Event
 	for i := range events.list {
 		if e := &events.list[i]; e.Host == "allowed.test" && e.Decision == egress.Allowed {
 			allowed = e
+		} else if e.Host == "allowed.test" && e.Decision == egress.Denied && e.Dst.Port() == uint16(deniedPort) {
+			denied = e
 		}
 	}
 	if allowed == nil {
@@ -280,6 +284,12 @@ func TestEgressPolicy(t *testing.T) {
 	}
 	if allowed.Upstream.Port() != uint16(port) || allowed.Err != nil {
 		t.Fatalf("allowed event = %+v", *allowed)
+	}
+	if denied == nil {
+		t.Fatalf("events = %+v, want a transport denial for allowed.test:%d", events.list, deniedPort)
+	}
+	if !userspace.DefaultFakeIPRange.Contains(denied.Dst.Addr()) || !network.Subnet().Contains(denied.Src.Addr()) {
+		t.Fatalf("denied event = %+v, want the guest connecting to a cached synthetic address", *denied)
 	}
 	var deniedSource netip.Addr
 	for _, line := range strings.Split(strings.TrimSpace(dnsEvents.String()), "\n") {
@@ -357,7 +367,7 @@ func TestEgressInjection(t *testing.T) {
 	if err := policy.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	network, err := userspace.New(userspace.Config{Egress: policy,
+	network, err := userspace.New(userspace.Config{DNS: userspace.DNSFakeIP, Egress: policy,
 		DNSUpstream: fixtureDNS(t, map[string]netip.Addr{"inject.test": netip.MustParseAddr("127.0.0.1")}),
 	})
 	if err != nil {

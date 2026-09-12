@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/adrg/xdg"
 	"github.com/shazow/virtle/units"
 )
 
@@ -1002,10 +1003,39 @@ func TestDocumentSSHAutoprovisionResolvesToManifest(t *testing.T) {
 	}
 }
 
-func TestManifestResolvesSocketsFromStateDir(t *testing.T) {
+func TestManifestResolvesPersistenceStateDir(t *testing.T) {
+	for _, test := range []struct {
+		name, baseDir, stateDir, wantBase, wantState string
+	}{
+		{"working directory fallback", "", "", "/work", "/work"},
+		{"base directory fallback", ".base", "", "/work/.base", "/work/.base"},
+		{"separate state directory", ".base", ".state", "/work/.base", "/work/.state"},
+		{"absolute state directory", ".base", "/state", "/work/.base", "/state"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			m := Manifest{
+				Paths:       Paths{WorkingDir: "/work", RuntimeDir: RuntimeDir{Mode: RuntimeDirPath, Path: ".runtime"}},
+				Persistence: Persistence{BaseDir: test.baseDir, StateDir: test.stateDir},
+			}
+			if got := m.ResolvedPersistenceBaseDir(); got != test.wantBase {
+				t.Fatalf("base directory = %q, want %q", got, test.wantBase)
+			}
+			if got := m.ResolvedPersistenceStateDir(); got != test.wantState {
+				t.Fatalf("state directory = %q, want %q", got, test.wantState)
+			}
+		})
+	}
+}
+
+func TestManifestResolvesSocketsFromRuntimeDir(t *testing.T) {
+	runtimeDir := t.TempDir()
+	t.Cleanup(xdg.Reload)
+	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
+	xdg.Reload()
+
 	tests := []struct {
 		name       string
-		stateDir   string
+		runtimeDir RuntimeDir
 		socketPath string
 		wantSocket string
 		wantQMP    string
@@ -1013,8 +1043,8 @@ func TestManifestResolvesSocketsFromStateDir(t *testing.T) {
 		wantReady  string
 	}{
 		{
-			name:       "working directory fallback",
-			stateDir:   "",
+			name:       "working directory",
+			runtimeDir: RuntimeDir{},
 			socketPath: "fs.sock",
 			wantSocket: "/tmp/work/fs.sock",
 			wantQMP:    "/tmp/work/qmp.sock",
@@ -1022,35 +1052,35 @@ func TestManifestResolvesSocketsFromStateDir(t *testing.T) {
 			wantReady:  "/tmp/work/ssh-ready.sock",
 		},
 		{
-			name:       "default state directory",
-			stateDir:   ".virtle",
+			name:       "XDG runtime directory",
+			runtimeDir: RuntimeDir{Mode: RuntimeDirXDG},
 			socketPath: "fs.sock",
-			wantSocket: "/tmp/work/.virtle/fs.sock",
-			wantQMP:    "/tmp/work/.virtle/qmp.sock",
-			wantQGA:    "/tmp/work/.virtle/qga.sock",
-			wantReady:  "/tmp/work/.virtle/ssh-ready.sock",
+			wantSocket: filepath.Join(runtimeDir, "agentspace", "agent-sandbox", "fs.sock"),
+			wantQMP:    filepath.Join(runtimeDir, "agentspace", "agent-sandbox", "qmp.sock"),
+			wantQGA:    filepath.Join(runtimeDir, "agentspace", "agent-sandbox", "qga.sock"),
+			wantReady:  filepath.Join(runtimeDir, "agentspace", "agent-sandbox", "ssh-ready.sock"),
 		},
 		{
-			name:       "relative state directory",
-			stateDir:   "state",
+			name:       "relative runtime dir",
+			runtimeDir: RuntimeDir{Mode: RuntimeDirPath, Path: "runtime"},
 			socketPath: "fs.sock",
-			wantSocket: "/tmp/work/state/fs.sock",
-			wantQMP:    "/tmp/work/state/qmp.sock",
-			wantQGA:    "/tmp/work/state/qga.sock",
-			wantReady:  "/tmp/work/state/ssh-ready.sock",
+			wantSocket: "/tmp/work/runtime/fs.sock",
+			wantQMP:    "/tmp/work/runtime/qmp.sock",
+			wantQGA:    "/tmp/work/runtime/qga.sock",
+			wantReady:  "/tmp/work/runtime/ssh-ready.sock",
 		},
 		{
-			name:       "absolute state directory",
-			stateDir:   "/tmp/state",
+			name:       "absolute runtime dir",
+			runtimeDir: RuntimeDir{Mode: RuntimeDirPath, Path: "/tmp/runtime"},
 			socketPath: "fs.sock",
-			wantSocket: "/tmp/state/fs.sock",
-			wantQMP:    "/tmp/state/qmp.sock",
-			wantQGA:    "/tmp/state/qga.sock",
-			wantReady:  "/tmp/state/ssh-ready.sock",
+			wantSocket: "/tmp/runtime/fs.sock",
+			wantQMP:    "/tmp/runtime/qmp.sock",
+			wantQGA:    "/tmp/runtime/qga.sock",
+			wantReady:  "/tmp/runtime/ssh-ready.sock",
 		},
 		{
-			name:       "absolute socket path bypasses state directory",
-			stateDir:   ".virtle",
+			name:       "absolute socket path bypasses runtime dir",
+			runtimeDir: RuntimeDir{Mode: RuntimeDirXDG},
 			socketPath: "/tmp/explicit-fs.sock",
 			wantSocket: "/tmp/explicit-fs.sock",
 			wantQMP:    "/tmp/explicit-qmp.sock",
@@ -1062,12 +1092,16 @@ func TestManifestResolvesSocketsFromStateDir(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			manifest := validManifest()
-			manifest.Persistence.StateDir = tt.stateDir
+			manifest.Paths.RuntimeDir = tt.runtimeDir
+			manifest.Persistence.StateDir = ".state"
 			manifest.CleanupFiles = []string{tt.socketPath}
 			manifest.QEMU.Devices.VirtioFS[0].SocketPath = tt.socketPath
 			manifest.QEMU.GuestAgent.SocketPath = "qga.sock"
 			manifest.QEMU.SSHReady.SocketPath = "ssh-ready.sock"
-			if tt.name == "absolute socket path bypasses state directory" {
+			if got := manifest.ResolvedPersistenceStateDir(); got != "/tmp/work/.state" {
+				t.Fatalf("state directory = %q, want /tmp/work/.state", got)
+			}
+			if tt.name == "absolute socket path bypasses runtime dir" {
 				manifest.QEMU.QMP.SocketPath = "/tmp/explicit-qmp.sock"
 				manifest.QEMU.GuestAgent.SocketPath = "/tmp/explicit-qga.sock"
 				manifest.QEMU.SSHReady.SocketPath = "/tmp/explicit-ready.sock"

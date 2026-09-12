@@ -104,7 +104,8 @@ func LoadDocument(doc imanifest.Document) (*vm.Spec, backend.Backend, error) {
 			if err != nil {
 				return nil, nil, err
 			}
-			netCfg.Egress = policy
+			// Name rules need the guest's original DNS name on each flow.
+			netCfg.DNS, netCfg.Egress = userspace.DNSFakeIP, policy
 			spec.Egress = specEgress(mf.Egress)
 			spec.Files = append(spec.Files, policy.GuestFiles()...)
 			spec.Files = append(spec.Files, guestSecretsFile(policy, spec.Egress)...)

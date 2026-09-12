@@ -1,5 +1,11 @@
 package control
 
+import (
+	"errors"
+	"os"
+	"syscall"
+)
+
 // InvalidParams reports request params that do not satisfy the method.
 func InvalidParams(message string) error {
 	return &RPCError{Code: ErrInvalidParams, Message: message}
@@ -13,4 +19,9 @@ func FailedPrecondition(err error) error {
 // ResourceLimit wraps err as an RPC resource-limit error.
 func ResourceLimit(err error) error {
 	return &RPCError{Code: ErrResourceLimit, Message: err.Error()}
+}
+
+// IsSocketUnavailable reports whether no control socket is reachable.
+func IsSocketUnavailable(err error) bool {
+	return errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ECONNREFUSED)
 }

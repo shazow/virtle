@@ -19,6 +19,8 @@ import (
 	"github.com/shazow/virtle/vmnet"
 )
 
+const defaultNetworkMTU = 1500
+
 // networkAttachment is one launch's guest NIC on a vmnet.Network: the port,
 // QEMU's end of the frame socket until QEMU has inherited it, and the
 // forwards exposed through the port, keyed so Detach can find them.
@@ -108,7 +110,7 @@ func (m *manager) attachNetwork(ctx context.Context, plan *launch.Plan) (*networ
 			return nil, fmt.Errorf("restore network %q state: %w", dev.ID, err)
 		}
 	}
-	mtu := m.network.MTU()
+	mtu := networkMTU(m.network)
 	hostEnd, guestEnd, err := framePair()
 	if err != nil {
 		return nil, fmt.Errorf("network %q: %w", dev.ID, err)
@@ -130,6 +132,17 @@ func (m *manager) attachNetwork(ctx context.Context, plan *launch.Plan) (*networ
 		m.logger.Info("attached network", "id", dev.ID, "addr", port.Addr(), "mac", port.MAC().String())
 	}
 	return a, nil
+}
+
+// networkMTU uses the network's positive MTU when reported. Networks that
+// only implement Attach, or leave their MTU unset, use Ethernet's default.
+func networkMTU(n vmnet.Network) int {
+	if reporter, ok := n.(interface{ MTU() int }); ok {
+		if mtu := reporter.MTU(); mtu > 0 {
+			return mtu
+		}
+	}
+	return defaultNetworkMTU
 }
 
 // framePair makes the socket QEMU's stream netdev shares with the network:

@@ -24,7 +24,7 @@ import (
 )
 
 // Guest-initiated flows reach the forwarders when no endpoint on the stack
-// claims them: everything except the gateway's own services.
+// claims them: everything except the gateway's own services and Listen.
 // Each flow is dialed through the Egress before the guest sees it accepted.
 
 func (n *Network) installForwarders() {
@@ -113,7 +113,7 @@ func (n *Network) dialFlow(proto vm.Proto, id stack.TransportEndpointID, timeout
 		return nil, vmnet.ErrDenied
 	}
 	f := &forwardedFlow{p: p, id: id, published: make(chan struct{}), flow: p.flow(proto, id)}
-	if n.fakeIPs.contains(f.flow.Dst.Addr()) {
+	if n.fakeIPs != nil && n.fakeIPs.contains(f.flow.Dst.Addr()) {
 		name, ok := n.fakeIPs.name(f.flow.Dst.Addr())
 		if !ok {
 			return nil, errUnknownFakeIP

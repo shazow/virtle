@@ -136,6 +136,11 @@ type Suspender interface {
 // Resumer is implemented by backends that can restore a suspended machine.
 type Resumer interface {
 	Resume(ctx context.Context, spec *vm.Spec) (Machine, error)
+
+	// StateVersion reports the backend's suspend-state format identifier.
+	// Callers can inspect it without starting or resuming a machine. The
+	// backend also checks saved state against this version during Resume.
+	StateVersion() string
 }
 
 // MemoryResizer is implemented by machines that can grow or shrink their

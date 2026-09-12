@@ -6,11 +6,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -121,5 +123,47 @@ func TestCACompletesInterruptedPublication(t *testing.T) {
 	}
 	if !bytes.Equal(first.Certificate[0], loaded.Certificate[0]) {
 		t.Fatal("public copy does not match the CA bundle")
+	}
+}
+
+func TestCALoadsSeparatePEMFiles(t *testing.T) {
+	dir := t.TempDir()
+	first, err := LoadOrCreateCA(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyPath := filepath.Join(dir, caKeyFile)
+	bundle, err := os.ReadFile(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, _ := pem.Decode(bundle)
+	if key == nil || !strings.Contains(key.Type, "PRIVATE KEY") {
+		t.Fatal("missing private key")
+	}
+	keyPEM := pem.EncodeToMemory(key)
+	if err := os.WriteFile(keyPath, keyPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	second, err := LoadOrCreateCA(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(first.Certificate[0], second.Certificate[0]) {
+		t.Fatal("loading separate PEM files changed the CA")
+	}
+	loaded, err := tls.LoadX509KeyPair(filepath.Join(dir, caCertFile), keyPath)
+	if err != nil || !bytes.Equal(first.Certificate[0], loaded.Certificate[0]) {
+		t.Fatalf("separate PEM files no longer contain the trusted CA: %v", err)
+	}
+	if err := os.Remove(filepath.Join(dir, caCertFile)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadOrCreateCA(dir); err == nil {
+		t.Fatal("accepted a private key without its certificate")
+	}
+	retained, err := os.ReadFile(keyPath)
+	if err != nil || !bytes.Equal(retained, keyPEM) {
+		t.Fatalf("incomplete CA key was replaced: %v", err)
 	}
 }

@@ -63,6 +63,15 @@ func LoadOrCreateCA(dir string) (tls.Certificate, error) {
 	keyPEM, err := os.ReadFile(keyPath)
 	if err == nil {
 		certPEM := caBundleCertificate(keyPEM)
+		if len(certPEM) == 0 {
+			// Older writers stored the certificate and key separately. Keep
+			// their identity and reject incomplete pairs instead of replacing
+			// a CA that a guest may already trust.
+			certPEM, err = os.ReadFile(certPath)
+			if err != nil {
+				return tls.Certificate{}, fmt.Errorf("egress: load existing CA certificate: %w", err)
+			}
+		}
 		cert, err := tls.X509KeyPair(certPEM, keyPEM)
 		if err != nil {
 			return tls.Certificate{}, fmt.Errorf("egress: load CA from %s: %w", dir, err)

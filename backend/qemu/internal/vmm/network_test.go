@@ -132,10 +132,51 @@ func newNetworkTestManager(network vmnet.Network, runner *launchRunner) *manager
 	}
 }
 
+type mtuNetwork struct {
+	vmnet.Network
+	mtu int
+}
+
+func (n mtuNetwork) MTU() int { return n.mtu }
+
+func TestAttachNetworkMTU(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		mtu  int
+		want int
+	}{
+		{name: "unspecified", want: 1500},
+		{name: "zero", want: 1500},
+		{name: "negative", mtu: -1, want: 1500},
+		{name: "custom", mtu: 9000, want: 9000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			network := &fakeNetwork{}
+			var attachedNetwork vmnet.Network = mtuNetwork{Network: network, mtu: tc.mtu}
+			if tc.name == "unspecified" {
+				attachedNetwork = struct{ vmnet.Network }{network}
+			}
+			m := &manager{network: attachedNetwork}
+			a, err := m.attachNetwork(t.Context(), &launch.Plan{Manifest: managedManifest("")})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer a.Close()
+			if got := a.netdev(3).MTU; got != tc.want {
+				t.Errorf("QEMU MTU = %d, want %d", got, tc.want)
+			}
+			if got := network.ports[0].link.MTU(); got != tc.want {
+				t.Errorf("link MTU = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestStartWithPlanAttachesVirtleNetwork(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := managedManifest(tmpDir)
 	cfg.Persistence.StateDir = ".virtle"
+	cfg.Paths.RuntimeDir = manifest.RuntimeDir{Mode: manifest.RuntimeDirPath, Path: ".virtle"}
 
 	var qemuStarted, attachedFirst atomic.Bool
 	var extraFiles int
@@ -325,6 +366,7 @@ func (n *checkpointNetwork) RestoreNetworkState(state vmnet.NetworkState) error 
 func TestNetworkCheckpointResume(t *testing.T) {
 	cfg := managedManifest(t.TempDir())
 	cfg.Persistence.StateDir = ".virtle"
+	cfg.Paths.RuntimeDir = manifest.RuntimeDir{Mode: manifest.RuntimeDirPath, Path: ".virtle"}
 	checkpoint := vmnet.NetworkState{
 		FakeIPRange: netip.MustParsePrefix("198.18.0.0/15"),
 		Bindings:    []vmnet.DNSBinding{{Name: "api.example", Addr: netip.MustParseAddr("198.18.0.1")}},

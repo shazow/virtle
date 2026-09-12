@@ -120,7 +120,7 @@ Put the guest on a network virtle runs, with a policy on what it may reach
 
 ```go
 policy := &egress.Policy{Rules: []egress.Rule{{Hosts: []string{"*.github.com"}, Ports: []int{443}}}}
-network, err := userspace.New(userspace.Config{Egress: policy})
+network, err := userspace.New(userspace.Config{DNS: userspace.DNSFakeIP, Egress: policy})
 defer network.Close()
 
 b := &qemu.Backend{Network: network, RemoteControl: qemu.QGA{}}

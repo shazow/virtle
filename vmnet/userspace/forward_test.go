@@ -125,7 +125,7 @@ func TestReattachedPortGetsItsOwnUDPPolicy(t *testing.T) {
 		}
 		return c, err
 	}}
-	n := newTestNetwork(t, Config{Egress: e})
+	n := newTestNetwork(t, Config{DNS: DNSFakeIP, Egress: e})
 	first := attachGuest(t, n, "first", vmnet.AttachOptions{})
 	addr, ok := n.fakeIPs.addr("example.test")
 	if !ok {

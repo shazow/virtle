@@ -41,7 +41,7 @@ func roundTripNetworkState(t *testing.T, state vmnet.NetworkState) vmnet.Network
 }
 
 func TestNetworkStatePreservesDNSBindings(t *testing.T) {
-	cfg := Config{FakeIPRange: netip.MustParsePrefix("198.18.0.0/29"), DNSUpstream: dnsUpstream(t, addressDNS)}
+	cfg := Config{DNS: DNSFakeIP, FakeIPRange: netip.MustParsePrefix("198.18.0.0/29"), DNSUpstream: dnsUpstream(t, addressDNS)}
 	before := newTestNetwork(t, cfg)
 	first := attachGuest(t, before, "guest", vmnet.AttachOptions{})
 	addresses := make(map[string]string)
@@ -86,7 +86,7 @@ func TestNetworkStatePreservesDNSBindings(t *testing.T) {
 }
 
 func TestNetworkStateRenewsDNSLifetimeAfterDowntime(t *testing.T) {
-	cfg := Config{FakeIPRange: netip.MustParsePrefix("198.18.0.0/30")}
+	cfg := Config{DNS: DNSFakeIP, FakeIPRange: netip.MustParsePrefix("198.18.0.0/30")}
 	before := newTestNetwork(t, cfg)
 	started := time.Unix(0, 0)
 	before.fakeIPs.now = func() time.Time { return started }
@@ -141,7 +141,7 @@ func TestNetworkStateRejectsInvalidBindingsAtomically(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			policy := checkpointPolicy(t, "current-secret")
-			n := newTestNetwork(t, Config{FakeIPRange: prefix, Egress: policy})
+			n := newTestNetwork(t, Config{DNS: DNSFakeIP, FakeIPRange: prefix, Egress: policy})
 			_, _ = n.fakeIPs.addr("existing.test")
 			_ = policy.GuestEnv(nil)
 			before := n.SaveNetworkState()
@@ -164,7 +164,7 @@ func TestNetworkStateRejectsInvalidBindingsAtomically(t *testing.T) {
 
 func TestNetworkStateMergesCompatibleGuests(t *testing.T) {
 	policy := checkpointPolicy(t, "current-secret")
-	n := newTestNetwork(t, Config{Egress: policy})
+	n := newTestNetwork(t, Config{DNS: DNSFakeIP, Egress: policy})
 	addr, _ := n.fakeIPs.addr("existing.test")
 	_ = policy.GuestEnv(nil)
 	_ = attachGuest(t, n, "running", vmnet.AttachOptions{})
@@ -190,7 +190,7 @@ func TestNetworkStateMergesCompatibleGuests(t *testing.T) {
 }
 
 func TestNetworkStateRequiresTokenRestoreSupport(t *testing.T) {
-	n := newTestNetwork(t, Config{Egress: vmnet.Passthrough{}})
+	n := newTestNetwork(t, Config{DNS: DNSFakeIP, Egress: vmnet.Passthrough{}})
 	before := n.SaveNetworkState()
 	saved := vmnet.NetworkState{FakeIPRange: before.FakeIPRange,
 		Bindings: []vmnet.DNSBinding{{Name: "api.test", Addr: before.FakeIPRange.Addr().Next()}},
@@ -238,7 +238,7 @@ func TestNetworkStatePreservesIssuedSecretTokens(t *testing.T) {
 	upstreamAddr := netip.MustParseAddrPort(upstream.Listener.Addr().String())
 	dnsAddr := dnsUpstream(t, addressDNS)
 	oldPolicy := checkpointPolicy(t, "old-secret")
-	before := newTestNetwork(t, Config{Egress: oldPolicy, DNSUpstream: dnsAddr})
+	before := newTestNetwork(t, Config{DNS: DNSFakeIP, Egress: oldPolicy, DNSUpstream: dnsAddr})
 	issued := oldPolicy.GuestEnv(nil)
 	if len(issued) != 1 {
 		t.Fatalf("issued environment = %v", issued)
@@ -255,7 +255,7 @@ func TestNetworkStatePreservesIssuedSecretTokens(t *testing.T) {
 	}
 	_ = before.Close()
 	currentPolicy := checkpointPolicy(t, "current-secret")
-	after := newTestNetwork(t, Config{Egress: currentPolicy, DNSUpstream: dnsAddr})
+	after := newTestNetwork(t, Config{DNS: DNSFakeIP, Egress: currentPolicy, DNSUpstream: dnsAddr})
 	if err := after.RestoreNetworkState(saved); err != nil {
 		t.Fatal(err)
 	}
@@ -281,5 +281,33 @@ func TestNetworkStatePreservesIssuedSecretTokens(t *testing.T) {
 		}
 	case <-ctx.Done():
 		t.Fatal("restored token request did not reach the upstream")
+	}
+}
+
+func TestForwardNetworkStatePreservesTokens(t *testing.T) {
+	policy := checkpointPolicy(t, "before")
+	before := newTestNetwork(t, Config{Egress: policy})
+	issued := policy.GuestEnv(nil)
+	saved := roundTripNetworkState(t, before.SaveNetworkState())
+	if saved.FakeIPRange.IsValid() || len(saved.Bindings) != 0 {
+		t.Fatalf("forwarding network saved synthetic DNS state: %+v", saved)
+	}
+	resumedPolicy := checkpointPolicy(t, "after")
+	after := newTestNetwork(t, Config{Egress: resumedPolicy})
+	if err := after.RestoreNetworkState(saved); err != nil {
+		t.Fatal(err)
+	}
+	if got := resumedPolicy.GuestEnv(nil); !reflect.DeepEqual(got, issued) {
+		t.Fatalf("restored tokens = %v, want %v", got, issued)
+	}
+	for _, mode := range []DNSMode{DNSForward, DNSFakeIP} {
+		network := newTestNetwork(t, Config{DNS: mode})
+		saved := before.SaveNetworkState()
+		if mode == DNSForward {
+			saved.FakeIPRange = DefaultFakeIPRange
+		}
+		if err := network.RestoreNetworkState(saved); err == nil {
+			t.Fatalf("%s accepted a checkpoint from the other DNS mode", mode)
+		}
 	}
 }

@@ -120,3 +120,41 @@ func TestPassthrough(t *testing.T) {
 		t.Fatalf("Target = %q", named.Target())
 	}
 }
+
+func TestPassthroughUsesConfiguredDialer(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	p := Passthrough{Dialer: &net.Dialer{LocalAddr: &net.TCPAddr{IP: net.ParseIP("127.0.0.2")}}}
+	c, err := p.DialFlow(t.Context(), Flow{Dst: netip.MustParseAddrPort(listener.Addr().String())})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if got := c.LocalAddr().(*net.TCPAddr).IP.String(); got != "127.0.0.2" {
+		t.Fatalf("local address = %s, want the configured source", got)
+	}
+	peer, err := listener.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer peer.Close()
+	if got := peer.RemoteAddr().(*net.TCPAddr).IP.String(); got != "127.0.0.2" {
+		t.Fatalf("peer saw %s, want the configured source", got)
+	}
+}
+
+func TestDenyAll(t *testing.T) {
+	p := DenyAll{}
+	for _, proto := range []vm.Proto{vm.TCP, vm.UDP} {
+		flow := Flow{Proto: proto, Dst: netip.MustParseAddrPort("203.0.113.1:80"), Host: "example.test"}
+		if _, err := p.DialFlow(t.Context(), flow); !errors.Is(err, ErrDenied) {
+			t.Fatalf("DialFlow %s = %v, want ErrDenied", proto, err)
+		}
+		if err := p.AuthorizeDNS(t.Context(), flow, 1); !errors.Is(err, ErrDenied) {
+			t.Fatalf("AuthorizeDNS = %v, want ErrDenied", err)
+		}
+	}
+}

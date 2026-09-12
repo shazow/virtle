@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"net"
-	"os"
 	"sync"
 	"testing"
 
@@ -127,24 +126,6 @@ func TestDialCapabilitySkewReturnsUnsupported(t *testing.T) {
 	err = m.(backend.DeviceAttacher).Attach(context.Background(), vm.Disk{Path: "disk.img"})
 	if !errors.Is(err, errors.ErrUnsupported) {
 		t.Fatalf("Attach error = %v, want errors.ErrUnsupported", err)
-	}
-}
-
-func TestLegacyMachineTreatsRemovedSocketAsCompletion(t *testing.T) {
-	c := &client{
-		dial: func(context.Context) (net.Conn, error) {
-			return nil, os.ErrNotExist
-		},
-		completion: func() (bool, error) { return true, nil },
-	}
-	m := &machine{
-		client:  c,
-		methods: map[rpcMethod]bool{rpcStatus: true},
-		done:    make(chan struct{}),
-	}
-	go m.observeExit()
-	if err := m.Wait(context.Background()); err != nil {
-		t.Fatalf("Wait: %v", err)
 	}
 }
 

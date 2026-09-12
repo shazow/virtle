@@ -364,8 +364,6 @@ func TestLoadOrCreateCAIsStable(t *testing.T) {
 	}
 }
 
-var _ = vmnet.ErrDenied
-
 func TestInspectInjectsValues(t *testing.T) {
 	got := &seen{}
 	upstream := httptest.NewTLSServer(got.handler(t))

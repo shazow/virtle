@@ -3,26 +3,27 @@ package cloudhypervisor
 import (
 	"context"
 	"errors"
-	imanifest "github.com/shazow/virtle/internal/manifest"
 	"io"
 	"net/http"
 	"reflect"
 	"strings"
 	"testing"
+
+	imanifest "github.com/shazow/virtle/internal/manifest"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
-func TestAPICall(t *testing.T) {
+func TestAPIPut(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		status     int
 		body, want string
 	}{
 		{"action", 204, "", ""},
-		{"read", 200, `{"version":"v52.0"}`, ""},
+		{"action response", 200, "{}", ""},
 		{"messages", 400, `["Error creating VM: kernel missing","No such file"]`, "kernel missing: No such file"},
 		{"malformed", 500, "\x1b[31muntrusted", `\x1b`},
 		{"bounded", 400, strings.Repeat("x", 65537), "exceeds"},
@@ -38,14 +39,10 @@ func TestAPICall(t *testing.T) {
 				}
 				return &http.Response{StatusCode: tc.status, Body: io.NopCloser(strings.NewReader(tc.body)), Header: make(http.Header)}, nil
 			})}}
-			var out map[string]any
-			err := client.call(t.Context(), http.MethodPut, "vm.boot", nil, &out)
+			err := client.put(t.Context(), "vm.boot", nil)
 			if tc.want == "" {
 				if err != nil {
 					t.Fatal(err)
-				}
-				if tc.status == 200 && out["version"] != "v52.0" {
-					t.Fatalf("decoded %v", out)
 				}
 				return
 			}
@@ -59,7 +56,7 @@ func TestAPICall(t *testing.T) {
 	}
 }
 
-func TestAPICallEncodesBody(t *testing.T) {
+func TestAPIPutEncodesBody(t *testing.T) {
 	client := &apiClient{http: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if r.Method != "PUT" || r.URL.Path != "/api/v1/vm.create" || r.Header.Get("Content-Type") != "application/json" {
 			t.Fatalf("request: %v", r)
@@ -70,7 +67,7 @@ func TestAPICallEncodesBody(t *testing.T) {
 		}
 		return &http.Response{StatusCode: 204, Body: http.NoBody}, nil
 	})}}
-	if err := client.call(t.Context(), http.MethodPut, "vm.create", consoleConfig{Mode: "Tty"}, nil); err != nil {
+	if err := client.put(t.Context(), "vm.create", consoleConfig{Mode: "Tty"}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -79,7 +76,7 @@ func TestAPIContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	client := &apiClient{http: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) { return nil, r.Context().Err() })}}
-	if err := client.call(ctx, http.MethodPut, "vm.boot", nil, nil); !errors.Is(err, context.Canceled) {
+	if err := client.put(ctx, "vm.boot", nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("got %v", err)
 	}
 }

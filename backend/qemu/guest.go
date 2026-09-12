@@ -32,9 +32,6 @@ func (g *qgaGuest) Run(ctx context.Context, cmd *vm.GuestCmd) error {
 	if cmd == nil || cmd.Path == "" {
 		return fmt.Errorf("guest command path is required")
 	}
-	if cmd.Stdin != nil {
-		return fmt.Errorf("guest command stdin over QGA: %w", errors.ErrUnsupported)
-	}
 	path, args := qga.ShellCommand(cmd.Path, cmd.Args, cmd.Env, cmd.Dir)
 
 	client, err := g.vm.DialGuestAgent(ctx)
@@ -108,10 +105,6 @@ func (g *qgaGuest) Create(ctx context.Context, name string, mode fs.FileMode) (i
 func (g *qgaGuest) Shutdown(ctx context.Context) error {
 	return g.vm.ShutdownGuest(ctx)
 }
-
-// Close releases the host side of the guest connection. The QGA adapter
-// dials per operation and holds no persistent connection.
-func (g *qgaGuest) Close() error { return nil }
 
 // guestFileReader streams a guest file through chunked QGA reads.
 type guestFileReader struct {

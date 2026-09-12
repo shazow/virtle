@@ -136,12 +136,6 @@ type Suspender interface {
 // Resumer is implemented by backends that can restore a suspended machine.
 type Resumer interface {
 	Resume(ctx context.Context, spec *vm.Spec) (Machine, error)
-
-	// StateVersion reports the backend's suspend-state version token
-	// (e.g. "qemu-v1"). Saved state is stamped with it and compared
-	// before restoring; only an exact match is resumable, since the
-	// saved state is a backend-owned format.
-	StateVersion() string
 }
 
 // MemoryResizer is implemented by machines that can grow or shrink their
@@ -163,9 +157,8 @@ type DeviceAttacher interface {
 // machines offer it when their console is set to print; without one Console
 // returns an error wrapping errors.ErrUnsupported. The Term replays the
 // recent console output before live output, so a session attached after
-// boot still sees the boot log and readiness lines, and its Resize and Wait
-// report errors.ErrUnsupported (see vm.Term). Closing it leaves the machine
-// running.
+// boot still sees the boot log and readiness lines. Closing it leaves the
+// machine running.
 //
 // A session must keep reading: one whose reader falls 1 MiB behind the
 // guest is dropped rather than stalling the console. Its Read ends with an

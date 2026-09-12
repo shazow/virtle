@@ -14,6 +14,7 @@ import (
 
 	"github.com/shazow/virtle/vm"
 	"github.com/shazow/virtle/vmnet"
+	"github.com/shazow/virtle/vmnet/egress"
 )
 
 // recordingEgress remembers every flow and dials with dial.
@@ -47,15 +48,15 @@ func TestDHCPLeaseMatchesPort(t *testing.T) {
 	if g.addr != g.port.Addr() {
 		t.Fatalf("leased %s, port reports %s", g.addr, g.port.Addr())
 	}
-	if !n.Subnet().Contains(g.addr) || g.addr == n.Gateway() {
+	if !n.Subnet().Contains(g.addr) || g.addr == n.gateway {
 		t.Fatalf("leased %s outside %s", g.addr, n.Subnet())
 	}
 	ack := g.ack
-	if got := ack.Router(); len(got) != 1 || !got[0].Equal(n.Gateway().AsSlice()) {
-		t.Errorf("router = %v, want %s", got, n.Gateway())
+	if got := ack.Router(); len(got) != 1 || !got[0].Equal(n.gateway.AsSlice()) {
+		t.Errorf("router = %v, want %s", got, n.gateway)
 	}
-	if got := ack.DNS(); len(got) != 1 || !got[0].Equal(n.Gateway().AsSlice()) {
-		t.Errorf("dns = %v, want %s", got, n.Gateway())
+	if got := ack.DNS(); len(got) != 1 || !got[0].Equal(n.gateway.AsSlice()) {
+		t.Errorf("dns = %v, want %s", got, n.gateway)
 	}
 	if ones, _ := ack.SubnetMask().Size(); ones != n.Subnet().Bits() {
 		t.Errorf("mask = /%d, want /%d", ones, n.Subnet().Bits())
@@ -69,7 +70,7 @@ func TestDHCPLeaseMatchesPort(t *testing.T) {
 	if ack.IPAddressLeaseTime(0) != leaseTime {
 		t.Errorf("lease time = %s, want %s", ack.IPAddressLeaseTime(0), leaseTime)
 	}
-	if !ack.ServerIdentifier().Equal(n.Gateway().AsSlice()) {
+	if !ack.ServerIdentifier().Equal(n.gateway.AsSlice()) {
 		t.Errorf("server identifier = %s", ack.ServerIdentifier())
 	}
 	if want := macFor(g.addr); g.port.MAC().String() != want.String() {
@@ -138,7 +139,7 @@ func TestGuestFlowsGoThroughEgress(t *testing.T) {
 }
 
 func TestDeniedFlowIsRefusedBeforeAccept(t *testing.T) {
-	egress := &recordingEgress{dial: vmnet.DenyAll{}.DialFlow}
+	egress := &recordingEgress{dial: (&egress.Policy{}).DialFlow}
 	n := newTestNetwork(t, Config{Egress: egress})
 	g := attachGuest(t, n, "vm1", vmnet.AttachOptions{})
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
@@ -232,7 +233,7 @@ func TestExposeReachesGuestListener(t *testing.T) {
 	}
 }
 
-func TestHostDialsAndServesGuests(t *testing.T) {
+func TestHostDialsGuests(t *testing.T) {
 	n := newTestNetwork(t, Config{})
 	g := attachGuest(t, n, "vm1", vmnet.AttachOptions{})
 	g.listenTCP(7)
@@ -267,29 +268,10 @@ func TestHostDialsAndServesGuests(t *testing.T) {
 	if _, err := n.DialContext(ctx, "tcp", "10.1.1.1:7"); err == nil {
 		t.Fatal("DialContext accepted an address outside the network")
 	}
-
-	ln, err := n.Listen("tcp", ":8080")
-	if err != nil {
-		t.Fatalf("Listen: %v", err)
-	}
-	defer ln.Close()
-	go serveEcho(ln)
-	c, err := g.dialTCP(ctx, netip.AddrPortFrom(n.Gateway(), 8080))
-	if err != nil {
-		t.Fatalf("guest dial the gateway service: %v", err)
-	}
-	echo(t, c, "to a host service")
-	c.Close()
-	if _, err := n.Listen("tcp", ":53"); err == nil {
-		t.Fatal("gateway DNS port can be shadowed by a listener")
-	}
-	if _, err := n.Listen("tcp", g.addr.String()+":1"); err == nil {
-		t.Fatal("Listen bound an address that is not the gateway's")
-	}
 }
 
 func TestGuestsReachEachOther(t *testing.T) {
-	egress := &recordingEgress{dial: vmnet.DenyAll{}.DialFlow}
+	egress := &recordingEgress{dial: (&egress.Policy{}).DialFlow}
 	n := newTestNetwork(t, Config{Egress: egress})
 	g1 := attachGuest(t, n, "vm1", vmnet.AttachOptions{})
 	g2 := attachGuest(t, n, "vm2", vmnet.AttachOptions{})
@@ -323,10 +305,10 @@ func TestAttachOptions(t *testing.T) {
 	for name, opts := range map[string]vmnet.AttachOptions{
 		"address in use":     {Addr: fixed.Addr},
 		"MAC in use":         {MAC: fixed.MAC},
-		"gateway address":    {Addr: n.Gateway()},
+		"gateway address":    {Addr: n.gateway},
 		"outside the subnet": {Addr: netip.MustParseAddr("10.0.0.2")},
 		"multicast MAC":      {MAC: net.HardwareAddr{0x01, 0, 0, 0, 0, 1}},
-		"gateway MAC":        {MAC: macFor(n.Gateway())},
+		"gateway MAC":        {MAC: macFor(n.gateway)},
 	} {
 		hostEnd, guestEnd := net.Pipe()
 		defer guestEnd.Close()
@@ -346,7 +328,7 @@ func TestAttachOptions(t *testing.T) {
 func TestAttachContext(t *testing.T) {
 	n := newTestNetwork(t, Config{DNSUpstream: "127.0.0.1:53"})
 	link := idleLink(t, n.MTU())
-	opts := vmnet.AttachOptions{Addr: n.Gateway().Next()}
+	opts := vmnet.AttachOptions{Addr: n.gateway.Next()}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	if p, err := n.Attach(ctx, link, opts); !errors.Is(err, context.Canceled) {
@@ -430,8 +412,8 @@ func TestConfigValidation(t *testing.T) {
 		}
 	}
 	n := newTestNetwork(t, Config{Subnet: netip.MustParsePrefix("10.20.30.64/26"), MTU: 9000})
-	if n.Gateway() != netip.MustParseAddr("10.20.30.65") || n.MTU() != 9000 {
-		t.Fatalf("gateway %s mtu %d", n.Gateway(), n.MTU())
+	if n.gateway != netip.MustParseAddr("10.20.30.65") || n.MTU() != 9000 {
+		t.Fatalf("gateway %s mtu %d", n.gateway, n.MTU())
 	}
 	p, err := n.Attach(context.Background(), idleLink(t, 9000), vmnet.AttachOptions{})
 	if err != nil {
@@ -449,7 +431,7 @@ func TestGatewayPortsAreClosedNotForwarded(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
 	start := time.Now()
-	if c, err := g.dialTCP(ctx, netip.AddrPortFrom(n.Gateway(), 9)); err == nil {
+	if c, err := g.dialTCP(ctx, netip.AddrPortFrom(n.gateway, 9)); err == nil {
 		c.Close()
 		t.Fatal("a gateway port with nothing behind it accepted")
 	} else if !strings.Contains(err.Error(), "refused") || time.Since(start) > testTimeout/2 {

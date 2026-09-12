@@ -52,6 +52,19 @@ compact before/after examples.
 
 ### Library changes
 
+- Removed unused `vm.TermOptions`, `vm.GuestWithCopy`, `vm.CopyOptions`,
+  `vm.ArchiveFS`, and `vm.Output`. Buffer guest output by supplying a
+  `bytes.Buffer` as `GuestCmd.Stdout`. `GuestCmd.Stdin`, `Term.Resize`, and
+  `Term.Wait` are removed because no backend implemented them. `Guest.Close`
+  is removed because guest operations own their connections; close file and
+  console streams as before, and use `Machine.Wait` to wait for VM exit.
+- `backend.Resumer` only requires `Resume`; QEMU's unused public
+  `StateVersion` method is removed. Saved-state version checks remain part
+  of resume. Control clients use the current wait and shutdown RPCs directly.
+- `vmnet.Network` requires `MTU`, which QEMU uses when attaching its link.
+  Removed unused `userspace.Network.Listen`, `Network.Gateway`,
+  `vmnet.DenyAll`, and `Passthrough.Dialer`. An empty `egress.Policy` denies
+  outgoing traffic; `vmnet.Passthrough{}` uses the host's default dialer.
 - Custom networks can implement `vmnet.StatefulNetwork` using the public
   `vmnet.NetworkState` and `vmnet.DNSBinding` types to participate in QEMU
   suspend/resume. Existing saved network state remains compatible.
@@ -66,7 +79,7 @@ compact before/after examples.
 - `userspace.Config.DNSUpstream` selects `"host"` (the default) or an
   explicit resolver IP:port. Custom egress implementations must implement
   `vmnet.DNSAuthorizer` to permit upstream DNS queries. The standard Policy,
-  Passthrough, and DenyAll implementations support it; query filtering
+  and Passthrough implementations support it; query filtering
   follows hostname permissions, with service ports checked at connection
   time. An explicit `Policy.Resolver` remains a Go-only lookup override.
 - `egress.Request.Host` exposes the validated HTTP authority to admission
@@ -167,8 +180,8 @@ compact before/after examples.
 
 - New `vmnet` package: the networking contracts (`Link`, `Network`, `Port`,
   `Egress`, `Flow`, `ErrDenied`) and frame adapters, with the in-process
-  gVisor network in `vmnet/userspace` (`userspace.New`, `Network.DialContext`
-  and `Listen`, fake-IP DNS) and the standard policy in `vmnet/egress`
+  gVisor network in `vmnet/userspace` (`userspace.New`, `Network.DialContext`,
+  fake-IP DNS) and the standard policy in `vmnet/egress`
   (`Policy` with rules, deny ranges, a `Recorder`, inspection, and
   injections; `LoadOrCreateCA`, `GuestEnv`, `GuestFiles`).
 - `egress.Policy.Reach` is what a flow no rule matches may reach:
@@ -320,7 +333,7 @@ compact before/after examples.
   service control-socket suspend requests after library startup, and expose
   guest RPCs only when remote control is configured.
 - `vm.Guest.Run` now writes to caller-provided streams and reports non-zero
-  command statuses as `*vm.ExitError`; `vm.Output` provides buffered stdout.
+  command statuses as `*vm.ExitError`.
 - Unit codecs now live in the public `units` package; byte sizes support
   unit-suffixed text, JSON, and TOML round trips. QEMU acceleration and port
   protocols now use typed enums.
@@ -334,7 +347,7 @@ Construct QEMU with `&qemu.Backend{}` instead of `qemu.New(qemu.Config{})`.
 such as suspend, memory resize, and device attach are methods of that machine.
 Resume remains a backend capability through `backend.Resumer`. Guest commands
 now stream through `GuestCmd` writers and return non-zero status as
-`*vm.ExitError`; use `vm.Output` when buffered stdout is more convenient.
+`*vm.ExitError`.
 
 Before:
 
@@ -378,9 +391,7 @@ if s, ok := m.(backend.Suspender); ok {
 
 Additional source migrations: `qemu.Config.Machine` is
 `qemu.Backend.MachineType`; `Config.KVM` is the `Backend.Accel` enum;
-`vm.Forward.Proto` is a `vm.Proto`; `vm.TermOptions.TERM` is `TermType`; and
-setting ownership in `vm.CopyOptions` now requires `Chown: true` alongside
-integer `UID` and `GID` fields.
+`vm.Forward.Proto` is a `vm.Proto`.
 
 ## 2026-08-31
 

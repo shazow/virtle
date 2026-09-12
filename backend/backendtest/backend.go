@@ -38,8 +38,6 @@ func (b *memoryBackend) Resume(ctx context.Context, spec *vm.Spec) (backend.Mach
 	return b.Start(ctx, spec)
 }
 
-func (*memoryBackend) StateVersion() string { return "backendtest-v1" }
-
 type memoryMachine struct {
 	guest *vmtest.Guest
 	spec  *vm.Spec

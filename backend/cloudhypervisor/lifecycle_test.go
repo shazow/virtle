@@ -445,9 +445,6 @@ func TestConsoleFollowsTheMachine(t *testing.T) {
 		t.Fatalf("Console: %v", err)
 	}
 	defer term.Close()
-	if err := term.Resize(80, 24); !errors.Is(err, errors.ErrUnsupported) {
-		t.Fatalf("Resize = %v, want ErrUnsupported", err)
-	}
 	if _, err := io.WriteString(term, "ping\n"); err != nil {
 		t.Fatalf("write to console: %v", err)
 	}

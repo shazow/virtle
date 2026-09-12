@@ -44,9 +44,7 @@ conn, err := network.DialContext(ctx, "tcp", status.Networks[0].Addr+":22") // n
   options. `Attach(vm.Forward)` and `Detach` on the machine expose and remove
   forwards at runtime with no hotplug ports involved; `Detach` also removes a
   forward given in `Spec.Ports`.
-- `network.DialContext` dials a guest by address or by machine name;
-  `network.Listen` serves a host service on the gateway address, which guests
-  reach without leaving the network.
+- `network.DialContext` dials a guest by address or by machine name.
 - A suspended machine keeps its address and MAC and re-attaches with them on
   resume, so the lease its kernel holds stays valid. Its synthetic DNS
   bindings and issued secret tokens are saved too, including across CLI
@@ -277,11 +275,13 @@ elsewhere and the only NIC they offer today.
 
 `vmnet` holds the contracts. A `Link` moves Ethernet frames for one guest
 NIC; QEMU uses `vmnet.QEMUStream` for its stream netdev. A `Network` is what
-links attach to and returns a `Port` with the guest's address and MAC. An
+links attach to, reports their MTU, and returns a `Port` with the guest's
+address and MAC. An
 `Egress` is one method, `DialFlow`, that returns the connection a guest flow
 is spliced to, or an error wrapping `vmnet.ErrDenied` to refuse it before it
-opens; `vmnet.Passthrough` allows everything and `vmnet.DenyAll` nothing. A
-`Flow` carries the guest's name, its address, the destination as the guest
+opens; `vmnet.Passthrough` allows everything and an empty `egress.Policy`
+denies outgoing traffic. A `Flow` carries the guest's name, its address,
+the destination as the guest
 addressed it, the name it resolved when the network knows it, and the guest's
 own `vm.Egress`.
 

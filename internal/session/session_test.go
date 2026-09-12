@@ -78,8 +78,6 @@ func (b *suspendingBackend) Resume(ctx context.Context, _ *vm.Spec) (backend.Mac
 	return b.start(ctx)
 }
 
-func (*suspendingBackend) StateVersion() string { return "test-v1" }
-
 func (b *suspendingBackend) start(ctx context.Context) (backend.Machine, error) {
 	if bridge := sessionbridge.FromContext(ctx); bridge != nil {
 		bridge.Bind(sessionbridge.Hooks{

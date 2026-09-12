@@ -190,7 +190,7 @@ func TestNetworkStateMergesCompatibleGuests(t *testing.T) {
 }
 
 func TestNetworkStateRequiresTokenRestoreSupport(t *testing.T) {
-	n := newTestNetwork(t, Config{Egress: vmnet.DenyAll{}})
+	n := newTestNetwork(t, Config{Egress: vmnet.Passthrough{}})
 	before := n.SaveNetworkState()
 	saved := vmnet.NetworkState{FakeIPRange: before.FakeIPRange,
 		Bindings: []vmnet.DNSBinding{{Name: "api.test", Addr: before.FakeIPRange.Addr().Next()}},

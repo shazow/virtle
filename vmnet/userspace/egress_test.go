@@ -51,7 +51,7 @@ func TestFakeIPNamesReachThePolicy(t *testing.T) {
 
 	resolve := func(name string) netip.Addr {
 		t.Helper()
-		u, err := g.dialUDP(netip.AddrPortFrom(n.Gateway(), dnsPort))
+		u, err := g.dialUDP(netip.AddrPortFrom(n.gateway, dnsPort))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -105,7 +105,7 @@ func TestFakeIPNamesReachThePolicy(t *testing.T) {
 	}
 
 	// The synthetic address resolves back to its name.
-	u, err := g.dialUDP(netip.AddrPortFrom(n.Gateway(), dnsPort))
+	u, err := g.dialUDP(netip.AddrPortFrom(n.gateway, dnsPort))
 	if err != nil {
 		t.Fatal(err)
 	}

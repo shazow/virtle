@@ -40,8 +40,6 @@ func (b *commitTracker) Resume(ctx context.Context, spec *vm.Spec) (backend.Mach
 	return b.Backend.Start(ctx, spec)
 }
 
-func (*commitTracker) StateVersion() string { return "test-v1" }
-
 func (b *commitTracker) committedResume() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -65,8 +63,6 @@ func (b noVSockBackend) Resume(ctx context.Context, spec *vm.Spec) (backend.Mach
 	}
 	return noVSockMachine{m}, nil
 }
-
-func (noVSockBackend) StateVersion() string { return "test-v1" }
 
 // TestSSHNeedsVSock covers a machine without a vsock device: there is no SSH
 // destination, so the session prints no hint and --ssh fails with

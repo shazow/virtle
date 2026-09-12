@@ -161,8 +161,13 @@ func (n *Network) fromGuest(p *port, frame []byte) {
 				p.rejected.Add(1)
 				return
 			}
-			// Only local services need this barrier. An external Egress
-			// may take arbitrarily long to finish a dial on the packet path.
+		}
+		// TODO: Bind external UDP admission and fragment reassembly to the
+		// originating attachment without holding ingress across Egress dialing.
+		if ip.DestinationAddress() == n.gateway4 || ip.Protocol() == uint8(header.TCPProtocolNumber) {
+			// TCP selects its port synchronously, then dispatches the SYN
+			// handler asynchronously. Keep that selection within the
+			// attachment's lifetime, including external destinations.
 			p.ingress.Lock()
 			defer p.ingress.Unlock()
 			if p.isClosed() {

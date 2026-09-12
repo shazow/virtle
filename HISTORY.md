@@ -9,6 +9,12 @@ compact before/after examples.
 
 ## 2026-09-12
 
+- Virtle network TCP SYN handlers retain their originating attachment through
+  asynchronous dispatch and address reuse. Pending handshakes are bounded
+  per attachment, with separate capacity for DNS. Closing a port forward
+  cancels and joins pending guest dials and established connections.
+  UDP flows and forwarded peers stay alive while either direction is active.
+
 - Resolved manifests retain separate runtime socket and persistent state
   directories. Runtime sockets support working-directory, XDG, and explicit
   path placement; an unset state directory falls back to `persistence.baseDir`.

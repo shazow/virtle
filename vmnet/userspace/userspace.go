@@ -85,7 +85,7 @@ const (
 	udpDialTimeout = 5 * time.Second
 	// udpIdleTimeout ends a UDP flow or forward peer with no traffic.
 	udpIdleTimeout = 90 * time.Second
-	// maxInFlight caps TCP handshakes waiting on an Egress dial.
+	// maxInFlight caps pending TCP handshakes per port and forwarder.
 	maxInFlight = 1024
 )
 
@@ -376,7 +376,11 @@ func (n *Network) newPort(link vmnet.Link, opts vmnet.AttachOptions) (*port, err
 		done:      make(chan struct{}),
 		exposures: make(map[forwardKey]*exposure),
 	}
-	p.dnsTCP = tcp.NewForwarder(n.stack, 0, maxInFlight, func(r *tcp.ForwarderRequest) { n.dns.acceptTCP(p, r) })
+	// DNS has its own admission budget so pending external dials cannot
+	// exhaust this port's ability to resolve names over TCP.
+	p.dnsTCP = tcp.NewForwarder(n.stack, 0, maxInFlight, p.handleTCP)
+	p.tcpForwarder = tcp.NewForwarder(n.stack, 0, maxInFlight, p.handleTCP)
+	p.udpForwarder = udp.NewForwarder(n.stack, p.handleUDP)
 	n.byAddr[addr] = p
 	n.byMAC[mac.String()] = p
 	n.wg.Add(2)

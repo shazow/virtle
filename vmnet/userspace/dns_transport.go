@@ -108,15 +108,11 @@ func (c *dnsTCPConn) Close() error {
 }
 
 func (s *dnsServer) acceptTCP(p *port, r *tcp.ForwarderRequest) {
-	f := &forwardedFlow{p: p, id: r.ID(), published: make(chan struct{}), flow: p.flow(vm.TCP, r.ID())}
-	p.mu.Lock()
-	if p.closed {
-		p.mu.Unlock()
+	f, err := p.newFlow(vm.TCP, r.ID())
+	if err != nil {
 		r.Complete(false)
 		return
 	}
-	p.flows[f] = struct{}{}
-	p.mu.Unlock()
 	c, err := f.acceptTCP(r)
 	if err != nil {
 		f.finish()

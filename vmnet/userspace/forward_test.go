@@ -14,6 +14,7 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/header"
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
+	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
 
 	"github.com/shazow/virtle/vm"
 	"github.com/shazow/virtle/vmnet"
@@ -269,7 +270,7 @@ func TestPortCloseJoinsFlowCleanup(t *testing.T) {
 	}
 	p := pp.(*port)
 	id := stack.TransportEndpointID{RemoteAddress: p.addr4, RemotePort: 1234, LocalAddress: addr4(netip.MustParseAddr("203.0.113.1")), LocalPort: 80}
-	f, err := n.dialFlow(vm.TCP, id, dialTimeout)
+	f, err := p.dialFlow(vm.TCP, id, dialTimeout)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,5 +293,75 @@ func TestPortCloseJoinsFlowCleanup(t *testing.T) {
 		t.Fatalf("address unavailable after cleanup: %v", err)
 	} else {
 		_ = replacement.Close()
+	}
+}
+
+// A queued SYN belongs to its attachment, even when another guest reuses
+// the address and the entire TCP tuple before the handler gets to run.
+func TestReattachedPortGetsItsOwnTCPPolicy(t *testing.T) {
+	upstream, server := net.Pipe()
+	defer server.Close()
+	go func() { _, _ = io.Copy(server, server) }()
+	e := &recordingEgress{dial: func(context.Context, vmnet.Flow) (net.Conn, error) { return upstream, nil }}
+	n := newTestNetwork(t, Config{Egress: e})
+	first := attachGuest(t, n, "first", vmnet.AttachOptions{})
+	p := first.port.(*port)
+	queued := make(chan stack.TransportEndpointID, 1)
+	resume, handled := make(chan struct{}), make(chan struct{})
+	var release sync.Once
+	defer release.Do(func() { close(resume) })
+	p.tcpForwarder = tcp.NewForwarder(n.stack, 0, maxInFlight, func(r *tcp.ForwarderRequest) {
+		queued <- r.ID()
+		<-resume
+		p.handleTCP(r)
+		close(handled)
+	})
+	ctx, cancel := context.WithTimeout(t.Context(), testTimeout)
+	defer cancel()
+	firstCtx, cancelFirst := context.WithCancel(ctx)
+	defer cancelFirst()
+	firstDone := make(chan struct{})
+	dst := netip.MustParseAddrPort("203.0.113.1:9999")
+	go func() {
+		defer close(firstDone)
+		if c, err := first.dialTCP(firstCtx, dst); err == nil {
+			_ = c.Close()
+		}
+	}()
+	var id stack.TransportEndpointID
+	select {
+	case id = <-queued:
+	case <-ctx.Done():
+		t.Fatal("first SYN was not dispatched")
+	}
+	if err := p.Close(); err != nil {
+		t.Fatal(err)
+	}
+	cancelFirst()
+	<-firstDone
+	policy := &vm.Egress{}
+	second := attachGuest(t, n, "second", vmnet.AttachOptions{Addr: first.addr, Egress: policy})
+	local := full(netip.AddrPortFrom(second.addr, id.RemotePort))
+	c, err := gonet.DialTCPWithBind(ctx, second.stack, local, full(dst), ipv4.ProtocolNumber)
+	if err != nil {
+		t.Fatalf("replacement dial with the original tuple: %v", err)
+	}
+	defer c.Close()
+	echo(t, c, "replacement before original handler resumes")
+	resets := n.stack.Stats().TCP.ResetsSent.Value()
+	release.Do(func() { close(resume) })
+	select {
+	case <-handled:
+	case <-ctx.Done():
+		t.Fatal("original handler did not finish")
+	}
+	if got := n.stack.Stats().TCP.ResetsSent.Value(); got != resets {
+		t.Errorf("original handler sent %d resets after address reuse", got-resets)
+	}
+	echo(t, c, "replacement after original handler finishes")
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if len(e.flows) != 1 || e.flows[0].Guest != "second" || e.flows[0].Egress != policy {
+		t.Fatalf("egress flows = %+v, want only replacement guest's policy", e.flows)
 	}
 }

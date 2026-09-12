@@ -147,9 +147,10 @@ compact before/after examples.
   host-guest vsock, dropping the `/dev/vhost-vsock` requirement.
 - `virtle launch` lets `Machine.Shutdown` stop the guest gracefully on
   SIGINT/SIGTERM before canceling the machine, and drains accepted
-  wait/kill/shutdown/suspend RPC responses before exiting. `^Z` (SIGTSTP) on
-  a backend that cannot suspend is ignored with a warning instead of shutting
-  the VM down.
+  wait/kill/shutdown/suspend RPC responses before exiting; a second
+  SIGINT/SIGTERM during that shutdown kills the machine instead of waiting
+  for the guest. `^Z` (SIGTSTP) on a backend that cannot suspend is ignored
+  with a warning instead of shutting the VM down.
 - `host_name` must stay under the state directory (`..` and absolute names
   are refused, since the name is the state lock's); nested names such as
   `team/vm` keep working on every backend.

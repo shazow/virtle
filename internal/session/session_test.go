@@ -517,3 +517,60 @@ func TestExitCode(t *testing.T) {
 		}
 	}
 }
+
+// stallingMachine models a guest that never answers a shutdown request: its
+// Shutdown returns only when the teardown context ends.
+type stallingMachine struct {
+	backend.Machine
+	done         chan struct{}
+	shuttingDown chan struct{}
+	shutdownErr  error
+}
+
+func (m *stallingMachine) Done() <-chan struct{} { return m.done }
+func (m *stallingMachine) Err() error            { return nil }
+func (m *stallingMachine) Shutdown(ctx context.Context) error {
+	close(m.shuttingDown)
+	<-ctx.Done()
+	m.shutdownErr = ctx.Err()
+	close(m.done)
+	return ctx.Err()
+}
+
+// TestRunKillsMachineOnSecondSignal checks that a second interrupt ends a
+// graceful shutdown the guest is not answering, instead of being swallowed.
+func TestRunKillsMachineOnSecondSignal(t *testing.T) {
+	m := &stallingMachine{done: make(chan struct{}), shuttingDown: make(chan struct{})}
+	started := make(chan struct{})
+	b := backendFunc(func(context.Context, *vm.Spec) (backend.Machine, error) {
+		close(started)
+		return m, nil
+	})
+	var logs bytes.Buffer
+	done := make(chan error, 1)
+	go func() {
+		done <- Run(context.Background(), b, &vm.Spec{}, &manifest.Manifest{}, Options{Resume: ResumeNo, Logger: slog.New(slog.NewTextHandler(&logs, nil))})
+	}()
+	<-started
+	signalSelf(t, os.Interrupt)
+	select {
+	case <-m.shuttingDown:
+	case <-time.After(testTimeout):
+		t.Fatal("the first interrupt did not start the shutdown")
+	}
+	signalSelf(t, os.Interrupt)
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Run error = %v, want context.Canceled", err)
+		}
+	case <-time.After(testTimeout):
+		t.Fatal("the second interrupt did not end the shutdown")
+	}
+	if m.shutdownErr == nil {
+		t.Fatal("the teardown context was not canceled")
+	}
+	if !strings.Contains(logs.String(), "second signal") {
+		t.Fatalf("logs: %s", logs.String())
+	}
+}

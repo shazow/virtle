@@ -96,6 +96,9 @@ type Session struct {
 	bridge  *sessionbridge.Bridge
 	signals <-chan os.Signal
 	logger  *slog.Logger // Logger scoped to this package
+	// teardown bounds the machine's graceful shutdown: it outlives the
+	// session's context and ends on a second SIGINT or SIGTERM.
+	teardown context.Context
 }
 
 func start(ctx context.Context, b backend.Backend, spec *vm.Spec, _ *manifest.Manifest, mode ResumeMode) (backend.Machine, bool, error) {
@@ -145,13 +148,39 @@ func Run(ctx context.Context, b backend.Backend, spec *vm.Spec, mf *manifest.Man
 		}
 	}
 
-	runCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	bridge := &sessionbridge.Bridge{}
+	sessionCtx, endSession := context.WithCancel(ctx)
+	defer endSession()
+	runCtx := sessionbridge.WithContext(sessionCtx, bridge)
+	// The first SIGINT or SIGTERM ends the session, whose teardown asks the
+	// guest to stop and waits for it; a second one ends that teardown, which
+	// kills the machine instead. The teardown context outlives ctx so that
+	// the caller ending the session still gets a graceful shutdown.
+	teardownCtx, endTeardown := context.WithCancel(context.WithoutCancel(ctx))
+	defer endTeardown()
+	interrupts := make(chan os.Signal, 2)
+	signal.Notify(interrupts, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(interrupts)
+	sessionDone := make(chan struct{})
+	defer close(sessionDone)
+	go func() {
+		select {
+		case <-interrupts:
+			endSession()
+		case <-sessionCtx.Done():
+		case <-sessionDone:
+			return
+		}
+		select {
+		case sig := <-interrupts:
+			logger.Warn("second signal: killing the machine instead of waiting for its shutdown", "signal", sig)
+			endTeardown()
+		case <-sessionDone:
+		}
+	}()
 	signals := make(chan os.Signal, 2)
 	signal.Notify(signals, syscall.SIGTSTP, syscall.SIGUSR1)
 	defer signal.Stop(signals)
-	bridge := &sessionbridge.Bridge{}
-	runCtx = sessionbridge.WithContext(runCtx, bridge)
 
 	// Startup is cancelable, but after handoff this foreground session owns
 	// graceful teardown. Do not let a signal independently kill the backend
@@ -169,13 +198,13 @@ func Run(ctx context.Context, b backend.Backend, spec *vm.Spec, mf *manifest.Man
 		}
 		return err
 	}
-	s := &Session{Machine: m, Manifest: mf, Options: opts, Logger: opts.Logger, bridge: bridge, signals: signals, logger: logger}
+	s := &Session{Machine: m, Manifest: mf, Options: opts, Logger: opts.Logger, bridge: bridge, signals: signals, logger: logger, teardown: teardownCtx}
 	if !resumed {
 		if err := s.waitReady(runCtx); err != nil {
 			if sessionbridge.IsSavedSuspendExit(err) {
 				return nil
 			}
-			return shutdownAfter(runCtx, m, err)
+			return s.shutdownAfter(err)
 		}
 		logger.Info("vm startup complete")
 	}
@@ -187,17 +216,21 @@ func Run(ctx context.Context, b backend.Backend, spec *vm.Spec, mf *manifest.Man
 	return err
 }
 
-func shutdownAfter(ctx context.Context, m backend.Machine, err error) error {
-	return errors.Join(err, m.Shutdown(context.WithoutCancel(ctx)))
+// shutdownAfter tears the machine down after err and reports both. The
+// teardown runs on the session's teardown context, not the one err came
+// from: a second interrupt is what cuts it short.
+func (s *Session) shutdownAfter(err error) error {
+	return errors.Join(err, s.Machine.Shutdown(s.teardown))
 }
 
 // afterSuspend reports a suspend outcome. A saved-state exit needs no
-// teardown (the machine is already down); any other failure shuts m down.
-func afterSuspend(ctx context.Context, m backend.Machine, err error) error {
+// teardown (the machine is already down); any other failure shuts the
+// machine down.
+func (s *Session) afterSuspend(err error) error {
 	if err == nil || sessionbridge.IsSavedSuspendExit(err) {
 		return err
 	}
-	return shutdownAfter(ctx, m, err)
+	return s.shutdownAfter(err)
 }
 
 // waitReady runs Hooks.Ready while still servicing machine exit, suspend
@@ -240,25 +273,25 @@ func (s *Session) foreground(ctx context.Context) error {
 		if sessionbridge.IsSavedSuspendExit(err) {
 			return err
 		}
-		return shutdownAfter(ctx, m, err)
+		return s.shutdownAfter(err)
 	}
 
 	if reporter, ok := m.(backend.StatusReporter); ok && len(s.Manifest.SSH.Argv) > 0 && s.Options.Hooks.SSHCommandHint != nil {
 		status, err := reporter.Status(ctx)
 		if err != nil {
-			return shutdownAfter(ctx, m, err)
+			return s.shutdownAfter(err)
 		}
 		hint, err := s.Options.Hooks.SSHCommandHint(s.Manifest, status.CID)
 		if err != nil {
 			s.logger.Warn("ssh command hint template failed", "err", err)
 		} else if hint != "" {
 			if _, err := fmt.Fprintf(cmp.Or[io.Writer](s.Options.Stdout, os.Stdout), "connect with ssh: %s\n", hint); err != nil {
-				return shutdownAfter(ctx, m, fmt.Errorf("write ssh command hint: %w", err))
+				return s.shutdownAfter(fmt.Errorf("write ssh command hint: %w", err))
 			}
 		}
 	}
 	if err := s.Established(); err != nil {
-		return shutdownAfter(ctx, m, err)
+		return s.shutdownAfter(err)
 	}
 	return s.waitForMachine(ctx)
 }
@@ -270,13 +303,13 @@ func (s *Session) waitForMachine(ctx context.Context) error {
 		case <-m.Done():
 			return m.Err()
 		case <-s.bridge.Requests():
-			return afterSuspend(ctx, m, s.bridge.HandleSuspend(ctx))
+			return s.afterSuspend(s.bridge.HandleSuspend(ctx))
 		case sig := <-s.signals:
 			if s.wantsSuspend(ctx, sig) {
-				return afterSuspend(ctx, m, s.suspend(ctx))
+				return s.afterSuspend(s.suspend(ctx))
 			}
 		case <-ctx.Done():
-			return shutdownAfter(ctx, m, context.Cause(ctx))
+			return s.shutdownAfter(context.Cause(ctx))
 		}
 	}
 }

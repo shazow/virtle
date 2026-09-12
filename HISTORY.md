@@ -56,9 +56,6 @@ compact before/after examples.
 
 ### Library changes
 
-- Removed unused `units.MiB.Int`, `units.Bytes.Kibibytes`, and
-  `units.Bytes.Gibibytes` accessors. Manifest schema generation owns its
-  scalar schema definitions; `units.JSONSchemaTypes` is removed.
 - Removed unused `vm.TermOptions`, `vm.GuestWithCopy`, `vm.CopyOptions`,
   `vm.ArchiveFS`, and `vm.Output`. Buffer guest output by supplying a
   `bytes.Buffer` as `GuestCmd.Stdout`. `GuestCmd.Stdin`, `Term.Resize`, and

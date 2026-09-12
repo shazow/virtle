@@ -13,10 +13,7 @@ import (
 // Generate returns the JSON Schema for the virtle manifest input format.
 func Generate() (*jsonschema.Schema, error) {
 	opts := &jsonschema.ForOptions{
-		TypeSchemas: map[reflect.Type]*jsonschema.Schema{
-			reflect.TypeOf(units.Duration(0)): {Type: "string"},
-			reflect.TypeOf(units.MiB(0)):      {Type: "integer"},
-		},
+		TypeSchemas: units.JSONSchemaTypes(),
 	}
 
 	// MountsInput is a tagged-union slice backed by the MountEntry interface.

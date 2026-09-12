@@ -13,9 +13,11 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/netip"
 	"net/url"
 	"path"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -208,7 +210,7 @@ func (p *Policy) serveInspected(ctx context.Context, conn net.Conn, f vmnet.Flow
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(target)
-			pr.Out.Host = pr.In.Host // as the guest sent it, port included
+			pr.Out.Host = pr.In.Host // the validated, normalized authority
 		},
 		Transport: p.upstreamTransport(f),
 		ModifyResponse: func(resp *http.Response) error {
@@ -225,10 +227,14 @@ func (p *Policy) serveInspected(ctx context.Context, conn net.Conn, f vmnet.Flow
 	listener := &oneConnListener{conn: served, done: make(chan struct{})}
 	server := &http.Server{
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if err := validateAuthority(r, f, scheme); err != nil {
+				p.refuse(w, r, f, rule, err)
+				return
+			}
 			// The request as the guest sent it, kept for Admit, for the
 			// values, and for the record: after substitution it could
 			// carry a value.
-			seen := Request{Flow: f, Method: r.Method, URL: cloneURL(r.URL), Header: r.Header.Clone()}
+			seen := Request{Flow: f, Method: r.Method, Host: r.Host, URL: cloneURL(r.URL), Header: r.Header.Clone()}
 			info := &requestInfo{path: seen.URL.Path}
 			r = r.WithContext(context.WithValue(r.Context(), requestInfoKey{}, info))
 			if p.Admit != nil {
@@ -256,6 +262,47 @@ func (p *Policy) serveInspected(ctx context.Context, conn net.Conn, f vmnet.Flow
 		},
 	}
 	_ = server.Serve(listener)
+}
+
+// validateAuthority binds an inspected request to the destination whose flow
+// was authorized. TLS authenticates that destination, but a different HTTP
+// authority could select another tenant at the same upstream address.
+func validateAuthority(r *http.Request, f vmnet.Flow, scheme string) error {
+	expected := normalizeName(f.Host)
+	if expected == "" {
+		expected = f.Dst.Addr().Unmap().String()
+	}
+	matches := func(authority string) bool {
+		u, err := url.Parse("//" + authority)
+		if err != nil || u.Host == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" || strings.HasSuffix(u.Host, ":") {
+			return false
+		}
+		host := normalizeName(u.Hostname())
+		if addr, err := netip.ParseAddr(host); err == nil {
+			host = addr.Unmap().String()
+		}
+		port := uint64(80)
+		if scheme == "https" {
+			port = 443
+		}
+		if s := u.Port(); s != "" {
+			port, err = strconv.ParseUint(s, 10, 16)
+			if err != nil {
+				return false
+			}
+		}
+		return host == expected && port == uint64(f.Dst.Port())
+	}
+	if !matches(r.Host) || (r.URL.Host != "" && !matches(r.URL.Host)) || (r.URL.Scheme != "" && !strings.EqualFold(r.URL.Scheme, scheme)) {
+		return fmt.Errorf("HTTP authority does not match the flow destination: %w", vmnet.ErrDenied)
+	}
+	// net/http uses the absolute URL's authority as r.Host when present.
+	// Normalize both forms so admission and forwarding see one authority.
+	r.Host = net.JoinHostPort(expected, strconv.Itoa(int(f.Dst.Port())))
+	if r.URL.Host != "" {
+		r.URL.Host = r.Host
+	}
+	return nil
 }
 
 // refuse answers a request the policy did not forward: 403 when it was

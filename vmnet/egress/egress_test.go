@@ -205,6 +205,98 @@ func TestPolicyDeniesNamesResolvingIntoDeniedRanges(t *testing.T) {
 	}
 }
 
+func TestPolicyFiltersGuestDeniedAddressesAfterResolution(t *testing.T) {
+	port := echoServer(t)
+	loopback := netip.MustParseAddr("127.0.0.1")
+	other := netip.MustParseAddr("127.0.0.2")
+	for _, tc := range []struct {
+		name    string
+		addrs   []netip.Addr
+		deny    []vm.Reach
+		allowed bool
+	}{
+		{"allowed address", []netip.Addr{loopback}, nil, true},
+		{"denied address", []netip.Addr{loopback}, []vm.Reach{{Host: "127.0.0.1"}}, false},
+		{"denied CIDR", []netip.Addr{loopback}, []vm.Reach{{Host: "127.0.0.0/8"}}, false},
+		{"denied port", []netip.Addr{loopback}, []vm.Reach{{Host: "127.0.0.1", Ports: []int{int(port)}}}, false},
+		{"other port", []netip.Addr{loopback}, []vm.Reach{{Host: "127.0.0.1", Ports: []int{int(port) + 1}}}, true},
+		{"allowed fallback", []netip.Addr{other, loopback}, []vm.Reach{{Host: "127.0.0.2/32"}}, true},
+		{"mapped denied address", []netip.Addr{netip.MustParseAddr("::ffff:127.0.0.1")}, []vm.Reach{{Host: "127.0.0.1"}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var dialed []string
+			p := &Policy{
+				Rules:        []Rule{{Hosts: []string{"api.test"}}},
+				DenyPrefixes: []netip.Prefix{},
+				Resolver:     hosts{"api.test": tc.addrs},
+				Dialer: &net.Dialer{Control: func(_, addr string, _ syscall.RawConn) error {
+					dialed = append(dialed, addr)
+					return nil
+				}},
+			}
+			f := namedFlow("api.test", port)
+			f.Egress = &vm.Egress{Allow: []vm.Reach{{Host: "api.test"}}, Deny: tc.deny}
+			c, err := p.DialFlow(context.Background(), f)
+			if !tc.allowed {
+				if c != nil {
+					c.Close()
+				}
+				if !errors.Is(err, vmnet.ErrDenied) || len(dialed) != 0 {
+					t.Fatalf("denied destination: error %v, dials %v", err, dialed)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			expectEcho(t, c)
+			want := netip.AddrPortFrom(loopback, port).String()
+			if len(dialed) != 1 || dialed[0] != want {
+				t.Fatalf("dials = %v, want only %s", dialed, want)
+			}
+		})
+	}
+}
+
+func TestPolicyDefaultAddressProtection(t *testing.T) {
+	for _, tc := range []struct {
+		name, addr string
+		denied     bool
+	}{
+		{"IPv4 unspecified", "0.0.0.0", true},
+		{"IPv6 unspecified", "::", true},
+		{"IPv4 loopback", "127.0.0.1", true},
+		{"IPv6 loopback", "::1", true},
+		{"IPv4 link local", "169.254.169.254", true},
+		{"IPv6 link local", "fe80::1", true},
+		{"other explicit destination", "203.0.113.1", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, named := range []bool{false, true} {
+				attempted := errors.New("allowed destination reached dialer")
+				p := &Policy{
+					Reach:    ReachInternet,
+					Rules:    []Rule{{Hosts: []string{"api.test", "0.0.0.0/0", "::/0"}}},
+					Resolver: hosts{"api.test": {netip.MustParseAddr(tc.addr)}},
+					Dialer:   &net.Dialer{Control: func(_, _ string, _ syscall.RawConn) error { return attempted }},
+				}
+				f := addrFlow(netip.AddrPortFrom(netip.MustParseAddr(tc.addr), 443))
+				if named {
+					f = namedFlow("api.test", 443)
+				}
+				_, err := p.DialFlow(context.Background(), f)
+				want := attempted
+				if tc.denied {
+					want = vmnet.ErrDenied
+				}
+				if !errors.Is(err, want) {
+					t.Fatalf("named=%t: error %v, want %v", named, err, want)
+				}
+			}
+		})
+	}
+}
+
 func TestGuestPolicyOnlyNarrows(t *testing.T) {
 	port := echoServer(t)
 	loopback := netip.MustParseAddr("127.0.0.1")

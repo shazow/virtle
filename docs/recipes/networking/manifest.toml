@@ -1,0 +1,39 @@
+# run.py appends this to the generated QEMU boot manifest and fills in the
+# ephemeral host ports. Neither the secret nor private keys enter this file.
+[[networks]]
+type = "virtle"
+
+[networks.dns]
+upstream = "127.0.0.1:@DNS_PORT@"
+# Omitting this section (or setting "host") uses the host's resolv.conf.
+# The demo resolver adds *.virtle.test and forwards other names to host DNS.
+
+[egress]
+reach = "rules"
+
+[[egress.allow]]
+host = "*.virtle.test"
+ports = [@API_PORT@]
+inspect = true
+
+# Optional internet exploration; the automated checks use only local services.
+[[egress.allow]]
+host = "example.com"
+ports = [443]
+
+[[egress.deny]]
+host = "blocked.virtle.test"
+
+[[egress.secrets]]
+name = "DEMO_TOKEN"
+from = "{{.Env.VIRTLE_DEMO_SECRET}}"
+hosts = ["api.virtle.test"]
+in = ["header"]
+
+[[write_files]]
+guest_path = "/etc/virtle/demo.env"
+mode = "0644"
+text = '''
+export DEMO_API_PORT=@API_PORT@
+export DEMO_HOST_ADDRESS=@HOST_ADDRESS@
+'''

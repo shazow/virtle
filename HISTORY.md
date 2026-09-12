@@ -9,6 +9,9 @@ compact before/after examples.
 
 ## 2026-09-12
 
+- `docs/recipes/networking` demonstrates QEMU managed DNS, egress filtering,
+  HTTPS inspection, and scoped secret injection with local mock services.
+  Use `nix run` to explore or `nix run .#check` to verify the full demo.
 - Synthetic DNS addresses remain bound for their advertised TTL. Exhausting
   a configured range returns SERVFAIL until a binding expires instead of
   redirecting a guest's cached address to another hostname.

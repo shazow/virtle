@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"sync"
 	"syscall"
@@ -636,7 +637,9 @@ func (m *Machine) Status(ctx context.Context) (backend.Status, error) {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.status, nil
+	status := m.status
+	status.Networks = slices.Clone(status.Networks)
+	return status, nil
 }
 
 var (

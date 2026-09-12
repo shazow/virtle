@@ -25,9 +25,8 @@ type Backend interface {
 	Start(ctx context.Context, spec *vm.Spec) (Machine, error)
 }
 
-// Machine is a virtual machine started by a Backend. It deliberately says
-// nothing about processes, sockets, or protocols, so exec'd (QEMU) and
-// in-process (libkrun) backends satisfy it equally.
+// Machine is a virtual machine started by a Backend. Implementations own
+// the machine's runtime resources and release them when it exits.
 type Machine interface {
 	// Done closes after the machine exits and its runtime state is released.
 	Done() <-chan struct{}
@@ -41,10 +40,8 @@ type Machine interface {
 
 	// RemoteControl returns guest control for this machine, wired up by
 	// the backend, or an error wrapping errors.ErrUnsupported when the VM
-	// has no reachable guest agent. Most virtle functionality is built on
-	// the expectation that this succeeds. Whether the backend wires guest
-	// control eagerly at Start or lazily on first call is an implementation
-	// detail behind the backend's constructor.
+	// has no guest-control transport. A successful call does not imply that
+	// the guest agent is ready; Guest operations may wait for it to connect.
 	RemoteControl() (vm.Guest, error)
 }
 

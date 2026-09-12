@@ -369,6 +369,8 @@ func (c *client) call(ctx context.Context, method rpcMethod, params any, result 
 		return fmt.Errorf("control dial: %w", err)
 	}
 	defer conn.Close()
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = conn.SetDeadline(deadline)
 	}
@@ -377,11 +379,11 @@ func (c *client) call(ctx context.Context, method rpcMethod, params any, result 
 		return err
 	}
 	if err := json.NewEncoder(conn).Encode(requestEnvelope{ID: 1, Method: method, Params: payload}); err != nil {
-		return fmt.Errorf("control request: %w", err)
+		return fmt.Errorf("control request: %w", errors.Join(err, context.Cause(ctx)))
 	}
 	line, err := bufio.NewReader(conn).ReadBytes('\n')
 	if err != nil {
-		return fmt.Errorf("control response: %w", err)
+		return fmt.Errorf("control response: %w", errors.Join(err, context.Cause(ctx)))
 	}
 	var resp responseEnvelope
 	if err := json.Unmarshal(line, &resp); err != nil {

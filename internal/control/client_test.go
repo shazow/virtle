@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"os"
+	"sync"
 	"testing"
 
 	"github.com/shazow/virtle/backend"
@@ -145,4 +146,76 @@ func TestLegacyMachineTreatsRemovedSocketAsCompletion(t *testing.T) {
 	if err := m.Wait(context.Background()); err != nil {
 		t.Fatalf("Wait: %v", err)
 	}
+}
+
+// pipeClient exercises the real control transport without a filesystem socket.
+func pipeClient(t *testing.T, handlers Handlers) *client {
+	t.Helper()
+	router, err := NewRouter(handlers)
+	if err != nil {
+		t.Fatalf("NewRouter: %v", err)
+	}
+	server, err := NewServer(router)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	var serving sync.WaitGroup
+	t.Cleanup(serving.Wait)
+	return &client{dial: func(ctx context.Context) (net.Conn, error) {
+		host, peer := net.Pipe()
+		serving.Add(1)
+		go func() {
+			defer serving.Done()
+			server.handleConn(peer, nil)
+		}()
+		return host, nil
+	}}
+}
+
+func TestGuestRunCancellationReachesServer(t *testing.T) {
+	handler := &blockingGuestHandler{entered: make(chan struct{}), canceled: make(chan struct{})}
+	c := pipeClient(t, Handlers{Core: &fakeControlCore{}, Guest: handler})
+	g := &guest{machine: &machine{client: c}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- g.Run(ctx, &vm.GuestCmd{Path: "/bin/sleep", Args: []string{"infinity"}}) }()
+	<-handler.entered
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run after cancellation = %v, want context.Canceled", err)
+	}
+	<-handler.canceled
+}
+
+type cancelShutdownHandler struct {
+	entered chan struct{}
+	killed  chan struct{}
+}
+
+func (h *cancelShutdownHandler) ShutdownRPC(ctx context.Context, _ ShutdownRequest) (ShutdownResponse, error) {
+	close(h.entered)
+	<-ctx.Done()
+	return ShutdownResponse{}, context.Cause(ctx)
+}
+
+func (h *cancelShutdownHandler) Kill(context.Context, KillRequest) (KillResponse, error) {
+	close(h.killed)
+	return KillResponse{}, nil
+}
+
+func TestMachineShutdownCancellationFallsBackToKill(t *testing.T) {
+	handler := &cancelShutdownHandler{entered: make(chan struct{}), killed: make(chan struct{})}
+	c := pipeClient(t, Handlers{Core: &fakeControlCore{}, Shutdown: handler, Kill: handler})
+	m := &machine{client: c, methods: map[rpcMethod]bool{rpcShutdown: true, rpcKill: true}, done: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- m.Shutdown(ctx) }()
+	<-handler.entered
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Shutdown after cancellation = %v, want context.Canceled", err)
+	}
+	<-handler.killed
 }

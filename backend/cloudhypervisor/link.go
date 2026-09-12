@@ -3,8 +3,7 @@ package cloudhypervisor
 // Link selects how the guest NIC's frames reach the host. It is sealed
 // (unexported method); TAP is the only path Cloud Hypervisor offers without
 // a vhost-user helper: the VMM opens a host TAP device, so frames go to the
-// host kernel, never to a network virtle runs. A frames-over-vsock link into
-// a vmnet.Network follows with the guest daemon. Nil means no NIC.
+// host kernel, never to a network virtle runs. Nil means no NIC.
 type Link interface{ link() }
 
 // TAP is a host TAP device that already exists in virtle's network

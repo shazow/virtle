@@ -95,10 +95,9 @@ type Forward struct {
 	Proto     Proto  // zero value means TCP
 }
 
-// File is a small file placed in the guest before the workload starts;
-// large trees go through GuestWithCopy after boot. Content is consumed by
-// Start — refresh it (e.g. a fresh bytes.NewReader) before reusing the
-// Spec.
+// File is a small file placed in the guest before the workload starts.
+// Content is consumed by Start; refresh it (e.g. a fresh bytes.NewReader)
+// before reusing the Spec.
 type File struct {
 	GuestPath string
 	Content   io.Reader

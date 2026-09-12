@@ -48,7 +48,11 @@ conn, err := network.DialContext(ctx, "tcp", status.Networks[0].Addr+":22") // n
   `network.Listen` serves a host service on the gateway address, which guests
   reach without leaving the network.
 - A suspended machine keeps its address and MAC and re-attaches with them on
-  resume, so the lease its kernel holds stays valid.
+  resume, so the lease its kernel holds stays valid. Its synthetic DNS
+  bindings and issued secret tokens are saved too, including across CLI
+  invocations, and restored before the NIC attaches. Saved bindings get a
+  fresh TTL protection window because the guest's cache clock may have
+  stopped. Conflicts with an active shared network fail resume.
 - Closing a port ends its outgoing connections before releasing the address;
   a replacement guest establishes new flows under its own policy.
 - The segment carries IPv4 only. The gateway answers ping; nothing forwards
@@ -101,6 +105,10 @@ Negative answers such as NXDOMAIN reach the guest. AAAA answers are empty
 because the guest segment carries IPv4; PTR queries for synthetic addresses
 are answered locally. Ordinary records such as TXT, CNAME, MX, NS, and SRV
 are proxied after authorization.
+
+Each synthetic binding stays protected for at least its advertised TTL
+after a lookup or use. When the range fills, DNS returns SERVFAIL until a
+binding expires; cached addresses are never reassigned within that window.
 
 DNS defaults to the host nameservers listed in `/etc/resolv.conf` when the
 network is created, including a local DNS stub when configured. Set an
@@ -245,6 +253,11 @@ gives the guest the CA certificate at `/etc/virtle/ca.pem` and its tokens at
 to `Spec.Egress`. Add the CA to the guest's trust store
 (`update-ca-certificates`, `SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`, ...) and
 source the tokens into the workload's environment.
+Concurrent launches sharing the CA directory use the same certificate.
+Suspend state contains the issued placeholders, while secret values and
+injection permissions continue to come from the current manifest on resume.
+Removing a saved token's injection or changing an explicitly configured
+token makes resume fail rather than silently invalidating the guest's token.
 Injections other than secrets, and `Admit`, have no manifest form yet.
 
 ## Kernel TAP

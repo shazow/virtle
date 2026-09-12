@@ -53,6 +53,27 @@ if [ -e /sys/class/net/eth0 ]; then
     forbidden=$(wget -q -T 5 -O - "http://inject.test:$port/forbidden" 2>&1 || true)
     echo "VIRTLE_ADMIT:$forbidden"
   fi
+  # Suspend coverage keeps both the DNS result and an issued placeholder
+  # in this listener's environment. Requests after resume use those saved
+  # values without another guest lookup or reading the new host's token.
+  resume_port=$(sed -n 's/.*virtle\.resume=\([0-9]*\).*/\1/p' /proc/cmdline)
+  if [ -n "$resume_port" ]; then
+    cached_token=$(sed -n 's/.*virtle\.token=\([^ ]*\).*/\1/p' /proc/cmdline)
+    cached_addr=$(nslookup -type=A resume.test 2>/dev/null | awk '/^Name:/ { answer=1 } answer && /^Address/ { print $NF; exit }')
+    test -n "$cached_token"
+    test -n "$cached_addr"
+    export resume_port cached_token cached_addr
+    tcpsvd -E 0.0.0.0 8 sh -c '
+      read -r command
+      case "$command" in
+        probe) printf "%s\n" "$cached_addr" ;;
+        fetch)
+          wget -q -T 5 -O - --header "Host: resume.test:$resume_port" --header "X-Token: $cached_token" \
+            "http://$cached_addr:$resume_port/resume"
+          ;;
+      esac
+    ' &
+  fi
 fi
 # A share named on the command line (virtle.share=TAG) is a virtio-fs
 # filesystem: mount it, report the file the host put there, unmount.

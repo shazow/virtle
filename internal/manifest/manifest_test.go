@@ -381,11 +381,11 @@ func TestDocumentRunValidation(t *testing.T) {
 			wantErr: `vars key "Workspace" is reserved`,
 		},
 		{
-			name: "bare workspace template",
+			name: "invalid command template",
 			run: RunInput{
-				Exec: []string{"proxy", "{{.Workspace}}"},
+				Exec: []string{"proxy", "{{.Workspace"},
 			},
-			wantErr: `uses {{.Workspace}}; use {{.Workspace.GuestPath}} or {{.Workspace.HostPath}}`,
+			wantErr: "manifest.run[0].exec[1]",
 		},
 		{
 			name:    "missing exec",
@@ -400,14 +400,18 @@ func TestDocumentRunValidation(t *testing.T) {
 			wantErr: "exec[0] is required",
 		},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
-			document := validDocument()
-			document.Run = []RunInput{tt.run}
-			_, err := document.Manifest()
-			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-				t.Fatalf("expected %q error, got %v", tt.wantErr, err)
-			}
-		})
+		for _, backend := range []string{BackendQEMU, BackendFirecracker, BackendCloudHypervisor} {
+			t.Run(backend+"/"+tt.name, func(t *testing.T) {
+				document := seededDocument()
+				document.Backend = backend
+				document.Kernel.Path = "kernel"
+				document.Run = []RunInput{tt.run}
+				_, err := document.Manifest()
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("expected %q error, got %v", tt.wantErr, err)
+				}
+			})
+		}
 	}
 }
 

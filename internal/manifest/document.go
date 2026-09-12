@@ -46,7 +46,7 @@ type Document struct {
 	VSock           VSockInput           `json:"vsock,omitempty" toml:"vsock" jsonschema:"Allowed runtime vsock CID allocation range."`
 	WriteFiles      []WriteFileInput     `json:"write_files,omitempty" toml:"write_files" jsonschema:"Files copied into or synchronized with the guest through qemu guest agent."`
 	Notifications   NotificationsInput   `json:"notifications,omitempty" toml:"notifications" jsonschema:"Host command hooks invoked for selected runtime notification states."`
-	Run             []RunInput           `json:"run,omitempty" toml:"run" jsonschema:"Host-side processes started before QEMU and stopped during teardown."`
+	Run             []RunInput           `json:"run,omitempty" toml:"run" jsonschema:"Host-side processes started before the virtual machine and stopped during teardown."`
 	Hotplug         HotplugInput         `json:"hotplug,omitempty" toml:"hotplug" jsonschema:"Devices that may be attached or detached after launch."`
 	Egress          *EgressInput         `json:"egress,omitempty" toml:"egress" jsonschema:"What the guest may reach through a network of type virtle, and the secrets it uses without holding them. Without this section such a network reaches the internet and nothing on the host or its networks."`
 }
@@ -234,7 +234,7 @@ func filterMounts[T MountEntry](mounts MountsInput) []T {
 }
 
 type MountInput struct {
-	Tag        string `json:"tag" toml:"tag" jsonschema:"Stable QEMU mount tag or device identifier."`
+	Tag        string `json:"tag" toml:"tag" jsonschema:"Stable mount tag or device identifier."`
 	SourcePath string `json:"source,omitempty" toml:"source" jsonschema:"Host path or image path backing this mount."`
 	ReadOnly   bool   `json:"read_only,omitempty" toml:"read_only" jsonschema:"Attach the mount or image read-only."`
 }

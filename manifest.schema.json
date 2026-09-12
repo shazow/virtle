@@ -263,7 +263,7 @@
               },
               "tag": {
                 "type": "string",
-                "description": "Stable QEMU mount tag or device identifier."
+                "description": "Stable mount tag or device identifier."
               },
               "source": {
                 "type": "string",
@@ -318,7 +318,7 @@
               },
               "tag": {
                 "type": "string",
-                "description": "Stable QEMU mount tag or device identifier."
+                "description": "Stable mount tag or device identifier."
               },
               "source": {
                 "type": "string",
@@ -776,7 +776,7 @@
         ],
         "additionalProperties": false
       },
-      "description": "Host-side processes started before QEMU and stopped during teardown."
+      "description": "Host-side processes started before the virtual machine and stopped during teardown."
     },
     "hotplug": {
       "type": "object",
@@ -794,7 +794,7 @@
                   },
                   "tag": {
                     "type": "string",
-                    "description": "Stable QEMU mount tag or device identifier."
+                    "description": "Stable mount tag or device identifier."
                   },
                   "source": {
                     "type": "string",
@@ -849,7 +849,7 @@
                   },
                   "tag": {
                     "type": "string",
-                    "description": "Stable QEMU mount tag or device identifier."
+                    "description": "Stable mount tag or device identifier."
                   },
                   "source": {
                     "type": "string",

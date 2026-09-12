@@ -7,7 +7,6 @@ import (
 	"sort"
 	"strings"
 	"text/template"
-	"text/template/parse"
 
 	"github.com/shazow/virtle/internal/executor"
 
@@ -242,15 +241,7 @@ func validateRun(index int, run Run) error {
 			return fmt.Errorf("manifest.run[%d].vars key %q is reserved", index, key)
 		}
 	}
-	if _, err := NewTemplateRenderer(RunTemplateProvider{
-		CID:      3,
-		StateDir: ".virtle",
-		Workspace: Workspace{
-			GuestDir: "/workspace",
-			HostDir:  "/host/workspace",
-		},
-		Vars: run.Vars,
-	}); err != nil {
+	if _, err := NewTemplateRenderer(RunTemplateProvider{Vars: run.Vars}); err != nil {
 		return fmt.Errorf("manifest.run[%d].vars: %w", index, err)
 	}
 	return nil
@@ -258,53 +249,11 @@ func validateRun(index int, run Run) error {
 
 func validateRunTemplates(index int, field string, values []string) error {
 	for i, value := range values {
-		tmpl, err := template.New("exec").Funcs(executor.TemplateFuncs()).Parse(value)
-		if err != nil {
-			continue
-		}
-		if templateUsesBareWorkspace(tmpl.Tree.Root) {
-			return fmt.Errorf("manifest.run[%d].%s[%d] uses {{.Workspace}}; use {{.Workspace.GuestPath}} or {{.Workspace.HostPath}}", index, field, i)
+		if _, err := template.New("exec").Funcs(executor.TemplateFuncs()).Parse(value); err != nil {
+			return fmt.Errorf("manifest.run[%d].%s[%d]: %w", index, field, i, err)
 		}
 	}
 	return nil
-}
-
-func templateUsesBareWorkspace(node parse.Node) bool {
-	switch node := node.(type) {
-	case nil:
-		return false
-	case *parse.ListNode:
-		for _, child := range node.Nodes {
-			if templateUsesBareWorkspace(child) {
-				return true
-			}
-		}
-	case *parse.ActionNode:
-		return templateUsesBareWorkspace(node.Pipe)
-	case *parse.IfNode:
-		return templateUsesBareWorkspace(node.Pipe) || templateUsesBareWorkspace(node.List) || templateUsesBareWorkspace(node.ElseList)
-	case *parse.RangeNode:
-		return templateUsesBareWorkspace(node.Pipe) || templateUsesBareWorkspace(node.List) || templateUsesBareWorkspace(node.ElseList)
-	case *parse.WithNode:
-		return templateUsesBareWorkspace(node.Pipe) || templateUsesBareWorkspace(node.List) || templateUsesBareWorkspace(node.ElseList)
-	case *parse.PipeNode:
-		for _, command := range node.Cmds {
-			if templateUsesBareWorkspace(command) {
-				return true
-			}
-		}
-	case *parse.CommandNode:
-		for _, arg := range node.Args {
-			if templateUsesBareWorkspace(arg) {
-				return true
-			}
-		}
-	case *parse.FieldNode:
-		return len(node.Ident) == 1 && node.Ident[0] == "Workspace"
-	case *parse.VariableNode:
-		return len(node.Ident) == 1 && node.Ident[0] == "Workspace"
-	}
-	return false
 }
 
 func validateWriteFiles(files WriteFiles) error {

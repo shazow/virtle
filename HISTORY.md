@@ -9,6 +9,13 @@ compact before/after examples.
 
 ## 2026-09-12
 
+- Firecracker and Cloud Hypervisor validate `[[run]]` helpers at manifest
+  load, including empty commands, template syntax, and reserved variables.
+  Existing disk images can use any filesystem; the ext4 restriction applies
+  only when `image.create = true`.
+- Helper templates accept ordinary Go template constructs such as
+  `{{with .Workspace}}`; forwarding command arguments retain literal dollar
+  strings. `manifest defaults --resolved` leaves the optional initrd unset.
 - `docs/recipes/networking` demonstrates QEMU managed DNS, egress filtering,
   HTTPS inspection, and scoped secret injection with local mock services.
   Use `nix run` to explore or `nix run .#check` to verify the full demo.
@@ -45,6 +52,16 @@ compact before/after examples.
 
 ### Library changes
 
+- Removed the unimplemented `vm.GuestWithCopy`, `vm.CopyOptions`, and
+  `vm.TermOptions` placeholders. `vm.Guest` file operations, `vm.Term`, and
+  `vm.ArchiveFS` remain available.
+- Custom networks can implement `vmnet.StatefulNetwork` using the public
+  `vmnet.NetworkState` and `vmnet.DNSBinding` types to participate in QEMU
+  suspend/resume. Existing saved network state remains compatible.
+- Control RPCs honor context cancellation, including the forced-stop fallback
+  for a canceled shutdown. Userspace network attachment and dialing reject
+  canceled contexts before acquiring resources. Firecracker and Cloud
+  Hypervisor status results own their network snapshots.
 - `userspace.Config.DNS`, `DNSMode`, `DNSForward`, `DNSFakeIP`, and
   `Network.DNS` are removed: every userspace network uses synthetic DNS.
   Replace `userspace.Config{DNS: userspace.DNSFakeIP, Egress: policy}` with
@@ -364,9 +381,7 @@ if s, ok := m.(backend.Suspender); ok {
 
 Additional source migrations: `qemu.Config.Machine` is
 `qemu.Backend.MachineType`; `Config.KVM` is the `Backend.Accel` enum;
-`vm.Forward.Proto` is a `vm.Proto`; `vm.TermOptions.TERM` is `TermType`; and
-setting ownership in `vm.CopyOptions` now requires `Chown: true` alongside
-integer `UID` and `GID` fields.
+`vm.Forward.Proto` is a `vm.Proto`.
 
 ## 2026-08-31
 

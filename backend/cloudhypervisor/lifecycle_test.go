@@ -4,6 +4,7 @@ package cloudhypervisor
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -71,6 +72,24 @@ func fakeVMM(mode string) {
 		os.Exit(1)
 	case "exit":
 		os.Exit(17)
+	case "console-output":
+		// Both VMM streams reach the caller's console writer. Exercise
+		// their independent os/exec copiers with concurrent output.
+		var writers sync.WaitGroup
+		start := make(chan struct{})
+		for _, stream := range []struct {
+			file *os.File
+			text string
+		}{{os.Stdout, "o"}, {os.Stderr, "e"}} {
+			writers.Go(func() {
+				<-start
+				for range 16 {
+					_, _ = io.WriteString(stream.file, strings.Repeat(stream.text, 4096))
+				}
+			})
+		}
+		close(start)
+		writers.Wait()
 	case "no-socket":
 		signals := make(chan os.Signal, 1)
 		signal.Notify(signals, syscall.SIGTERM)
@@ -707,6 +726,29 @@ func TestInteractiveConsoleUsesTheTerminal(t *testing.T) {
 	}
 	if err := m.Kill(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestConsoleOutputCollectsBothStreams(t *testing.T) {
+	for _, mode := range []Console{ConsolePrint, ConsoleInteractive} {
+		t.Run(string(mode), func(t *testing.T) {
+			b, spec := helperBackend(t, "console-output")
+			var output bytes.Buffer // callers need not supply a concurrent writer
+			b.Console, b.ConsoleOutput = mode, &output
+			m, err := b.Start(t.Context(), spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = m.Kill() })
+			if err := m.Shutdown(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			for _, value := range []byte{'o', 'e'} {
+				if got := bytes.Count(output.Bytes(), []byte{value}); got != 16*4096 {
+					t.Fatalf("console contains %d %q bytes, want %d", got, value, 16*4096)
+				}
+			}
+		})
 	}
 }
 

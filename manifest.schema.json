@@ -450,7 +450,7 @@
           },
           "type": {
             "type": "string",
-            "description": "Network type: user (the VMM's built-in user networking, the default), virtle (a network virtle runs in userspace), or tap (a host TAP device)."
+            "description": "Network type: user (the VMM's built-in user networking, the default), virtle (a network virtle runs in userspace), or tap (a host TAP device). QEMU also takes any of its own -netdev backends verbatim."
           },
           "mac": {
             "type": "string",
@@ -458,7 +458,7 @@
           },
           "tap": {
             "type": "string",
-            "description": "Host TAP device name, for type tap."
+            "description": "Host TAP device name, for type tap; QEMU picks and sets up the device itself when omitted."
           },
           "forward": {
             "type": [
@@ -948,7 +948,7 @@
               },
               "type": {
                 "type": "string",
-                "description": "Network type: user (the VMM's built-in user networking, the default), virtle (a network virtle runs in userspace), or tap (a host TAP device)."
+                "description": "Network type: user (the VMM's built-in user networking, the default), virtle (a network virtle runs in userspace), or tap (a host TAP device). QEMU also takes any of its own -netdev backends verbatim."
               },
               "mac": {
                 "type": "string",
@@ -956,7 +956,7 @@
               },
               "tap": {
                 "type": "string",
-                "description": "Host TAP device name, for type tap."
+                "description": "Host TAP device name, for type tap; QEMU picks and sets up the device itself when omitted."
               },
               "forward": {
                 "type": [

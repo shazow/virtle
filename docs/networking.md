@@ -9,7 +9,10 @@ in Go or in the manifest's `[[networks]]` entry:
 | `virtle` | a `vmnet.Network` on `qemu.Backend.Network` | a network virtle runs in userspace: fixed addresses, DHCP and DNS, host-side dialing, forwards, and an egress policy | QEMU (Firecracker and Cloud Hypervisor follow with the guest daemon) |
 | `tap` | `qemu.TAP{Name}`, `firecracker.TAP{Name}`, `cloudhypervisor.TAP{Name}` | a host TAP device the host kernel networks; the operator owns addressing, NAT, and forwards | QEMU, Firecracker, Cloud Hypervisor |
 
-`user` stays the default until the virtle network reaches parity with it.
+`user` stays the default until the virtle network reaches parity with it. On
+QEMU any other `type` still reaches QEMU verbatim as its `-netdev` backend,
+forwards and all, and `type = "tap"` without a `tap` name still leaves the
+device and its ifup/ifdown scripts to QEMU, as before virtle knew the types.
 
 ## The virtle network
 

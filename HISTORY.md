@@ -36,13 +36,14 @@ compact before/after examples.
   microVMs and stop after them, as they do for QEMU; the sections used to
   be rejected there. `[notifications]` stays QEMU-only.
 - `[[mounts]] type = "virtiofs"` with `read_only = true` now makes the
-  `virtiofsd` virtle starts refuse guest writes: `--readonly` is added to
-  its arguments, `virtiofs.args` or the defaults, unless already there.
-  Before, `read_only` did nothing for virtiofs shares on any backend. A
-  share served by another daemon (`virtiofs.socket` alone) still relies on
-  that daemon. A QEMU manifest's virtiofs mount that names no
-  `virtiofs.socket` now gets `<tag>.sock` and virtle's `virtiofsd`, as it
-  already did through the Go API.
+  `virtiofsd` virtle starts refuse guest writes: `--readonly` joins virtle's
+  default daemon arguments. Before, `read_only` did nothing for virtiofs
+  shares on any backend. A mount that spells `virtiofs.args` keeps them as
+  written (add `--readonly` there yourself), and a share served by another
+  daemon (`virtiofs.socket` alone) still relies on that daemon; virtle logs
+  both. A QEMU manifest's virtiofs mount that names no `virtiofs.socket`
+  now gets `<tag>.sock` and virtle's `virtiofsd`, as it already did through
+  the Go API.
 - Firecracker and Cloud Hypervisor manifests accept `[balloon] enabled =
   false` and `[workspace]` `guest_dir` / `host_dir` (template data for
   `[[run]]`); `mount_cwd`, `write_files`, and an enabled balloon stay
@@ -60,7 +61,8 @@ compact before/after examples.
   and `firecracker.Backend` gain `ExtraArgs`, as `qemu.Backend` has. With
   that slice field `firecracker.Backend` values are no longer comparable
   with `==`, like `qemu.Backend`.
-- `vm.Share.ReadOnly` reaches the `virtiofsd` virtle starts as `--readonly`.
+- `vm.Share.ReadOnly` reaches the `virtiofsd` virtle starts with its default
+  arguments as `--readonly`.
 
 ## 2026-09-10
 
@@ -71,7 +73,9 @@ compact before/after examples.
   with a DHCP lease, DNS, `virtle status` reporting the address, and
   `[[networks.forward]]` entries served by virtle rather than QEMU's slirp.
   `type = "tap"` with `tap = "tap0"` hands a host TAP device to the VMM on
-  QEMU and Firecracker. `type = "user"` stays the default. See
+  QEMU and Firecracker. `type = "user"` stays the default; any other value
+  still reaches QEMU verbatim as its `-netdev` backend, and `type = "tap"`
+  without a `tap` name still leaves the device to QEMU's own scripts. See
   [docs/networking.md](docs/networking.md).
 - A virtle network reaches the internet and nothing on the host or its
   networks unless the manifest says otherwise. `[egress] reach` names what
@@ -146,6 +150,9 @@ compact before/after examples.
   wait/kill/shutdown/suspend RPC responses before exiting. `^Z` (SIGTSTP) on
   a backend that cannot suspend is ignored with a warning instead of shutting
   the VM down.
+- `host_name` must stay under the state directory (`..` and absolute names
+  are refused, since the name is the state lock's); nested names such as
+  `team/vm` keep working on every backend.
 - `nix flake check` gains real-KVM end-to-end checks that boot both backends
   on a shared tiny kernel, through the CLI and through the Go API (the
   `backendtest` contract, root and scratch disks, the console); they need a

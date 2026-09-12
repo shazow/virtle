@@ -177,9 +177,9 @@ func TestCloudHypervisorKernelParams(t *testing.T) {
 }
 
 // TestCloudHypervisorReadOnlyShares covers read_only on a virtiofs mount:
-// every daemon virtle starts gets --readonly, whatever its arguments and
-// without doubling it, and a share served by another daemon is left to that
-// daemon.
+// virtle's default daemon arguments gain --readonly, arguments the manifest
+// spells are used as written, and a share served by another daemon is left
+// to that daemon.
 func TestCloudHypervisorReadOnlyShares(t *testing.T) {
 	const share = "working_dir = '/work'\n[kernel]\npath = 'vmlinux'\n[[mounts]]\ntype = 'virtiofs'\ntag = 'src'\nsource = '/src'\nread_only = true\n"
 	for name, tc := range map[string]struct {
@@ -187,7 +187,7 @@ func TestCloudHypervisorReadOnlyShares(t *testing.T) {
 		want  []string
 	}{
 		"default arguments":              {"", []string{"virtiofsd", "--socket-path=/work/.virtle/src.sock", "--shared-dir=/src", "--tag=src", "--readonly"}},
-		"own arguments without the flag": {"virtiofs.args = ['--socket-path={{.Socket}}', '--shared-dir={{.MountSource}}']\n", []string{"virtiofsd", "--socket-path=/work/.virtle/src.sock", "--shared-dir=/src", "--readonly"}},
+		"own arguments without the flag": {"virtiofs.args = ['--socket-path={{.Socket}}', '--shared-dir={{.MountSource}}']\n", []string{"virtiofsd", "--socket-path=/work/.virtle/src.sock", "--shared-dir=/src"}},
 		"own arguments with the flag":    {"virtiofs.args = ['--readonly', '--socket-path={{.Socket}}']\n", []string{"virtiofsd", "--readonly", "--socket-path=/work/.virtle/src.sock"}},
 	} {
 		t.Run(name, func(t *testing.T) {

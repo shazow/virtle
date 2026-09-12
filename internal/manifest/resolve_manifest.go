@@ -27,7 +27,7 @@ func (d Document) Manifest() (*Manifest, error) {
 
 // validateHostName rejects VM names whose state lock
 // (<state_dir>/<host_name>.lock, shared by every backend) would land outside
-// the state directory. A separator nests the lock instead; both backends
+// the state directory. A separator nests the lock instead; the backends
 // create the directories on the way, so such names keep working.
 func validateHostName(name string) error {
 	clean := filepath.Clean(name)
@@ -652,7 +652,7 @@ func (m *Manifest) resolveVirtioFSRuns(mounts []VirtioFSMountInput, options Reso
 			// cannot know what the daemon behind them accepts.
 			options.Logger.Info("read-only virtiofs share runs with the manifest's virtiofs.args; read_only is those arguments' to enforce", "tag", mount.Tag)
 		}
-		runs = append(runs, Run{
+		run := Run{
 			Exec: append([]string{m.resolveOptionalBin(mount.VirtioFS.Bin, defaultVirtioFSBin)}, args...),
 			Env:  []string{"VIRTIOFSD_SOCKET={{.Socket}}"},
 			Vars: VirtioFSTemplateProvider{
@@ -660,7 +660,11 @@ func (m *Manifest) resolveVirtioFSRuns(mounts []VirtioFSMountInput, options Reso
 				SourcePath: m.resolvePath(mount.SourcePath),
 				Tag:        mount.Tag,
 			}.TemplateContext(),
-		})
+		}
+		if err := validateRun(len(runs), run); err != nil {
+			return nil, err
+		}
+		runs = append(runs, run)
 		m.addCleanupFile(mount.VirtioFS.Socket)
 	}
 	return runs, nil
@@ -1092,9 +1096,6 @@ func resolveForwardPorts(dir string, ports []ForwardPort, fwdTunnelExec []string
 		if normalized.From == "host" {
 			options = append(options, fmt.Sprintf("hostfwd=%s:%s:%d-%s:%d", normalized.Proto, normalized.Host.Address, normalized.Host.Port, normalized.Guest.Address, normalized.Guest.Port))
 		} else {
-			if err := rejectLegacyFwdTunnelExecEnv(fwdTunnelExec); err != nil {
-				return nil, fmt.Errorf("manifest.qemu.fwd_tunnel_exec (manifest.networks[%d].forward[%d]): %w", networkIndex, i, err)
-			}
 			command, err := renderFwdTunnelExec(dir, fwdTunnelExec, normalized.Host)
 			if err != nil {
 				return nil, fmt.Errorf("manifest.qemu.fwd_tunnel_exec (manifest.networks[%d].forward[%d]): %w", networkIndex, i, err)
@@ -1103,18 +1104,6 @@ func resolveForwardPorts(dir string, ports []ForwardPort, fwdTunnelExec []string
 		}
 	}
 	return options, nil
-}
-
-func rejectLegacyFwdTunnelExecEnv(exec []string) error {
-	for i, arg := range exec {
-		switch arg {
-		case "$HOST":
-			return fmt.Errorf("exec[%d] uses legacy $HOST; use {{.Host}}", i)
-		case "$PORT":
-			return fmt.Errorf("exec[%d] uses legacy $PORT; use {{.Port}}", i)
-		}
-	}
-	return nil
 }
 
 func renderFwdTunnelExec(dir string, exec []string, hostEndpoint PortEndpoint) ([]string, error) {

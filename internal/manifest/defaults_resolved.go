@@ -1,16 +1,11 @@
 package manifest
 
-const (
-	defaultKernelPath       = "<kernel-path>"
-	defaultKernelInitrdPath = "<initrd-path>"
-)
+const defaultKernelPath = "<kernel-path>"
 
-// DefaultManifest returns the fully resolved manifest defaults. Since kernel
-// paths are required inputs and have no default, placeholder values are used so
-// resolution can show all derived runtime defaults.
+// DefaultManifest returns the fully resolved manifest defaults. The required
+// kernel path uses a placeholder so resolution can show the runtime defaults.
 func DefaultManifest() (*Manifest, error) {
 	document := DefaultDocument()
 	document.Kernel.Path = defaultKernelPath
-	document.Kernel.InitrdPath = defaultKernelInitrdPath
 	return document.Manifest()
 }

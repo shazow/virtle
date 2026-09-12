@@ -39,7 +39,7 @@ func unsupportedBy(backend string, format string, args ...any) error {
 
 // VMM is the launch configuration the API-driven microVM backends share:
 // the executable and lifecycle timeouts, the machine size, the boot source,
-// raw disks, TAP NICs, and the console mode, with paths already resolved
+// disks, TAP NICs, and the console mode, with paths already resolved
 // against the working directory. Firecracker and CloudHypervisor embed it.
 type VMM struct {
 	Binary string `json:"binary"`
@@ -53,7 +53,8 @@ type VMM struct {
 	Disks           []VMMDisk     `json:"disks,omitempty"`
 	// Networks are the guest NICs, each a host TAP device.
 	Networks []TapNetwork `json:"networks,omitempty"`
-	// Console is KernelSerialOff or KernelSerialPrint.
+	// Console is KernelSerialOff, KernelSerialPrint, or KernelSerialConsole
+	// where the backend supports an interactive console.
 	Console string `json:"console"`
 }
 
@@ -174,7 +175,7 @@ func (d Document) rejectQEMUOnly(backend string) error {
 	case d.Machine.KVM != nil && !*d.Machine.KVM:
 		return unsupportedBy(backend, "%s requires KVM; manifest.machine.kvm cannot be false", backend)
 	case d.Egress != nil:
-		return unsupportedBy(backend, "manifest.egress needs a network of type virtle, which %s reaches only through the guest daemon", backend)
+		return unsupportedBy(backend, "manifest.egress requires a virtle network; %s supports host TAP networking", backend)
 	}
 	return nil
 }
@@ -194,7 +195,7 @@ func tapNetworks(backend string, networks, defaults []NetworkInput) ([]TapNetwor
 		switch network.Type {
 		case NetworkTypeTAP:
 		case NetworkTypeVirtle:
-			return nil, unsupportedBy(backend, "manifest.networks[%d].type virtle: %s reaches a virtle network through the guest daemon, which does not exist yet", i, backend)
+			return nil, unsupportedBy(backend, "manifest.networks[%d].type virtle: %s supports host TAP networking; use type tap", i, backend)
 		case "", NetworkTypeUser:
 			return nil, unsupportedBy(backend, "manifest.networks[%d].type user: %s has no user networking; use type tap", i, backend)
 		default:
@@ -229,7 +230,7 @@ func tapNetworks(backend string, networks, defaults []NetworkInput) ([]TapNetwor
 // resolveVMM resolves what the microVM backends share, once the caller has
 // rejected the sections its VMM cannot honor: the Manifest skeleton
 // (identity, paths, lock, state directory, the [[run]] helpers) and the
-// machine size, boot source, raw disks, TAP NICs, console mode, executable,
+// machine size, boot source, disks, TAP NICs, console mode, executable,
 // and timeouts.
 func (d Document) resolveVMM(p vmmProfile, in vmmInput) (*Manifest, *VMM, error) {
 	networks, err := tapNetworks(p.backend, d.Networks, DefaultDocument().Networks)
@@ -279,6 +280,11 @@ func (d Document) resolveVMM(p vmmProfile, in vmmInput) (*Manifest, *VMM, error)
 	m.Paths.RuntimeDir = RuntimeDir{Mode: RuntimeDirPath, Path: m.Persistence.StateDir}
 	// Host helpers start before the VMM and stop after it, as on QEMU.
 	m.Run = resolveRun(d.Run)
+	for i, run := range m.Run {
+		if err := validateRun(i, run); err != nil {
+			return nil, nil, err
+		}
+	}
 
 	vmm := &VMM{
 		Binary:          in.Binary,
@@ -323,7 +329,7 @@ func (d Document) resolveVMM(p vmmProfile, in vmmInput) (*Manifest, *VMM, error)
 			return nil, nil, unsupportedBy(p.backend, "manifest.mounts[%d].image.format %q; %s attaches %s images", i, format, p.backend, strings.Join(p.diskFormats, " and "))
 		case mount.Image.AutoCreate && format != "raw":
 			return nil, nil, fmt.Errorf("manifest.mounts[%d].image.create makes a raw image; drop image.format %q or create the image yourself", i, format)
-		case mount.Image.FSType != "" && mount.Image.FSType != defaultVolumeFSType:
+		case mount.Image.AutoCreate && mount.Image.FSType != "" && mount.Image.FSType != defaultVolumeFSType:
 			return nil, nil, unsupportedBy(p.backend, "manifest.mounts[%d].image.fs %q; created images are %s", i, mount.Image.FSType, defaultVolumeFSType)
 		case mount.Image.AutoCreate && mount.Image.Size < minAutoVolumeSize:
 			return nil, nil, fmt.Errorf("manifest.mounts[%d].image.size must be at least %d when image.create is true, got %d", i, minAutoVolumeSize, mount.Image.Size)

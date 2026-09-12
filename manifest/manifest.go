@@ -5,8 +5,8 @@
 // Manifest sections with no vm.Spec representation — host [run] helper
 // commands, [notifications] hooks, [ssh] settings — stay attached to the
 // returned backend, which rejects the ones it cannot honor at load time.
-// QEMU starts the helpers and runs the hooks itself; the interactive SSH
-// session is driven by the virtle CLI's foreground loop.
+// All backends start host helpers; QEMU also runs notification hooks. The
+// interactive SSH session is driven by the virtle CLI's foreground loop.
 package manifest
 
 import (

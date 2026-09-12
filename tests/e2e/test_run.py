@@ -96,20 +96,37 @@ class StatusReadinessTest(unittest.TestCase):
 
 
 class ComparisonTest(unittest.TestCase):
-    def test_counterbalanced_pairs_and_separate_warmups(self):
-        trials = list(run.schedule(pairs=4, warmup_pairs=2))
+    def test_rotated_rounds_and_separate_warmups(self):
+        trials = list(run.schedule(rounds=3, warmup_rounds=3))
+        self.assertEqual(len(trials), 18)
+        orders = [[t["backend"] for t in trials[i : i + 3]] for i in range(0, 18, 3)]
         self.assertEqual(
-            [t["backend"] for t in trials[:4]],
-            ["firecracker", "qemu", "qemu", "firecracker"],
+            orders[:3],
+            [
+                ["firecracker", "qemu", "cloud-hypervisor"],
+                ["qemu", "cloud-hypervisor", "firecracker"],
+                ["cloud-hypervisor", "firecracker", "qemu"],
+            ],
         )
-        self.assertTrue(all(t["warmup"] for t in trials[:4]))
-        measured = trials[4:]
+        self.assertEqual(orders[3:], orders[:3])
+        self.assertTrue(all(t["warmup"] for t in trials[:9]))
+        measured = trials[9:]
         self.assertTrue(all(not t["warmup"] for t in measured))
-        for backend in ("firecracker", "qemu"):
-            self.assertEqual(sum(t["backend"] == backend for t in measured), 4)
+        for backend in run.BACKENDS:
+            self.assertEqual(sum(t["backend"] == backend for t in measured), 3)
             self.assertEqual(
-                sum(t["backend"] == backend and t["position"] == 0 for t in measured), 2
+                sum(t["backend"] == backend and t["position"] == 0 for t in measured), 1
             )
+
+    def test_rounds_must_cover_whole_cycles(self):
+        self.assertIsNone(run.rounds_error(3, 0))
+        self.assertIsNone(run.rounds_error(6, 3))
+        for rounds, warmups in [(2, 0), (0, 0), (3, 1), (4, 3), (3, -3)]:
+            self.assertIn("multiple", run.rounds_error(rounds, warmups) or "")
+
+    def test_every_backend_names_its_shutdown_method(self):
+        self.assertEqual(set(run.SHUTDOWN_METHODS), set(run.BACKENDS))
+        self.assertTrue(set(run.GUEST_SHUTDOWN_MARKER_REQUIRED) <= set(run.BACKENDS))
 
     def test_teardown_rpc_is_explicit_and_fast_by_default(self):
         self.assertEqual(run.teardown_rpc("kill"), "kill")
@@ -185,7 +202,6 @@ class TrialCleanupTest(unittest.TestCase):
                 "threading.Thread": thread,
                 "os.read": mock.Mock(side_effect=[run.READY + b"\n", b""]),
                 "os.kill": mock.Mock(side_effect=[None, ProcessLookupError()]),
-                "os.killpg": mock.Mock(),
                 "wait_for_status": mock.Mock(return_value=status),
             }
             for name, value in patches.items():
@@ -292,9 +308,8 @@ class FakeProcesses:
 
     @contextlib.contextmanager
     def installed(self):
-        with mock.patch("run.Path", self.path), mock.patch("run.os.pidfd_open", self.open), mock.patch("run.signal.pidfd_send_signal", self.send), mock.patch("run.os.close", side_effect=lambda fd: self.handles.pop(fd)), mock.patch("run.os.killpg") as killpg:
+        with mock.patch("run.Path", self.path), mock.patch("run.os.pidfd_open", self.open), mock.patch("run.signal.pidfd_send_signal", self.send), mock.patch("run.os.close", side_effect=lambda fd: self.handles.pop(fd)):
             yield
-            killpg.assert_not_called()
 
 
 class OwnedVMMTest(unittest.TestCase):

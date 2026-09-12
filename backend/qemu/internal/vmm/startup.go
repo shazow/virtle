@@ -174,12 +174,13 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (result 
 		return nil, launch.WrapStage("vm startup", errors.New("qmp client is required"))
 	}
 	stats.Timer(launch.TimerQMPReady, time.Now())
-	qemu.SetShutdown(func() error {
+	qemu.SetShutdown(func(ctx context.Context) error {
 		// Shutdown runs during teardown, after the launch context may already
-		// be canceled, so each step gets its own context. The graceful guest
-		// shutdown is attempted only when the VM has remote control; without
-		// it there is nobody in the guest to ask, so teardown goes straight
-		// to QMP quit.
+		// be canceled; ctx is the teardown's own, which ends when whoever is
+		// waiting stops (a second interrupt), so each step derives its bound
+		// from it. The graceful guest shutdown is attempted only when the VM
+		// has remote control; without it there is nobody in the guest to
+		// ask, so teardown goes straight to QMP quit.
 		if plan.Options.HasRemoteControl {
 			shutdown := plan.Manifest.QEMU.GuestAgent
 			method := "guest-shutdown"
@@ -187,12 +188,12 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (result 
 				method = "guest-exec"
 			}
 			m.logger.Info("requesting guest shutdown", "method", method, "exec", shutdown.ShutdownExec)
-			err := m.requestGuestShutdown(context.Background(), plan.Paths.GuestAgentSocket, shutdown.ShutdownExec)
+			err := m.requestGuestShutdown(ctx, plan.Paths.GuestAgentSocket, shutdown.ShutdownExec)
 			if err != nil {
 				m.logger.Warn("guest shutdown request failed; forcing qemu quit", "err", err)
 			} else {
 				m.logger.Info("waiting for guest shutdown", "timeout", shutdown.ShutdownTimeout)
-				waitCtx, cancel := context.WithTimeoutCause(context.Background(), shutdown.ShutdownTimeout,
+				waitCtx, cancel := context.WithTimeoutCause(ctx, shutdown.ShutdownTimeout,
 					fmt.Errorf("guest did not exit within %s", shutdown.ShutdownTimeout))
 				waitErr := qemu.WaitContext(waitCtx)
 				cancel()
@@ -206,7 +207,7 @@ func (m *manager) startWithPlan(ctx context.Context, plan *launch.Plan) (result 
 			m.logger.Info("vm has no remote control; skipping guest shutdown request")
 		}
 		m.logger.Info("forcing qemu quit through QMP")
-		ctx, cancel := context.WithTimeout(context.Background(), m.effectiveQMPQuitTimeout())
+		ctx, cancel := context.WithTimeout(ctx, m.effectiveQMPQuitTimeout())
 		defer cancel()
 		quitErr := qmp.Quit(ctx)
 		if errors.Is(quitErr, qmpwire.ErrBroken) {

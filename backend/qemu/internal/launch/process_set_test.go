@@ -29,7 +29,7 @@ func TestProcessSetCloseStopsTasksBeforeProcesses(t *testing.T) {
 	processes := NewProcessSet()
 	handle := &executortest.Process{}
 	process := handle.Process()
-	process.SetShutdown(func() error {
+	process.SetShutdown(func(context.Context) error {
 		order = append(order, "process")
 		handle.Complete(nil)
 		return nil

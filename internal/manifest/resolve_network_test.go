@@ -57,12 +57,27 @@ func TestResolveNetworkTypes(t *testing.T) {
 		}
 	})
 
+	t.Run("tap without a name is QEMU's to set up", func(t *testing.T) {
+		dev := resolve(t, NetworkInput{Type: NetworkTypeTAP})[0]
+		if dev.Backend != "tap" || dev.Managed || len(dev.NetdevOptions) != 0 {
+			t.Fatalf("device = %+v", dev)
+		}
+	})
+
+	t.Run("other types reach QEMU verbatim", func(t *testing.T) {
+		dev := resolve(t, NetworkInput{Type: "bridge", Forward: forward})[0]
+		if dev.Backend != "bridge" || dev.Managed {
+			t.Fatalf("device = %+v", dev)
+		}
+		if len(dev.NetdevOptions) != 1 || !strings.HasPrefix(dev.NetdevOptions[0], "hostfwd=") {
+			t.Fatalf("netdev options = %v, want the forward as QEMU always got it", dev.NetdevOptions)
+		}
+	})
+
 	for name, tc := range map[string]struct {
 		inputs []NetworkInput
 		want   string
 	}{
-		"unknown type":       {[]NetworkInput{{Type: "bridge"}}, "type must be one of user, virtle, or tap"},
-		"tap without name":   {[]NetworkInput{{Type: NetworkTypeTAP}}, "tap is required"},
 		"tap with forwards":  {[]NetworkInput{{Type: NetworkTypeTAP, Tap: "tap0", Forward: forward}}, "forward is not supported on a tap network"},
 		"tap name with meta": {[]NetworkInput{{Type: NetworkTypeTAP, Tap: "tap0,script=/x"}}, "not an interface name"},
 		"tap on user type":   {[]NetworkInput{{Tap: "tap0"}}, "tap applies to type tap only"},

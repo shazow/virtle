@@ -1,8 +1,9 @@
 // Package console fans a VMM's serial console out to a backend's
-// ConsoleOutput writer and to attached vm.Term sessions. Both QEMU (with a
-// stdio chardev) and Firecracker carry the guest's serial port on the VMM
-// process's standard streams, so one Hub serves both: the process writes
-// its stdout into the hub and reads its stdin from the hub's input pipe.
+// ConsoleOutput writer and to attached vm.Term sessions. QEMU (with a stdio
+// chardev), Firecracker, and Cloud Hypervisor (serial mode Tty) all carry
+// the guest's serial port on the VMM process's standard streams, so one Hub
+// serves them: the process writes its stdout into the hub and reads its
+// stdin from the hub's input pipe.
 package console
 
 import (

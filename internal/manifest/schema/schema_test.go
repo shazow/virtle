@@ -140,6 +140,9 @@ func TestManifestSchemaBackendBootRequirements(t *testing.T) {
 		{"firecracker with initrd", `{"backend":"firecracker","kernel":{"path":"vmlinux","initrd_path":"initrd"}}`, true},
 		{"firecracker requires kernel path", `{"backend":"firecracker","kernel":{"initrd_path":"initrd"}}`, false},
 		{"firecracker requires kernel section", `{"backend":"firecracker"}`, false},
+		{"cloud-hypervisor kernel only", `{"backend":"cloud-hypervisor","kernel":{"path":"vmlinux"}}`, true},
+		{"cloud-hypervisor section", `{"backend":"cloud-hypervisor","cloud-hypervisor":{"binary":"ch"},"kernel":{"path":"vmlinux"}}`, true},
+		{"cloud-hypervisor requires kernel path", `{"backend":"cloud-hypervisor","kernel":{"initrd_path":"initrd"}}`, false},
 		{"qemu with initrd", `{"backend":"qemu","kernel":{"path":"kernel","initrd_path":"initrd"}}`, true},
 		// Booting from a root disk needs no initrd on either backend; the
 		// resolver, not the schema, checks that such a boot names a root.

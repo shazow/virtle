@@ -1,9 +1,10 @@
 // Package backend defines the implementer contract for virtle VM backends,
 // mirroring the database/sql/driver split: consumers hold the interfaces
 // declared here, implementations live in backend-named subpackages
-// (backend/qemu and backend/firecracker). Optional functionality is declared as standalone
-// capability interfaces (Suspender, MemoryResizer, ...) discovered by type
-// assertion, the way driver.Conn implementations opt into driver.ConnBeginTx.
+// (backend/qemu, backend/firecracker, and backend/cloudhypervisor). Optional
+// functionality is declared as standalone capability interfaces (Suspender,
+// MemoryResizer, ...) discovered by type assertion, the way driver.Conn
+// implementations opt into driver.ConnBeginTx.
 //
 // There is deliberately no default backend: this package cannot import its
 // implementations without a cycle, so consumers always name their backend
@@ -19,7 +20,7 @@ import (
 )
 
 // Backend starts virtual machines. Implementations live under backend/
-// (backend/qemu and backend/firecracker).
+// (backend/qemu, backend/firecracker, and backend/cloudhypervisor).
 type Backend interface {
 	Start(ctx context.Context, spec *vm.Spec) (Machine, error)
 }
@@ -94,7 +95,7 @@ type StatusPaths struct {
 	// ControlSocket is virtle's own control socket for this machine.
 	ControlSocket string `json:"controlSocket"`
 	// MonitorSocket is the VMM's control endpoint: the QMP socket for QEMU,
-	// the HTTP API socket for Firecracker.
+	// the HTTP API socket for Firecracker and Cloud Hypervisor.
 	MonitorSocket string `json:"qmpSocket"`
 	// GuestControlSocket is the host end of the guest-control transport
 	// (the guest-agent socket for QEMU), when the machine has one.
@@ -161,7 +162,7 @@ type DeviceAttacher interface {
 }
 
 // ConsoleProvider is implemented by machines that expose the guest's serial
-// console as a vm.Term — the no-daemon path to a guest. QEMU and Firecracker
+// console as a vm.Term — the no-daemon path to a guest. Every backend's
 // machines offer it when their console is set to print; without one Console
 // returns an error wrapping errors.ErrUnsupported. The Term replays the
 // recent console output before live output, so a session attached after

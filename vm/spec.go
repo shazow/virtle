@@ -68,7 +68,7 @@ type Share struct {
 	Tag       string // mount tag visible in the guest
 	HostPath  string
 	GuestPath string
-	ReadOnly  bool
+	ReadOnly  bool // the virtiofsd virtle starts with its default arguments refuses guest writes (--readonly); a manifest's virtiofs.args or another daemon decide on their own
 }
 
 // Disk is a block device or volume image attached to the guest.

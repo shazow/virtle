@@ -60,30 +60,62 @@ let
           -d root $out/rootfs.ext4
         EOF
       '';
-  common = isQemu: ''
-    networks = []
-    [machine]
-    vcpu = 1
-    memory = 128
-    ${pkgs.lib.optionalString isQemu ''
-      type = "microvm"
-      kvm = true
-    ''}
-    [kernel]
-    initrd_path = "${initrd}/initrd"
-    serial = "print"
-    params = ["pci=off", "rdinit=/init", "quiet", "i8042.noaux", "i8042.nomux", "i8042.dumbkbd", "i8042.nopnp"]
-  '';
+  params = [
+    "rdinit=/init"
+    "quiet"
+    "i8042.noaux"
+    "i8042.nomux"
+    "i8042.dumbkbd"
+    "i8042.nopnp"
+  ];
+  # The MMIO loaders skip the PCI probe and leave ACPI alone: the kernel has
+  # both for Cloud Hypervisor's PCI devices, and on Firecracker's
+  # hardware-reduced ACPI tables the Ctrl-Alt-Del shutdown stopped ending
+  # the VMM. Cloud Hypervisor boots with both on.
+  common =
+    {
+      isQemu ? false,
+      pci ? false,
+    }:
+    ''
+      networks = []
+      [machine]
+      vcpu = 1
+      memory = 128
+      ${pkgs.lib.optionalString isQemu ''
+        type = "microvm"
+        kvm = true
+      ''}
+      [kernel]
+      initrd_path = "${initrd}/initrd"
+      serial = "print"
+      params = ${
+        builtins.toJSON (
+          pkgs.lib.optionals (!pci) [
+            "pci=off"
+            "acpi=off"
+          ]
+          ++ params
+        )
+      }
+    '';
   firecracker = pkgs.writeText "virtle-fast-firecracker.toml" ''
     backend = "firecracker"
-    ${common false}
+    ${common { }}
     path = "${kernel}/vmlinux"
     [firecracker]
     binary = "${pkgs.firecracker}/bin/firecracker"
   '';
+  cloudHypervisor = pkgs.writeText "virtle-fast-cloud-hypervisor.toml" ''
+    backend = "cloud-hypervisor"
+    ${common { pci = true; }}
+    path = "${kernel}/vmlinux"
+    [cloud-hypervisor]
+    binary = "${pkgs.cloud-hypervisor}/bin/cloud-hypervisor"
+  '';
   qemu = pkgs.writeText "virtle-fast-qemu.toml" ''
     backend = "qemu"
-    ${common true}
+    ${common { isQemu = true; }}
     path = "${kernel}/bzImage"
     [qemu]
     exec = ["${pkgs.qemu_kvm}/bin/qemu-system-x86_64"]
@@ -97,6 +129,7 @@ let
       kernel_version = kernel.version;
       busybox_version = busybox.version;
       firecracker_version = pkgs.firecracker.version;
+      cloud_hypervisor_version = pkgs.cloud-hypervisor.version;
       qemu_version = pkgs.qemu_kvm.version;
     }
   );
@@ -109,6 +142,7 @@ pkgs.runCommand "virtle-fast-fixture"
         initrd
         rootfs
         firecracker
+        cloudHypervisor
         qemu
         ;
     };
@@ -116,6 +150,7 @@ pkgs.runCommand "virtle-fast-fixture"
   ''
     mkdir -p $out
     ln -s ${firecracker} $out/firecracker.toml
+    ln -s ${cloudHypervisor} $out/cloud-hypervisor.toml
     ln -s ${qemu} $out/qemu.toml
     ln -s ${kernel}/vmlinux $out/vmlinux
     ln -s ${kernel}/bzImage $out/bzImage

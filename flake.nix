@@ -66,7 +66,7 @@
           benchmark-backends = {
             type = "app";
             program = "${self.packages.${system}.benchmark-backends}/bin/virtle-benchmark-backends";
-            meta.description = "Directional Firecracker vs QEMU/KVM comparison";
+            meta.description = "Directional comparison of the Firecracker, QEMU/KVM, and Cloud Hypervisor backends";
           };
         }
       );
@@ -77,6 +77,10 @@
           pkgs = nixpkgs.legacyPackages.${system};
           guestKernelPackage = pkgs.linuxPackages.kernel;
           firecrackerGuest = import ./docs/recipes/firecracker/guest.nix {
+            inherit pkgs;
+            virtle = self.packages.${system}.virtle;
+          };
+          cloudHypervisorGuest = import ./docs/recipes/cloud-hypervisor/guest.nix {
             inherit pkgs;
             virtle = self.packages.${system}.virtle;
           };
@@ -214,24 +218,32 @@
                 timeout --kill-after=30 600 python ${./tests/e2e/run.py} \
                   --virtle ${self.packages.${system}.virtle}/bin/virtle \
                   --fixture ${self.packages.${system}.e2e-fast-fixture} \
-                  --pairs 2 --warmup-pairs 0 \
+                  --rounds 3 --warmup-rounds 0 \
                   --output "$output/results"
                 touch $out
               '';
-          # Both backends driven through the Go API (vm.Spec, backend.Machine)
-          # on the same tiny guest: the backend conformance suite plus the
-          # Spec.Dir, root disk, scratch disk, and console scenarios, and on
-          # QEMU the virtle network (lease, forwards, egress policy).
+          # The three backends driven through the Go API (vm.Spec,
+          # backend.Machine) on the same tiny guest: the backend conformance
+          # suite plus the Spec.Dir, root disk (raw and qcow2), scratch disk,
+          # console, guest shutdown, and share scenarios, and on QEMU the virtle network
+          # (lease, forwards, egress policy).
           e2e-api =
             pkgs.runCommand "virtle-e2e-api"
               {
                 requiredSystemFeatures = [ "kvm" ];
-                nativeBuildInputs = [ pkgs.e2fsprogs ];
+                nativeBuildInputs = [
+                  pkgs.e2fsprogs
+                  # The share daemon's own namespace sandbox needs privileges
+                  # the Nix sandbox does not grant.
+                  (pkgs.writeShellScriptBin "virtiofsd" ''exec ${pkgs.virtiofsd}/bin/virtiofsd --sandbox none "$@"'')
+                ];
               }
               ''
                 export VIRTLE_E2E_FIXTURE=${self.packages.${system}.e2e-fast-fixture}
                 export VIRTLE_E2E_QEMU=${pkgs.qemu_kvm}/bin/qemu-system-x86_64
+                export VIRTLE_E2E_QEMU_IMG=${pkgs.qemu_kvm}/bin/qemu-img
                 export VIRTLE_E2E_FIRECRACKER=${pkgs.firecracker}/bin/firecracker
+                export VIRTLE_E2E_CLOUD_HYPERVISOR=${pkgs.cloud-hypervisor}/bin/cloud-hypervisor
                 # A scenario that cannot run fails the check instead of skipping.
                 export VIRTLE_E2E_REQUIRED=1
                 # Go's own timeout fires first, so a hang ends with a goroutine
@@ -251,6 +263,21 @@
                 test -r /dev/kvm && test -w /dev/kvm
                 timeout --kill-after=30 600 python ${./docs/recipes/firecracker/check.py} \
                   ${self.packages.${system}.virtle}/bin/virtle ${firecrackerGuest.manifest}
+                touch $out
+              '';
+          # Cloud Hypervisor requires real KVM as well; its shutdown request is
+          # the ACPI power button, which the distribution kernel and BusyBox
+          # acpid turn into a power-off.
+          cloud-hypervisor =
+            pkgs.runCommand "virtle-cloud-hypervisor-e2e"
+              {
+                requiredSystemFeatures = [ "kvm" ];
+                nativeBuildInputs = [ pkgs.python3 ];
+              }
+              ''
+                test -r /dev/kvm && test -w /dev/kvm
+                timeout --kill-after=30 600 python ${./docs/recipes/cloud-hypervisor/check.py} \
+                  ${self.packages.${system}.virtle}/bin/virtle ${cloudHypervisorGuest.manifest}
                 touch $out
               '';
         }

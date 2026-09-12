@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	imanifest "github.com/shazow/virtle/internal/manifest"
+	"github.com/shazow/virtle/internal/vmmhost"
 	"github.com/shazow/virtle/units"
 	"github.com/shazow/virtle/vm"
 )
@@ -133,7 +134,7 @@ func TestConfigurationWithTAP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []imanifest.FirecrackerNetwork{{ID: "microvm1", Tap: "tap0", MAC: "02:02:00:00:00:01"}}; !reflect.DeepEqual(mf.Firecracker.Networks, want) {
+	if want := []imanifest.TapNetwork{{ID: "microvm1", Tap: "tap0", MAC: "02:02:00:00:00:01"}}; !reflect.DeepEqual(mf.Firecracker.Networks, want) {
 		t.Fatalf("networks = %+v, want %+v", mf.Firecracker.Networks, want)
 	}
 	var paths []string
@@ -157,7 +158,7 @@ func TestConfigurationWithTAP(t *testing.T) {
 	if bodies[2]["iface_id"] != "microvm1" || bodies[2]["host_dev_name"] != "tap0" || bodies[2]["guest_mac"] != "02:02:00:00:00:01" {
 		t.Fatal(bodies[2])
 	}
-	if got := networkStatuses(mf.Firecracker); len(got) != 1 || got[0].ID != "microvm1" || got[0].MAC != "02:02:00:00:00:01" || got[0].Attached || got[0].Addr != "" {
+	if got := vmmhost.NetworkStatuses(mf.Firecracker.Networks); len(got) != 1 || got[0].ID != "microvm1" || got[0].MAC != "02:02:00:00:00:01" || got[0].Attached || got[0].Addr != "" {
 		t.Fatalf("statuses = %+v", got)
 	}
 
@@ -177,7 +178,7 @@ func TestConfigurationWithTAP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []imanifest.FirecrackerNetwork{{ID: "eth0", Tap: "tap0", MAC: "02:aa:00:00:00:01"}}; !reflect.DeepEqual(mf.Firecracker.Networks, want) {
+	if want := []imanifest.TapNetwork{{ID: "eth0", Tap: "tap0", MAC: "02:aa:00:00:00:01"}}; !reflect.DeepEqual(mf.Firecracker.Networks, want) {
 		t.Fatalf("networks = %+v, want %+v", mf.Firecracker.Networks, want)
 	}
 	if b.doc.Networks[0].Tap != "tap9" {

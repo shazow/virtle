@@ -25,6 +25,7 @@ import (
 	"github.com/shazow/virtle/backend"
 	"github.com/shazow/virtle/backend/backendtest"
 	"github.com/shazow/virtle/internal/control"
+	imanifest "github.com/shazow/virtle/internal/manifest"
 	"github.com/shazow/virtle/units"
 	"github.com/shazow/virtle/vm"
 )
@@ -35,7 +36,20 @@ const shortTimeout = 100 * time.Millisecond
 // TestMain doubles as a real child process speaking Firecracker's Unix HTTP
 // protocol. Filesystem use here exercises the actual socket/process boundary.
 func TestMain(m *testing.M) {
+	if len(os.Args) > 1 && strings.HasPrefix(os.Args[1], "--helper=") {
+		// A [[run]] entry: record the PID at the given path, leave on SIGTERM.
+		signals := make(chan os.Signal, 1)
+		signal.Notify(signals, syscall.SIGTERM)
+		if err := os.WriteFile(strings.TrimPrefix(os.Args[1], "--helper="), []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+			panic(err)
+		}
+		<-signals
+		os.Exit(0)
+	}
 	if mode := os.Getenv("VIRTLE_TEST_FIRECRACKER"); mode != "" {
+		if path := os.Getenv("VIRTLE_TEST_VMM_ARGV"); path != "" {
+			_ = os.WriteFile(path, []byte(strings.Join(os.Args[1:], "\n")), 0o600)
+		}
 		if mode == "diagnostic" {
 			fmt.Fprintln(os.Stderr, "KVM unavailable test")
 			os.Exit(1)
@@ -467,6 +481,65 @@ func TestConsoleFollowsTheMachine(t *testing.T) {
 	t.Cleanup(func() { _ = m.Kill() })
 	if _, err := m.(backend.ConsoleProvider).Console(t.Context()); !errors.Is(err, errors.ErrUnsupported) {
 		t.Fatalf("Console without a serial console = %v, want ErrUnsupported", err)
+	}
+}
+
+// TestExtraArgsReachTheVMM covers Backend.ExtraArgs: they follow virtle's
+// own arguments on the VMM's command line.
+func TestExtraArgsReachTheVMM(t *testing.T) {
+	b, spec := helperBackend(t, "normal")
+	b.ExtraArgs = []string{"--log-path", "/dev/null"}
+	argv := filepath.Join(t.TempDir(), "argv")
+	t.Setenv("VIRTLE_TEST_VMM_ARGV", argv)
+	m, err := b.Start(t.Context(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = m.Kill() }()
+	got, err := os.ReadFile(argv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if args := strings.Split(string(got), "\n"); len(args) != 4 || args[0] != "--api-sock" || args[2] != "--log-path" || args[3] != "/dev/null" {
+		t.Fatalf("VMM argv = %q", args)
+	}
+}
+
+// TestRunHelpersFollowTheMachine covers a manifest's [[run]] entries: they
+// start before the VMM, with the manifest's templates rendered, and stop
+// when the machine does.
+func TestRunHelpersFollowTheMachine(t *testing.T) {
+	b, spec := helperBackend(t, "normal")
+	doc, err := imanifest.DecodeDocumentBytes([]byte(fmt.Sprintf("backend = 'firecracker'\n[kernel]\npath = 'kernel'\n[[run]]\nexec = [%q, '--helper={{.StateDir}}/helper.pid']\n", b.Binary)), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := NewBackendFromDocument(doc, *b).Start(t.Context(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill() })
+	// The helper is started before the VMM, but it records its PID only
+	// once it runs, and the fake VMM boots faster than a Go binary starts.
+	pidPath := filepath.Join(spec.Dir, ".virtle", "helper.pid")
+	var pidText []byte
+	for deadline := time.Now().Add(testTimeout); ; time.Sleep(10 * time.Millisecond) {
+		if pidText, err = os.ReadFile(pidPath); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("helper did not start: %v", err)
+		}
+	}
+	pid, _ := strconv.Atoi(string(pidText))
+	if err := syscall.Kill(pid, 0); err != nil {
+		t.Fatalf("helper %d while running: %v", pid, err)
+	}
+	if err := m.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Kill(pid, 0); !errors.Is(err, syscall.ESRCH) {
+		t.Fatalf("helper %d after exit: %v", pid, err)
 	}
 }
 

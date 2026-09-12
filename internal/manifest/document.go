@@ -3,6 +3,7 @@ package manifest
 import (
 	"fmt"
 	"path/filepath"
+	"slices"
 
 	"github.com/shazow/virtle/internal/manifest/tagged"
 	"github.com/shazow/virtle/units"
@@ -20,32 +21,34 @@ const (
 
 // Backend names accepted by the manifest's top-level backend key.
 const (
-	BackendQEMU        = "qemu"
-	BackendFirecracker = "firecracker"
+	BackendQEMU            = "qemu"
+	BackendFirecracker     = "firecracker"
+	BackendCloudHypervisor = "cloud-hypervisor"
 )
 
 type Document struct {
-	Backend       string             `json:"backend,omitempty" toml:"backend" default:"qemu" jsonschema:"Virtual machine backend: qemu (default) or firecracker."`
-	Firecracker   FirecrackerInput   `json:"firecracker,omitempty" toml:"firecracker" jsonschema:"Firecracker executable and lifecycle timeouts."`
-	HostName      string             `json:"host_name,omitempty" toml:"host_name" default:"virtle" jsonschema:"Guest-visible VM name used for QEMU naming and derived runtime files."`
-	WorkingDir    string             `json:"working_dir,omitempty" toml:"working_dir" default:"." jsonschema:"Host working directory used to resolve relative paths in the manifest."`
-	StateDir      string             `json:"state_dir,omitempty" toml:"state_dir" default:".virtle" jsonschema:"Host directory used for runtime state such as locks sockets and generated files."`
-	Host          HostInput          `json:"host,omitempty" toml:"host" jsonschema:"Host platform facts used while resolving QEMU defaults."`
-	QEMU          QEMUInput          `json:"qemu,omitempty" toml:"qemu" jsonschema:"QEMU executable and host-side socket settings."`
-	Machine       MachineInput       `json:"machine,omitempty" toml:"machine" jsonschema:"Virtual machine type CPU memory and acceleration settings."`
-	Kernel        KernelInput        `json:"kernel" toml:"kernel" jsonschema:"Guest kernel initrd and kernel command-line settings."`
-	Graphics      *GraphicsInput     `json:"graphics,omitempty" toml:"graphics" jsonschema:"Graphical display backend settings."`
-	Mounts        MountsInput        `json:"mounts,omitempty" toml:"mounts" jsonschema:"Storage and filesystem devices attached at launch."`
-	Workspace     WorkspaceInput     `json:"workspace,omitempty" toml:"workspace" jsonschema:"Workspace directories made available to guest-side templates and helpers."`
-	Networks      []NetworkInput     `json:"networks,omitempty" toml:"networks" jsonschema:"Network devices and port forwards attached at launch."`
-	Balloon       *BalloonInput      `json:"balloon,omitempty" toml:"balloon" jsonschema:"Virtio memory balloon device and optional controller settings."`
-	SSH           SSHInput           `json:"ssh,omitempty" toml:"ssh" jsonschema:"SSH command and readiness settings for attaching to the guest."`
-	VSock         VSockInput         `json:"vsock,omitempty" toml:"vsock" jsonschema:"Allowed runtime vsock CID allocation range."`
-	WriteFiles    []WriteFileInput   `json:"write_files,omitempty" toml:"write_files" jsonschema:"Files copied into or synchronized with the guest through qemu guest agent."`
-	Notifications NotificationsInput `json:"notifications,omitempty" toml:"notifications" jsonschema:"Host command hooks invoked for selected runtime notification states."`
-	Run           []RunInput         `json:"run,omitempty" toml:"run" jsonschema:"Host-side processes started before QEMU and stopped during teardown."`
-	Hotplug       HotplugInput       `json:"hotplug,omitempty" toml:"hotplug" jsonschema:"Devices that may be attached or detached after launch."`
-	Egress        *EgressInput       `json:"egress,omitempty" toml:"egress" jsonschema:"What the guest may reach through a network of type virtle, and the secrets it uses without holding them. Without this section such a network reaches the internet and nothing on the host or its networks."`
+	Backend         string               `json:"backend,omitempty" toml:"backend" default:"qemu" jsonschema:"Virtual machine backend: qemu (default), or the experimental firecracker or cloud-hypervisor."`
+	Firecracker     FirecrackerInput     `json:"firecracker,omitempty" toml:"firecracker" jsonschema:"Firecracker executable and lifecycle timeouts."`
+	CloudHypervisor CloudHypervisorInput `json:"cloud-hypervisor,omitempty" toml:"cloud-hypervisor" jsonschema:"Cloud Hypervisor executable and lifecycle timeouts."`
+	HostName        string               `json:"host_name,omitempty" toml:"host_name" default:"virtle" jsonschema:"Guest-visible VM name used for QEMU naming and derived runtime files."`
+	WorkingDir      string               `json:"working_dir,omitempty" toml:"working_dir" default:"." jsonschema:"Host working directory used to resolve relative paths in the manifest."`
+	StateDir        string               `json:"state_dir,omitempty" toml:"state_dir" default:".virtle" jsonschema:"Host directory used for runtime state such as locks sockets and generated files."`
+	Host            HostInput            `json:"host,omitempty" toml:"host" jsonschema:"Host platform facts used while resolving QEMU defaults."`
+	QEMU            QEMUInput            `json:"qemu,omitempty" toml:"qemu" jsonschema:"QEMU executable and host-side socket settings."`
+	Machine         MachineInput         `json:"machine,omitempty" toml:"machine" jsonschema:"Virtual machine type CPU memory and acceleration settings."`
+	Kernel          KernelInput          `json:"kernel" toml:"kernel" jsonschema:"Guest kernel initrd and kernel command-line settings."`
+	Graphics        *GraphicsInput       `json:"graphics,omitempty" toml:"graphics" jsonschema:"Graphical display backend settings."`
+	Mounts          MountsInput          `json:"mounts,omitempty" toml:"mounts" jsonschema:"Storage and filesystem devices attached at launch."`
+	Workspace       WorkspaceInput       `json:"workspace,omitempty" toml:"workspace" jsonschema:"Workspace directories made available to guest-side templates and helpers."`
+	Networks        []NetworkInput       `json:"networks,omitempty" toml:"networks" jsonschema:"Network devices and port forwards attached at launch."`
+	Balloon         *BalloonInput        `json:"balloon,omitempty" toml:"balloon" jsonschema:"Virtio memory balloon device and optional controller settings."`
+	SSH             SSHInput             `json:"ssh,omitempty" toml:"ssh" jsonschema:"SSH command and readiness settings for attaching to the guest."`
+	VSock           VSockInput           `json:"vsock,omitempty" toml:"vsock" jsonschema:"Allowed runtime vsock CID allocation range."`
+	WriteFiles      []WriteFileInput     `json:"write_files,omitempty" toml:"write_files" jsonschema:"Files copied into or synchronized with the guest through qemu guest agent."`
+	Notifications   NotificationsInput   `json:"notifications,omitempty" toml:"notifications" jsonschema:"Host command hooks invoked for selected runtime notification states."`
+	Run             []RunInput           `json:"run,omitempty" toml:"run" jsonschema:"Host-side processes started before QEMU and stopped during teardown."`
+	Hotplug         HotplugInput         `json:"hotplug,omitempty" toml:"hotplug" jsonschema:"Devices that may be attached or detached after launch."`
+	Egress          *EgressInput         `json:"egress,omitempty" toml:"egress" jsonschema:"What the guest may reach through a network of type virtle, and the secrets it uses without holding them. Without this section such a network reaches the internet and nothing on the host or its networks."`
 }
 
 // EgressInput is the [egress] section: the policy of a network of type
@@ -178,6 +181,30 @@ func (m MountsInput) Image() []ImageMountInput {
 	return filterMounts[ImageMountInput](m)
 }
 
+// withVirtioFSDefaults returns the mounts with every virtiofs entry's daemon
+// defaulted (see defaultVirtioFSDaemon); the receiver is left alone.
+func (m MountsInput) withVirtioFSDefaults() MountsInput {
+	result := slices.Clone(m)
+	for i, entry := range result {
+		if mount, ok := entry.(VirtioFSMountInput); ok {
+			defaultVirtioFSDaemon(&mount)
+			result[i] = mount
+		}
+	}
+	return result
+}
+
+// firstMountNot reports the first mount whose kind is none of kinds, for a
+// backend that rejects the other kinds by name.
+func (m MountsInput) firstMountNot(kinds ...string) (index int, kind string, found bool) {
+	for i, mount := range m {
+		if !slices.Contains(kinds, mount.mountType()) {
+			return i, mount.mountType(), true
+		}
+	}
+	return 0, "", false
+}
+
 func (m *MountsInput) UnmarshalJSON(data []byte) error {
 	mounts, err := tagged.DecodeJSONList(data, "manifest.mounts", mountRegistry)
 	*m = mounts
@@ -284,9 +311,9 @@ const (
 
 type NetworkInput struct {
 	ID      string        `json:"id,omitempty" toml:"id" jsonschema:"Network device identifier."`
-	Type    string        `json:"type,omitempty" toml:"type" jsonschema:"Network type: user (the VMM's built-in user networking, the default), virtle (a network virtle runs in userspace), or tap (a host TAP device)."`
+	Type    string        `json:"type,omitempty" toml:"type" jsonschema:"Network type: user (the VMM's built-in user networking, the default), virtle (a network virtle runs in userspace), or tap (a host TAP device). QEMU also takes any of its own -netdev backends verbatim."`
 	MAC     string        `json:"mac,omitempty" toml:"mac" jsonschema:"Guest network interface MAC address; a virtle network allocates one when omitted."`
-	Tap     string        `json:"tap,omitempty" toml:"tap" jsonschema:"Host TAP device name, for type tap."`
+	Tap     string        `json:"tap,omitempty" toml:"tap" jsonschema:"Host TAP device name, for type tap; QEMU picks and sets up the device itself when omitted."`
 	Forward []ForwardPort `json:"forward,omitempty" toml:"forward" jsonschema:"Port forwarding rules for this network."`
 }
 

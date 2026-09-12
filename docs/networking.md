@@ -6,10 +6,13 @@ in Go or in the manifest's `[[networks]]` entry:
 | `type` | Go | Frames go to | Backends |
 | --- | --- | --- | --- |
 | `user` (default) | `qemu.User{}` | QEMU's built-in user networking (slirp): NAT and `hostfwd` port forwards inside QEMU | QEMU |
-| `virtle` | a `vmnet.Network` on `qemu.Backend.Network` | a network virtle runs in userspace: fixed addresses, DHCP and DNS, host-side dialing, forwards, and an egress policy | QEMU (Firecracker follows with the guest daemon) |
-| `tap` | `qemu.TAP{Name}`, `firecracker.TAP{Name}` | a host TAP device the host kernel networks; the operator owns addressing, NAT, and forwards | QEMU, Firecracker |
+| `virtle` | a `vmnet.Network` on `qemu.Backend.Network` | a network virtle runs in userspace: fixed addresses, DHCP and DNS, host-side dialing, forwards, and an egress policy | QEMU (Firecracker and Cloud Hypervisor follow with the guest daemon) |
+| `tap` | `qemu.TAP{Name}`, `firecracker.TAP{Name}`, `cloudhypervisor.TAP{Name}` | a host TAP device the host kernel networks; the operator owns addressing, NAT, and forwards | QEMU, Firecracker, Cloud Hypervisor |
 
-`user` stays the default until the virtle network reaches parity with it.
+`user` stays the default until the virtle network reaches parity with it. On
+QEMU any other `type` still reaches QEMU verbatim as its `-netdev` backend,
+forwards and all, and `type = "tap"` without a `tap` name still leaves the
+device and its ifup/ifdown scripts to QEMU, as before virtle knew the types.
 
 ## The virtle network
 
@@ -192,11 +195,15 @@ Injections other than secrets, and `Admit`, have no manifest form yet.
 ## Kernel TAP
 
 `type = "tap"` with `tap = "tap0"` (or `qemu.TAP{Name: "tap0"}`,
-`firecracker.TAP{Name: "tap0"}`) hands an existing host TAP device to the
-VMM. The host kernel provides the network: bridging, NAT, addressing, and
-forwards are the operator's, so `Spec.Ports` and `[[networks.forward]]` are
-rejected, and `Status.Networks` reports the NIC's MAC with no address. It is
-how Firecracker is deployed elsewhere and the only NIC it offers today.
+`firecracker.TAP{Name: "tap0"}`, `cloudhypervisor.TAP{Name: "tap0"}`) hands
+an existing host TAP device to the VMM. Cloud Hypervisor opens it and brings
+it up itself, which needs `CAP_NET_ADMIN` unless the device exists, is the
+user's, and is already up; with that capability it also creates a missing
+device. The host kernel provides the network: bridging, NAT,
+addressing, and forwards are the operator's, so `Spec.Ports` and
+`[[networks.forward]]` are rejected, and `Status.Networks` reports the NIC's
+MAC with no address. It is how Firecracker and Cloud Hypervisor are deployed
+elsewhere and the only NIC they offer today.
 
 ## Writing a network or an egress
 

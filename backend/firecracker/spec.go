@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/shazow/virtle/backend"
 	imanifest "github.com/shazow/virtle/internal/manifest"
+	"github.com/shazow/virtle/internal/vmmhost"
 	"github.com/shazow/virtle/units"
 	"github.com/shazow/virtle/vm"
 )
@@ -21,91 +21,31 @@ func (b *Backend) resolveSpec(spec *vm.Spec, stateDir string) (*imanifest.Manife
 	if spec == nil {
 		spec = &vm.Spec{}
 	}
-	if len(spec.Files) != 0 {
-		return nil, fmt.Errorf("firecracker: guest files (vm.Spec.Files) need a guest control transport: %w", errors.ErrUnsupported)
-	}
-	if len(spec.Shares) != 0 {
-		return nil, fmt.Errorf("firecracker: host shares (vm.Spec.Shares): %w", errors.ErrUnsupported)
-	}
-	if len(spec.Ports) != 0 {
-		return nil, fmt.Errorf("firecracker: port forwards (vm.Spec.Ports): %w", errors.ErrUnsupported)
-	}
-	// Validate the Spec in its own vocabulary before lowering it; manifest
-	// resolution repeats the checks in manifest terms for manifest.Load.
 	switch b.Console {
 	case "", ConsoleOff, ConsolePrint:
 	default:
 		return nil, fmt.Errorf("firecracker: Console %q is not ConsoleOff or ConsolePrint: %w", b.Console, errors.ErrUnsupported)
 	}
-	if b.doc == nil && spec.Kernel.Path == "" {
-		return nil, fmt.Errorf("firecracker: vm.Spec.Kernel.Path is required")
-	}
-	if spec.CPUs < 0 || spec.CPUs > imanifest.MaxFirecrackerCPUs {
-		return nil, fmt.Errorf("firecracker: vm.Spec.CPUs must be between 1 and %d, got %d", imanifest.MaxFirecrackerCPUs, spec.CPUs)
-	}
 	doc := imanifest.Document{Backend: imanifest.BackendFirecracker}
 	if b.doc != nil {
 		doc = *b.doc
 	}
-	if b.HostName != "" {
-		doc.HostName = b.HostName
-	}
-	if spec.Dir != "" {
-		doc.WorkingDir = spec.Dir
-	}
-	if stateDir != "" {
-		doc.StateDir = stateDir
-	}
-	// A zero CPU count is derived by manifest resolution (every host CPU).
-	if spec.CPUs != 0 {
-		doc.Machine.VCPU = spec.CPUs
-	}
-	memory := spec.Memory
-	if memory == 0 && b.doc == nil {
-		memory = DefaultMemory
-	}
-	if memory != 0 {
-		if memory%units.Mebibyte != 0 {
-			return nil, fmt.Errorf("memory size %s is not MiB-aligned", memory)
-		}
-		doc.Machine.Memory = memory.Mebibytes()
-	}
-	if spec.Kernel != (vm.Kernel{}) {
-		doc.Kernel.Path, doc.Kernel.InitrdPath = spec.Kernel.Path, spec.Kernel.Initrd
-		// Preserve quotes and whitespace in a caller's kernel command line.
-		doc.Kernel.Params = nil
-		if spec.Kernel.Cmdline != "" {
-			doc.Kernel.Params = []string{spec.Kernel.Cmdline}
-		}
-	}
-	// As on QEMU, Spec disks overlay the manifest's image mounts by position,
-	// so manifest-only settings such as image.label survive a manifest.Load.
-	base := doc.Mounts.Image()
-	doc.Mounts = make(imanifest.MountsInput, 0, len(spec.Disks))
-	for i, disk := range spec.Disks {
-		// "/" names the root device, which the kernel mounts itself; any
-		// other mount point needs an agent in the guest.
-		if disk.GuestPath != "" && disk.GuestPath != "/" {
-			return nil, fmt.Errorf("firecracker: disk %q: guest mounting at %q (vm.Disk.GuestPath) needs a guest control transport: %w", disk.Path, disk.GuestPath, errors.ErrUnsupported)
-		}
-		if disk.Format != "" && disk.Format != "raw" {
-			return nil, fmt.Errorf("firecracker: disk %q: Format %q is not supported, only raw images are: %w", disk.Path, disk.Format, errors.ErrUnsupported)
-		}
-		if disk.Size%units.Mebibyte != 0 {
-			return nil, fmt.Errorf("firecracker: disk %q: size %s is not MiB-aligned", disk.Path, disk.Size)
-		}
-		var mount imanifest.ImageMountInput
-		if i < len(base) {
-			mount = base[i]
-		}
-		mount.Type = imanifest.MountTypeImage
-		mount.SourcePath, mount.Target, mount.ReadOnly = disk.Path, disk.GuestPath, disk.ReadOnly
-		// As on QEMU, a size asks for the image to be created when missing.
-		mount.Image.Format, mount.Image.Size, mount.Image.AutoCreate = disk.Format, disk.Size.Mebibytes(), disk.Size != 0
-		doc.Mounts = append(doc.Mounts, mount)
+	if err := vmmhost.ApplySpec(&doc, spec, vmmhost.SpecOptions{
+		Backend:       "firecracker",
+		MaxCPUs:       imanifest.MaxFirecrackerCPUs,
+		DefaultMemory: DefaultMemory,
+		DiskFormats:   []string{"raw"},
+		Loaded:        b.doc != nil,
+		HostName:      b.HostName,
+		StateDir:      stateDir,
+	}); err != nil {
+		return nil, err
 	}
 	if b.Binary != "" {
 		doc.Firecracker.Binary = b.Binary
+	}
+	if len(b.ExtraArgs) != 0 {
+		doc.Firecracker.Args = append(slices.Clone(doc.Firecracker.Args), b.ExtraArgs...)
 	}
 	if b.StartupTimeout != 0 {
 		doc.Firecracker.StartupTimeout = units.Duration(b.StartupTimeout)
@@ -140,28 +80,6 @@ func applySpecLink(doc *imanifest.Document, link Link) error {
 	if tap.Name == "" {
 		return fmt.Errorf("firecracker: Link TAP requires the device Name")
 	}
-	// The overlay writes into the network entries, so detach them from the
-	// backend's stored document.
-	doc.Networks = slices.Clone(doc.Networks)
-	if len(doc.Networks) == 0 {
-		doc.Networks = []imanifest.NetworkInput{{}}
-	}
-	for i := range doc.Networks {
-		doc.Networks[i].Type = imanifest.NetworkTypeTAP
-		doc.Networks[i].Tap = tap.Name
-	}
+	vmmhost.ApplyTAP(doc, tap.Name)
 	return nil
-}
-
-// networkStatuses lists the TAP NICs for Status. The host kernel networks
-// them, so none is attached to a network virtle runs and no address is known.
-func networkStatuses(cfg *imanifest.Firecracker) []backend.NetworkStatus {
-	if len(cfg.Networks) == 0 {
-		return nil
-	}
-	statuses := make([]backend.NetworkStatus, 0, len(cfg.Networks))
-	for _, network := range cfg.Networks {
-		statuses = append(statuses, backend.NetworkStatus{ID: network.ID, MAC: network.MAC})
-	}
-	return statuses
 }

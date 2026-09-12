@@ -7,6 +7,63 @@ Keep entries terse. When a day includes both CLI and library changes, group
 them by type, CLI first. For compatibility-breaking usage migrations, include
 compact before/after examples.
 
+## 2026-09-11
+
+- The Firecracker and Cloud Hypervisor backends are experimental: they stay
+  out of the README's feature list, and their manifest sections and Go
+  packages may change.
+- `backend = "cloud-hypervisor"` (experimental) launches a
+  [Cloud Hypervisor](https://www.cloudhypervisor.org/) microVM: everything
+  the Firecracker backend does (direct kernel boot, raw disks, serial output,
+  a host TAP NIC, the usual `virtle launch`, `status`, and `rpc` lifecycle)
+  plus `[[mounts]] type = "virtiofs"` shares served by a `virtiofsd` virtle
+  starts. `rpc shutdown` presses the guest's ACPI power button. Linux with
+  KVM only; the guest kernel needs PCI, ACPI, and (for an ELF `vmlinux`) the
+  PVH entry point. See [docs/cloud-hypervisor.md](docs/cloud-hypervisor.md)
+  and the [recipe](docs/recipes/cloud-hypervisor/README.md).
+- `nix run .#benchmark-backends` rotates over three backends and takes
+  rounds instead of pairs: `--pairs 10 --warmup-pairs 2` becomes `--rounds 9
+  --warmup-rounds 3` (multiples of three), and `results.json` records
+  `rounds` and `warmup_rounds`.
+- `[cloud-hypervisor] args` and `[firecracker] args` append command-line
+  arguments to the VMM after virtle's own, as `[qemu] exec` allows for QEMU.
+- `kernel.serial = "console"` works on Cloud Hypervisor as it does on QEMU:
+  the guest console is the host terminal `virtle launch` runs in.
+- On Cloud Hypervisor, `[[mounts]] type = "image"` takes `image.format =
+  "qcow2"` for an existing image (created images stay raw) and honors
+  `image.serial` and `image.direct`; Firecracker keeps rejecting them.
+- `[[run]]` host helpers start before Firecracker and Cloud Hypervisor
+  microVMs and stop after them, as they do for QEMU; the sections used to
+  be rejected there. `[notifications]` stays QEMU-only.
+- `[[mounts]] type = "virtiofs"` with `read_only = true` now makes the
+  `virtiofsd` virtle starts refuse guest writes: `--readonly` joins virtle's
+  default daemon arguments. Before, `read_only` did nothing for virtiofs
+  shares on any backend. A mount that spells `virtiofs.args` keeps them as
+  written (add `--readonly` there yourself), and a share served by another
+  daemon (`virtiofs.socket` alone) still relies on that daemon; virtle logs
+  both. A QEMU manifest's virtiofs mount that names no `virtiofs.socket`
+  now gets `<tag>.sock` and virtle's `virtiofsd`, as it already did through
+  the Go API.
+- Firecracker and Cloud Hypervisor manifests accept `[balloon] enabled =
+  false` and `[workspace]` `guest_dir` / `host_dir` (template data for
+  `[[run]]`); `mount_cwd`, `write_files`, and an enabled balloon stay
+  rejected there.
+
+### Library changes
+
+- New experimental `backend/cloudhypervisor` package: `&cloudhypervisor.Backend{}`
+  implements `backend.Backend` with the same `vm.Spec` and `backend.Machine`
+  as the other backends, its machines implement `backend.StatusReporter` and
+  `backend.ConsoleProvider`, and `vm.Spec.Shares` become virtio-fs shares.
+  `manifest.Load` returns it for `backend = "cloud-hypervisor"`.
+- `cloudhypervisor.Backend` accepts `vm.Disk.Format = "qcow2"` and
+  `Console: cloudhypervisor.ConsoleInteractive`; `cloudhypervisor.Backend`
+  and `firecracker.Backend` gain `ExtraArgs`, as `qemu.Backend` has. With
+  that slice field `firecracker.Backend` values are no longer comparable
+  with `==`, like `qemu.Backend`.
+- `vm.Share.ReadOnly` reaches the `virtiofsd` virtle starts with its default
+  arguments as `--readonly`.
+
 ## 2026-09-10
 
 - Manifest templates gain `fromFile "path"`, the file's contents without a
@@ -16,7 +73,9 @@ compact before/after examples.
   with a DHCP lease, DNS, `virtle status` reporting the address, and
   `[[networks.forward]]` entries served by virtle rather than QEMU's slirp.
   `type = "tap"` with `tap = "tap0"` hands a host TAP device to the VMM on
-  QEMU and Firecracker. `type = "user"` stays the default. See
+  QEMU and Firecracker. `type = "user"` stays the default; any other value
+  still reaches QEMU verbatim as its `-netdev` backend, and `type = "tap"`
+  without a `tap` name still leaves the device to QEMU's own scripts. See
   [docs/networking.md](docs/networking.md).
 - A virtle network reaches the internet and nothing on the host or its
   networks unless the manifest says otherwise. `[egress] reach` names what
@@ -88,9 +147,13 @@ compact before/after examples.
   host-guest vsock, dropping the `/dev/vhost-vsock` requirement.
 - `virtle launch` lets `Machine.Shutdown` stop the guest gracefully on
   SIGINT/SIGTERM before canceling the machine, and drains accepted
-  wait/kill/shutdown/suspend RPC responses before exiting. `^Z` (SIGTSTP) on
-  a backend that cannot suspend is ignored with a warning instead of shutting
-  the VM down.
+  wait/kill/shutdown/suspend RPC responses before exiting; a second
+  SIGINT/SIGTERM during that shutdown kills the machine instead of waiting
+  for the guest. `^Z` (SIGTSTP) on a backend that cannot suspend is ignored
+  with a warning instead of shutting the VM down.
+- `host_name` must stay under the state directory (`..` and absolute names
+  are refused, since the name is the state lock's); nested names such as
+  `team/vm` keep working on every backend.
 - `nix flake check` gains real-KVM end-to-end checks that boot both backends
   on a shared tiny kernel, through the CLI and through the Go API (the
   `backendtest` contract, root and scratch disks, the console); they need a

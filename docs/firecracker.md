@@ -4,9 +4,16 @@ virtle can launch microVMs with [Firecracker](https://firecracker-microvm.github
 instead of QEMU. Select it with `backend = "firecracker"` in a manifest, or
 construct `&firecracker.Backend{}` in Go. The `vm.Spec`, `backend.Machine`,
 control socket, and `virtle launch` / `status` / `rpc` commands are the same
-for both backends; the differences are in what the guest gets.
+for every backend; the differences are in what the guest gets.
 
-The backend is early. Firecracker requires Linux on x86_64 or aarch64 with an
+For the same shape of backend with virtio-fs shares, see the
+[Cloud Hypervisor backend](cloud-hypervisor.md); its guide compares the three
+backends feature by feature.
+
+The backend is experimental: it covers much less than QEMU (the Cloud
+Hypervisor guide has the table), it is not promoted in the README yet, and
+its manifest section and Go package may change. Firecracker requires Linux
+on x86_64 or aarch64 with an
 accessible `/dev/kvm`; there is no software-emulation fallback. Guest kernels
 must match the host architecture: an ELF `vmlinux` on x86_64, an uncompressed
 `Image` on aarch64.
@@ -30,6 +37,8 @@ must match the host architecture: an ELF `vmlinux` on x86_64, an uncompressed
 - Lifecycle and status: `Start`, `Wait`, `Kill`, `Shutdown`, and
   `backend.StatusReporter`; over the control socket, `virtle status` and
   `virtle rpc status|wait|kill|shutdown`.
+- `[[run]]` host helpers, started before the VMM and stopped after it exits,
+  with the same templates as on QEMU.
 - The same state directory and VM-name lock as QEMU, so a QEMU and a
   Firecracker launch of one manifest exclude each other.
 
@@ -38,7 +47,9 @@ The vCPU default follows QEMU's: an omitted count means every host CPU
 (`firecracker.DefaultMemory`, the manifest default; the QEMU Go API defaults
 to 2048 MiB). Small guests should set both explicitly.
 `[firecracker] binary`, `startup_timeout`, and `shutdown_timeout` (or the
-matching `Backend` fields) tune the VMM.
+matching `Backend` fields) tune the VMM; `[firecracker] args` /
+`Backend.ExtraArgs` append command-line arguments after virtle's own,
+neither shell-expanded nor templated.
 
 `Start` returns once Firecracker has accepted `InstanceStart`; it does not
 mean the guest workload is ready. Observe readiness inside the guest: attach
@@ -82,10 +93,10 @@ features it cannot honor fail `Start` with an error wrapping
 | --- | --- |
 | Guest control (`Machine.RemoteControl`), SSH, guest files, workspace mounts | No guest agent transport yet; see the [guest daemon design](https://github.com/shazow/virtle/pull/67). |
 | Port forwards, vsock, virtle networks | The guest NIC is a host TAP device (`[[networks]] type = "tap"`, `firecracker.TAP`) that the host kernel networks; the operator owns its addressing and forwards. Frames over vsock into a virtle network follow with the guest daemon. |
-| virtiofs and 9p shares, qcow2, disk cache/serial options | Raw images only, created on demand as above. |
+| virtiofs and 9p shares, qcow2, disk cache/serial options | Raw images only, created on demand as above. [Cloud Hypervisor](cloud-hypervisor.md) has virtio-fs shares, qcow2 images, and the disk options. |
 | Interactive console (`serial = "console"`) | Only `off` and `print`. |
 | Suspend/resume, balloon, hotplug | Capability interfaces are not implemented. |
-| `[run]` helpers, `[notifications]`, `[qemu]` settings | QEMU-only. |
+| `[notifications]`, `[qemu]`, `[cloud-hypervisor]` settings | Other backends'. |
 | Jailer, cgroups, namespaces | Firecracker runs directly with its default seccomp filter; provide host isolation separately for multi-tenant use. |
 
 ## Runtime files

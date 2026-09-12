@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,12 +25,14 @@ func (d Document) Manifest() (*Manifest, error) {
 	return d.ManifestWithOptions(ResolveOptions{})
 }
 
-// validateHostName rejects VM names that cannot serve as a file name: the
-// name is embedded in the state lock path (<state_dir>/<host_name>.lock)
-// that both backends share.
+// validateHostName rejects VM names whose state lock
+// (<state_dir>/<host_name>.lock, shared by every backend) would land outside
+// the state directory. A separator nests the lock instead; both backends
+// create the directories on the way, so such names keep working.
 func validateHostName(name string) error {
-	if name == "." || name == ".." || strings.ContainsRune(name, filepath.Separator) {
-		return fmt.Errorf("manifest.host_name %q must be a plain name without path separators", name)
+	clean := filepath.Clean(name)
+	if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("manifest.host_name %q must stay under the state directory", name)
 	}
 	return nil
 }
@@ -39,13 +42,19 @@ func (d Document) ManifestWithOptions(options ResolveOptions) (*Manifest, error)
 	case "", BackendQEMU:
 	case BackendFirecracker:
 		return d.firecrackerManifest()
+	case BackendCloudHypervisor:
+		return d.cloudHypervisorManifest(options)
 	default:
-		return nil, fmt.Errorf("manifest.backend must be %s or %s, got %q", BackendQEMU, BackendFirecracker, d.Backend)
+		return nil, fmt.Errorf("manifest.backend must be %s, %s or %s, got %q", BackendQEMU, BackendFirecracker, BackendCloudHypervisor, d.Backend)
 	}
-	if d.Firecracker != (FirecrackerInput{}) {
+	if !unconfigured(d.Firecracker) {
 		return nil, fmt.Errorf("manifest.firecracker requires backend = %q", BackendFirecracker)
 	}
+	if !unconfigured(d.CloudHypervisor) {
+		return nil, fmt.Errorf("manifest.cloud-hypervisor requires backend = %q", BackendCloudHypervisor)
+	}
 	d = DocumentWithDefaults(d)
+	d.Mounts = d.Mounts.withVirtioFSDefaults()
 	if err := validateHostName(d.HostName); err != nil {
 		return nil, err
 	}
@@ -590,6 +599,11 @@ func (m *Manifest) resolveVirtioFSRuns(mounts []VirtioFSMountInput, options Reso
 			continue
 		}
 		if mount.VirtioFS.Bin == "" && len(mount.VirtioFS.Args) == 0 {
+			// A named socket and no daemon: served by someone else, whose
+			// own arguments decide whether the share is read-only.
+			if mount.ReadOnly && options.Logger != nil {
+				options.Logger.Info("read-only virtiofs share is served by another daemon; read_only is that daemon's to enforce", "tag", mount.Tag, "socket", mount.VirtioFS.Socket)
+			}
 			continue
 		}
 		socketPath, err := m.resolveSocketPath(mount.VirtioFS.Socket)
@@ -613,6 +627,9 @@ func (m *Manifest) resolveVirtioFSRuns(mounts []VirtioFSMountInput, options Reso
 					} else if options.Logger != nil {
 						options.Logger.Info("using existing virtiofs socket", "socket", socketPath)
 					}
+					if mount.ReadOnly && options.Logger != nil {
+						options.Logger.Info("read-only virtiofs share is served by another daemon; read_only is that daemon's to enforce", "tag", mount.Tag, "socket", socketPath)
+					}
 					continue
 				}
 			}
@@ -627,6 +644,13 @@ func (m *Manifest) resolveVirtioFSRuns(mounts []VirtioFSMountInput, options Reso
 				"--shared-dir={{.MountSource}}",
 				"--tag={{.MountTag}}",
 			}
+			if mount.ReadOnly {
+				args = append(args, virtioFSReadOnlyFlag)
+			}
+		} else if mount.ReadOnly && !slices.Contains(args, virtioFSReadOnlyFlag) && options.Logger != nil {
+			// Arguments the manifest spells are used as written: virtle
+			// cannot know what the daemon behind them accepts.
+			options.Logger.Info("read-only virtiofs share runs with the manifest's virtiofs.args; read_only is those arguments' to enforce", "tag", mount.Tag)
 		}
 		runs = append(runs, Run{
 			Exec: append([]string{m.resolveOptionalBin(mount.VirtioFS.Bin, defaultVirtioFSBin)}, args...),
@@ -727,18 +751,15 @@ func (m *Manifest) resolveImageHotplug(entry ImageMountInput) (HotplugDevice, er
 
 func (m *Manifest) resolveVirtioFSHotplug(mount VirtioFSMountInput) (HotplugDevice, error) {
 	id := mount.Tag
-	socket := mount.VirtioFS.Socket
-	if socket == "" {
-		socket = id + ".sock"
-	}
-	socketPath, err := m.resolveSocketPath(socket)
+	defaultVirtioFSDaemon(&mount)
+	socketPath, err := m.resolveSocketPath(mount.VirtioFS.Socket)
 	if err != nil {
 		return HotplugDevice{}, err
 	}
 	source := m.resolvePath(mount.SourcePath)
 	args := append([]string(nil), mount.VirtioFS.Args...)
 	if len(args) == 0 {
-		args = DefaultVirtioFSArgs(socketPath, source, id)
+		args = DefaultVirtioFSArgs(socketPath, source, id, mount.ReadOnly)
 	} else {
 		renderedArgs, err := renderVirtioFSArgv(m.Paths.WorkingDir, args, socketPath, source, id)
 		if err != nil {
@@ -762,6 +783,27 @@ func (m *Manifest) resolveVirtioFSHotplug(mount VirtioFSMountInput) (HotplugDevi
 // defaultVirtioFSBin is the virtiofsd binary used when a mount names none;
 // it is left unresolved so the host PATH supplies it.
 const defaultVirtioFSBin = "virtiofsd"
+
+// virtioFSReadOnlyFlag makes virtiofsd refuse every guest write. It is how a
+// read-only share is enforced, so it joins virtle's default arguments for a
+// daemon it starts; arguments the manifest spells (virtiofs.args) and a
+// daemon started by someone else enforce read_only on their own terms.
+const virtioFSReadOnlyFlag = "--readonly"
+
+// defaultVirtioFSDaemon fills in a virtiofs mount that names no socket, the
+// same way on every backend: the socket is <tag>.sock under the state
+// directory and, unless the mount brings its own bin or args, virtle starts
+// virtiofsd from PATH on it. A mount that names a socket and nothing else is
+// served by someone else.
+func defaultVirtioFSDaemon(mount *VirtioFSMountInput) {
+	if mount.VirtioFS.Socket != "" {
+		return
+	}
+	mount.VirtioFS.Socket = mount.Tag + ".sock"
+	if mount.VirtioFS.Bin == "" && len(mount.VirtioFS.Args) == 0 {
+		mount.VirtioFS.Bin = defaultVirtioFSBin
+	}
+}
 
 func (m *Manifest) resolveOptionalBin(bin string, defaultBin string) string {
 	if bin == "" || bin == defaultBin {
@@ -898,16 +940,29 @@ func resolveNetwork(dir string, networks []NetworkInput, fwdTunnelExec []string,
 			}
 			device.Forward = forwards
 		case NetworkTypeTAP:
-			if err := validateTapName(network.Tap); err != nil {
-				return nil, fmt.Errorf("manifest.networks[%d].tap %w", i, err)
-			}
 			if len(network.Forward) > 0 {
 				return nil, fmt.Errorf("manifest.networks[%d].forward is not supported on a tap network; the host kernel routes it", i)
 			}
 			device.Backend = "tap"
-			device.NetdevOptions = []string{"ifname=" + network.Tap, "script=no", "downscript=no"}
+			// Without a name the device is QEMU's to pick and set up with
+			// its own ifup/ifdown scripts, as it was before virtle read
+			// the type.
+			if network.Tap != "" {
+				if err := validateTapName(network.Tap); err != nil {
+					return nil, fmt.Errorf("manifest.networks[%d].tap %w", i, err)
+				}
+				device.NetdevOptions = []string{"ifname=" + network.Tap, "script=no", "downscript=no"}
+			}
 		default:
-			return nil, fmt.Errorf("manifest.networks[%d].type must be one of user, virtle, or tap", i)
+			// Any other type reaches QEMU verbatim as the -netdev backend,
+			// forwards and all, as every type did before virtle knew the
+			// three above; QEMU decides whether it exists.
+			device.Backend = netType
+			forwardOptions, err := resolveForwardPorts(dir, network.Forward, fwdTunnelExec, i)
+			if err != nil {
+				return nil, err
+			}
+			device.NetdevOptions = forwardOptions
 		}
 		devices = append(devices, device)
 	}

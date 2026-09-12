@@ -1,4 +1,4 @@
-# A Firecracker microVM: direct boot of an uncompressed kernel with a raw root
+# A Firecracker microVM (experimental backend): direct boot of an uncompressed kernel with a raw root
 # disk. Guest control, SSH, and shares are QEMU-only for now, and the only NIC
 # is a host TAP device; see docs/firecracker.md for what the backend supports.
 backend = "firecracker"

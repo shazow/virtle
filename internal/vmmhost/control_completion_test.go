@@ -1,13 +1,11 @@
 //go:build linux
 
-package firecracker
+package vmmhost
 
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"net"
-	"net/http"
 	"os"
 	"sync"
 	"testing"
@@ -18,6 +16,8 @@ import (
 	"github.com/shazow/virtle/internal/control"
 	"github.com/shazow/virtle/internal/executor/executortest"
 )
+
+const testTimeout = 5 * time.Second
 
 // A pipe keeps the response write blocked until the client consumes it.
 // Completing the process only after Write starts forces the shutdown race.
@@ -87,7 +87,7 @@ func testCompletionWaitsForControlResponse(t *testing.T) {
 }
 
 // The handler has completed shutdown; the regression concerns the remaining
-// transport write and reaping, independently of Firecracker's HTTP API.
+// transport write and reaping, independently of any VMM's API.
 type responseMachine struct{ backend.Machine }
 
 func (responseMachine) Shutdown(context.Context) error { return nil }
@@ -130,15 +130,15 @@ func TestConcurrentControlLifecycleResponses(t *testing.T) {
 			m := &Machine{process: process.Process(), done: make(chan struct{}), stopped: make(chan struct{}),
 				lock: lock, runtimeDir: t.TempDir(), shutdownDone: make(chan struct{}), shutdownTimeout: testTimeout}
 			release := make(chan struct{})
-			m.api = &apiClient{http: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			m.graceful = func(ctx context.Context, _ string) error {
 				select {
 				case <-release:
-				case <-r.Context().Done():
-					return nil, r.Context().Err()
+				case <-ctx.Done():
+					return ctx.Err()
 				}
 				process.Complete(nil)
-				return &http.Response{StatusCode: http.StatusNoContent, Body: io.NopCloser(http.NoBody)}, nil
-			})}}
+				return nil
+			}
 			router, err := control.NewMachineRouter(controlMachine{m})
 			if err != nil {
 				t.Fatal(err)

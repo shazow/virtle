@@ -3,11 +3,12 @@
   "properties": {
     "backend": {
       "type": "string",
-      "description": "Virtual machine backend: qemu (default) or firecracker.",
+      "description": "Virtual machine backend: qemu (default), or the experimental firecracker or cloud-hypervisor.",
       "default": "qemu",
       "enum": [
         "qemu",
-        "firecracker"
+        "firecracker",
+        "cloud-hypervisor"
       ]
     },
     "firecracker": {
@@ -24,9 +25,48 @@
         "shutdown_timeout": {
           "type": "string",
           "description": "Maximum graceful shutdown time; zero uses 10s."
+        },
+        "args": {
+          "type": [
+            "null",
+            "array"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Extra command-line arguments appended after the ones virtle passes; no shell expansion or templates."
         }
       },
       "description": "Firecracker executable and lifecycle timeouts.",
+      "additionalProperties": false
+    },
+    "cloud-hypervisor": {
+      "type": "object",
+      "properties": {
+        "binary": {
+          "type": "string",
+          "description": "Cloud Hypervisor executable; default cloud-hypervisor. No shell expansion."
+        },
+        "startup_timeout": {
+          "type": "string",
+          "description": "Maximum time for API startup, share daemons, and configuration; zero uses 10s."
+        },
+        "shutdown_timeout": {
+          "type": "string",
+          "description": "Maximum graceful shutdown time; zero uses 10s."
+        },
+        "args": {
+          "type": [
+            "null",
+            "array"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Extra command-line arguments appended after the ones virtle passes; no shell expansion or templates."
+        }
+      },
+      "description": "Cloud Hypervisor executable and lifecycle timeouts.",
       "additionalProperties": false
     },
     "host_name": {
@@ -410,7 +450,7 @@
           },
           "type": {
             "type": "string",
-            "description": "Network type: user (the VMM's built-in user networking, the default), virtle (a network virtle runs in userspace), or tap (a host TAP device)."
+            "description": "Network type: user (the VMM's built-in user networking, the default), virtle (a network virtle runs in userspace), or tap (a host TAP device). QEMU also takes any of its own -netdev backends verbatim."
           },
           "mac": {
             "type": "string",
@@ -418,7 +458,7 @@
           },
           "tap": {
             "type": "string",
-            "description": "Host TAP device name, for type tap."
+            "description": "Host TAP device name, for type tap; QEMU picks and sets up the device itself when omitted."
           },
           "forward": {
             "type": [
@@ -908,7 +948,7 @@
               },
               "type": {
                 "type": "string",
-                "description": "Network type: user (the VMM's built-in user networking, the default), virtle (a network virtle runs in userspace), or tap (a host TAP device)."
+                "description": "Network type: user (the VMM's built-in user networking, the default), virtle (a network virtle runs in userspace), or tap (a host TAP device). QEMU also takes any of its own -netdev backends verbatim."
               },
               "mac": {
                 "type": "string",
@@ -916,7 +956,7 @@
               },
               "tap": {
                 "type": "string",
-                "description": "Host TAP device name, for type tap."
+                "description": "Host TAP device name, for type tap; QEMU picks and sets up the device itself when omitted."
               },
               "forward": {
                 "type": [

@@ -1,5 +1,8 @@
 // Package units defines small typed scalars shared across the virtle API,
 // so sizes and durations are never plumbed around as bare ints.
+//
+// This is a public convenience library. Keep its helpers even when they
+// have no callers elsewhere in this repository.
 package units
 
 import (

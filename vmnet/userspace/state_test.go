@@ -23,18 +23,17 @@ import (
 
 	"github.com/miekg/dns"
 
-	"github.com/shazow/virtle/internal/networkstate"
 	"github.com/shazow/virtle/vmnet"
 	"github.com/shazow/virtle/vmnet/egress"
 )
 
-func roundTripNetworkState(t *testing.T, state networkstate.State) networkstate.State {
+func roundTripNetworkState(t *testing.T, state vmnet.NetworkState) vmnet.NetworkState {
 	t.Helper()
 	var encoded bytes.Buffer
 	if err := json.NewEncoder(&encoded).Encode(state); err != nil {
 		t.Fatal(err)
 	}
-	var restored networkstate.State
+	var restored vmnet.NetworkState
 	if err := json.NewDecoder(&encoded).Decode(&restored); err != nil {
 		t.Fatal(err)
 	}
@@ -120,23 +119,23 @@ func TestNetworkStateRenewsDNSLifetimeAfterDowntime(t *testing.T) {
 
 func TestNetworkStateRejectsInvalidBindingsAtomically(t *testing.T) {
 	prefix := netip.MustParsePrefix("198.18.0.0/29")
-	binding := func(name, addr string) networkstate.Binding {
-		return networkstate.Binding{Name: name, Addr: netip.MustParseAddr(addr)}
+	binding := func(name, addr string) vmnet.DNSBinding {
+		return vmnet.DNSBinding{Name: name, Addr: netip.MustParseAddr(addr)}
 	}
-	for name, invalid := range map[string]networkstate.State{
+	for name, invalid := range map[string]vmnet.NetworkState{
 		"different range": {FakeIPRange: netip.MustParsePrefix("198.18.1.0/29")},
-		"empty name":      {Bindings: []networkstate.Binding{binding("", "198.18.0.3")}},
-		"noncanonical":    {Bindings: []networkstate.Binding{binding("Other.Test.", "198.18.0.3")}},
-		"empty label":     {Bindings: []networkstate.Binding{binding("other..test", "198.18.0.3")}},
-		"long label":      {Bindings: []networkstate.Binding{binding(strings.Repeat("a", 64)+".test", "198.18.0.3")}},
-		"invalid address": {Bindings: []networkstate.Binding{{Name: "other.test"}}},
-		"outside range":   {Bindings: []networkstate.Binding{binding("other.test", "198.18.1.1")}},
-		"network address": {Bindings: []networkstate.Binding{binding("other.test", "198.18.0.0")}},
-		"broadcast":       {Bindings: []networkstate.Binding{binding("other.test", "198.18.0.7")}},
-		"duplicate name":  {Bindings: []networkstate.Binding{binding("new.test", "198.18.0.3")}},
-		"duplicate addr":  {Bindings: []networkstate.Binding{binding("other.test", "198.18.0.2")}},
-		"name conflict":   {Bindings: []networkstate.Binding{binding("existing.test", "198.18.0.3")}},
-		"addr conflict":   {Bindings: []networkstate.Binding{binding("other.test", "198.18.0.1")}},
+		"empty name":      {Bindings: []vmnet.DNSBinding{binding("", "198.18.0.3")}},
+		"noncanonical":    {Bindings: []vmnet.DNSBinding{binding("Other.Test.", "198.18.0.3")}},
+		"empty label":     {Bindings: []vmnet.DNSBinding{binding("other..test", "198.18.0.3")}},
+		"long label":      {Bindings: []vmnet.DNSBinding{binding(strings.Repeat("a", 64)+".test", "198.18.0.3")}},
+		"invalid address": {Bindings: []vmnet.DNSBinding{{Name: "other.test"}}},
+		"outside range":   {Bindings: []vmnet.DNSBinding{binding("other.test", "198.18.1.1")}},
+		"network address": {Bindings: []vmnet.DNSBinding{binding("other.test", "198.18.0.0")}},
+		"broadcast":       {Bindings: []vmnet.DNSBinding{binding("other.test", "198.18.0.7")}},
+		"duplicate name":  {Bindings: []vmnet.DNSBinding{binding("new.test", "198.18.0.3")}},
+		"duplicate addr":  {Bindings: []vmnet.DNSBinding{binding("other.test", "198.18.0.2")}},
+		"name conflict":   {Bindings: []vmnet.DNSBinding{binding("existing.test", "198.18.0.3")}},
+		"addr conflict":   {Bindings: []vmnet.DNSBinding{binding("other.test", "198.18.0.1")}},
 		"unknown token":   {Tokens: map[string]string{"UNKNOWN": "saved-placeholder"}},
 		"empty token":     {Tokens: map[string]string{"TOKEN": ""}},
 	} {
@@ -152,7 +151,7 @@ func TestNetworkStateRejectsInvalidBindingsAtomically(t *testing.T) {
 				invalid.FakeIPRange = prefix
 			}
 			// Validate a good new binding first, then encounter the error.
-			invalid.Bindings = append([]networkstate.Binding{binding("new.test", "198.18.0.2")}, invalid.Bindings...)
+			invalid.Bindings = append([]vmnet.DNSBinding{binding("new.test", "198.18.0.2")}, invalid.Bindings...)
 			if err := n.RestoreNetworkState(invalid); err == nil {
 				t.Fatal("invalid checkpoint was accepted")
 			}
@@ -170,7 +169,7 @@ func TestNetworkStateMergesCompatibleGuests(t *testing.T) {
 	_ = policy.GuestEnv(nil)
 	_ = attachGuest(t, n, "running", vmnet.AttachOptions{})
 	state := n.SaveNetworkState()
-	state.Bindings = append(state.Bindings, networkstate.Binding{Name: "restored.test", Addr: addr.Next()})
+	state.Bindings = append(state.Bindings, vmnet.DNSBinding{Name: "restored.test", Addr: addr.Next()})
 	if err := n.RestoreNetworkState(state); err != nil {
 		t.Fatalf("compatible checkpoint could not join an active network: %v", err)
 	}
@@ -181,7 +180,7 @@ func TestNetworkStateMergesCompatibleGuests(t *testing.T) {
 	}
 	before := n.SaveNetworkState()
 	state.Tokens["TOKEN"] = "different-placeholder"
-	state.Bindings = append(state.Bindings, networkstate.Binding{Name: "new.test", Addr: addr.Next().Next()})
+	state.Bindings = append(state.Bindings, vmnet.DNSBinding{Name: "new.test", Addr: addr.Next().Next()})
 	if err := n.RestoreNetworkState(state); err == nil {
 		t.Fatal("active network's issued token was replaced")
 	}
@@ -193,8 +192,8 @@ func TestNetworkStateMergesCompatibleGuests(t *testing.T) {
 func TestNetworkStateRequiresTokenRestoreSupport(t *testing.T) {
 	n := newTestNetwork(t, Config{Egress: vmnet.DenyAll{}})
 	before := n.SaveNetworkState()
-	saved := networkstate.State{FakeIPRange: before.FakeIPRange,
-		Bindings: []networkstate.Binding{{Name: "api.test", Addr: before.FakeIPRange.Addr().Next()}},
+	saved := vmnet.NetworkState{FakeIPRange: before.FakeIPRange,
+		Bindings: []vmnet.DNSBinding{{Name: "api.test", Addr: before.FakeIPRange.Addr().Next()}},
 		Tokens:   map[string]string{"TOKEN": "placeholder"},
 	}
 	if err := n.RestoreNetworkState(saved); err == nil {

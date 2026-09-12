@@ -19,7 +19,6 @@ import (
 	"github.com/shazow/virtle/backend/qemu/internal/launch"
 	"github.com/shazow/virtle/internal/control"
 	"github.com/shazow/virtle/internal/manifest"
-	"github.com/shazow/virtle/internal/networkstate"
 	"github.com/shazow/virtle/vm"
 	"github.com/shazow/virtle/vmnet"
 )
@@ -300,21 +299,21 @@ func TestAttachNetworkKeepsSavedIdentityAndRecordsIt(t *testing.T) {
 
 type checkpointNetwork struct {
 	fakeNetwork
-	saved      networkstate.State
-	restored   []networkstate.State
+	saved      vmnet.NetworkState
+	restored   []vmnet.NetworkState
 	onRestore  func() error
 	onSave     func()
 	restoreErr error
 }
 
-func (n *checkpointNetwork) SaveNetworkState() networkstate.State {
+func (n *checkpointNetwork) SaveNetworkState() vmnet.NetworkState {
 	if n.onSave != nil {
 		n.onSave()
 	}
 	return n.saved
 }
 
-func (n *checkpointNetwork) RestoreNetworkState(state networkstate.State) error {
+func (n *checkpointNetwork) RestoreNetworkState(state vmnet.NetworkState) error {
 	if n.onRestore != nil {
 		if err := n.onRestore(); err != nil {
 			return err
@@ -328,9 +327,9 @@ func TestNetworkCheckpointResume(t *testing.T) {
 	cfg := managedManifest(t.TempDir())
 	cfg.Persistence.StateDir = ".virtle"
 	cfg.Paths.RuntimeDir = manifest.RuntimeDir{Mode: manifest.RuntimeDirPath, Path: ".virtle"}
-	checkpoint := networkstate.State{
+	checkpoint := vmnet.NetworkState{
 		FakeIPRange: netip.MustParsePrefix("198.18.0.0/15"),
-		Bindings:    []networkstate.Binding{{Name: "api.example", Addr: netip.MustParseAddr("198.18.0.1")}},
+		Bindings:    []vmnet.DNSBinding{{Name: "api.example", Addr: netip.MustParseAddr("198.18.0.1")}},
 		Tokens:      map[string]string{"api": "guest-token"},
 	}
 	qmp := &fakeQMPClient{status: "running"}
@@ -429,7 +428,7 @@ func TestNetworkRestoreFailureStopsLaunch(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			plan.ResumeState = &launch.SuspendState{CID: 7, VMStatePath: statePath, NetworkState: &networkstate.State{}}
+			plan.ResumeState = &launch.SuspendState{CID: 7, VMStatePath: statePath, NetworkState: &vmnet.NetworkState{}}
 			running, err := m.startWithPlan(t.Context(), plan)
 			if running != nil {
 				_ = running.Close()
@@ -461,7 +460,7 @@ func TestNetworkRestoreNeedsRuntimeLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan.ResumeState = &launch.SuspendState{CID: 7, VMStatePath: statePath, NetworkState: &networkstate.State{}}
+	plan.ResumeState = &launch.SuspendState{CID: 7, VMStatePath: statePath, NetworkState: &vmnet.NetworkState{}}
 	running, err := m.startWithPlan(t.Context(), plan)
 	if running != nil {
 		_ = running.Close()

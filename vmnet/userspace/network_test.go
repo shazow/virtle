@@ -236,15 +236,30 @@ func TestHostDialsAndServesGuests(t *testing.T) {
 	n := newTestNetwork(t, Config{})
 	g := attachGuest(t, n, "vm1", vmnet.AttachOptions{})
 	g.listenTCP(7)
+	g.listenUDP(9)
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
-	for _, addr := range []string{g.addr.String() + ":7", "vm1:7"} {
-		c, err := n.DialContext(ctx, "tcp", addr)
-		if err != nil {
-			t.Fatalf("DialContext %s: %v", addr, err)
+	canceled, stop := context.WithCancel(t.Context())
+	stop()
+	for _, network := range []string{"tcp", "tcp4", "udp", "udp4"} {
+		port := ":7"
+		if strings.HasPrefix(network, "udp") {
+			port = ":9"
 		}
-		echo(t, c, "from the host to "+addr)
-		c.Close()
+		for _, addr := range []string{g.addr.String() + port, "vm1" + port} {
+			if c, err := n.DialContext(canceled, network, addr); !errors.Is(err, context.Canceled) {
+				if c != nil {
+					c.Close()
+				}
+				t.Fatalf("DialContext %s %s with canceled context = %v", network, addr, err)
+			}
+			c, err := n.DialContext(ctx, network, addr)
+			if err != nil {
+				t.Fatalf("DialContext %s %s: %v", network, addr, err)
+			}
+			echo(t, c, "from the host to "+addr)
+			c.Close()
+		}
 	}
 	if _, err := n.DialContext(ctx, "tcp", "vm2:7"); err == nil {
 		t.Fatal("DialContext resolved a machine that is not attached")
@@ -325,6 +340,29 @@ func TestAttachOptions(t *testing.T) {
 	if p, err := n.Attach(context.Background(), vmnet.QEMUStream(small, n.MTU()-1), vmnet.AttachOptions{}); err == nil {
 		p.Close()
 		t.Fatal("Attach accepted a link with a smaller MTU")
+	}
+}
+
+func TestAttachContext(t *testing.T) {
+	n := newTestNetwork(t, Config{DNSUpstream: "127.0.0.1:53"})
+	link := idleLink(t, n.MTU())
+	opts := vmnet.AttachOptions{Addr: n.Gateway().Next()}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if p, err := n.Attach(ctx, link, opts); !errors.Is(err, context.Canceled) {
+		if p != nil {
+			p.Close()
+		}
+		t.Fatalf("Attach with canceled context = %v", err)
+	}
+	// A canceled attachment leaves the link and requested address available
+	// for the caller to retry.
+	p, err := n.Attach(t.Context(), link, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Addr() != opts.Addr {
+		t.Fatalf("attached address = %s, want %s", p.Addr(), opts.Addr)
 	}
 }
 

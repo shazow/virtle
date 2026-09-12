@@ -5,7 +5,7 @@ import (
 	"maps"
 )
 
-// SaveTokens captures issued placeholders for the internal network checkpoint.
+// SaveTokens captures issued placeholders for a network checkpoint.
 // Values and injection permissions remain in the current policy.
 func (p *Policy) SaveTokens() map[string]string {
 	p.mu.Lock()

@@ -6,7 +6,7 @@ in Go or in the manifest's `[[networks]]` entry:
 | `type` | Go | Frames go to | Backends |
 | --- | --- | --- | --- |
 | `user` (default) | `qemu.User{}` | QEMU's built-in user networking (slirp): NAT and `hostfwd` port forwards inside QEMU | QEMU |
-| `virtle` | a `vmnet.Network` on `qemu.Backend.Network` | a network virtle runs in userspace: fixed addresses, DHCP and DNS, host-side dialing, forwards, and an egress policy | QEMU (Firecracker and Cloud Hypervisor follow with the guest daemon) |
+| `virtle` | a `vmnet.Network` on `qemu.Backend.Network` | a network virtle runs in userspace: fixed addresses, DHCP and DNS, host-side dialing, forwards, and an egress policy | QEMU |
 | `tap` | `qemu.TAP{Name}`, `firecracker.TAP{Name}`, `cloudhypervisor.TAP{Name}` | a host TAP device the host kernel networks; the operator owns addressing, NAT, and forwards | QEMU, Firecracker, Cloud Hypervisor |
 
 `user` stays the default until the virtle network reaches parity with it. On
@@ -276,9 +276,7 @@ elsewhere and the only NIC they offer today.
 ## Writing a network or an egress
 
 `vmnet` holds the contracts. A `Link` moves Ethernet frames for one guest
-NIC; backends build them from what their VMM offers (`vmnet.QEMUStream` for
-QEMU's stream netdev; a guest agent's frame tunnel will be another). A
-`Network` is what
+NIC; QEMU uses `vmnet.QEMUStream` for its stream netdev. A `Network` is what
 links attach to and returns a `Port` with the guest's address and MAC. An
 `Egress` is one method, `DialFlow`, that returns the connection a guest flow
 is spliced to, or an error wrapping `vmnet.ErrDenied` to refuse it before it
@@ -286,3 +284,11 @@ opens; `vmnet.Passthrough` allows everything and `vmnet.DenyAll` nothing. A
 `Flow` carries the guest's name, its address, the destination as the guest
 addressed it, the name it resolved when the network knows it, and the guest's
 own `vm.Egress`.
+
+A network can also implement `vmnet.StatefulNetwork` to preserve host-side
+state across QEMU suspend/resume. `SaveNetworkState` returns a
+`vmnet.NetworkState` containing DNS bindings and issued tokens;
+`RestoreNetworkState` restores it before the saved NIC attaches. Restore must
+reject conflicts without changing state already used by attached guests.
+The userspace network implements this capability. Established connections
+are not saved, and secret values and permissions remain in the current policy.

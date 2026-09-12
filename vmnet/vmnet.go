@@ -24,9 +24,9 @@ import (
 )
 
 // Link is one L2 attachment: Ethernet frames between a guest NIC and a
-// Network. Backends build links from what their VMM offers (today a QEMU
-// stream socket, see QEMUStream); networks consume them without knowing
-// which.
+// Network. Backends build links from what their VMM offers (for example,
+// a QEMU stream socket, see QEMUStream); networks consume them without
+// knowing which.
 //
 // ReadFrame returns exactly one frame per call and io.ErrShortBuffer when a
 // frame does not fit p, dropping that frame. MTU is the largest payload the

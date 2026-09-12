@@ -8,21 +8,28 @@ import (
 
 	"github.com/miekg/dns"
 
-	"github.com/shazow/virtle/internal/networkstate"
+	"github.com/shazow/virtle/vmnet"
 )
+
+// tokenState is an optional egress capability for preserving tokens while
+// keeping the current policy's secret values and injection permissions.
+type tokenState interface {
+	SaveTokens() map[string]string
+	RestoreTokens(tokens map[string]string, replace bool) error
+}
 
 // SaveNetworkState captures synthetic names and issued tokens for suspend.
 // The caller must stop the guest before saving its host-side state.
-func (n *Network) SaveNetworkState() networkstate.State {
+func (n *Network) SaveNetworkState() vmnet.NetworkState {
 	t := n.fakeIPs
 	t.mu.Lock()
-	state := networkstate.State{FakeIPRange: t.prefix}
+	state := vmnet.NetworkState{FakeIPRange: t.prefix}
 	for e := t.used.Front(); e != nil; e = e.Next() {
 		binding := e.Value.(*fakeIPEntry)
-		state.Bindings = append(state.Bindings, networkstate.Binding{Name: binding.name, Addr: binding.addr})
+		state.Bindings = append(state.Bindings, vmnet.DNSBinding{Name: binding.name, Addr: binding.addr})
 	}
 	t.mu.Unlock()
-	if policy, ok := n.egress.(networkstate.Egress); ok {
+	if policy, ok := n.egress.(tokenState); ok {
 		state.Tokens = policy.SaveTokens()
 	}
 	return state
@@ -31,7 +38,7 @@ func (n *Network) SaveNetworkState() networkstate.State {
 // RestoreNetworkState restores a checkpoint before attaching the saved NIC.
 // Existing bindings may be shared with other guests, so conflicts fail rather
 // than replacing their names or issued tokens.
-func (n *Network) RestoreNetworkState(state networkstate.State) error {
+func (n *Network) RestoreNetworkState(state vmnet.NetworkState) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.closed {
@@ -62,7 +69,7 @@ func (n *Network) RestoreNetworkState(state networkstate.State) error {
 		}
 	}
 	if len(state.Tokens) != 0 {
-		policy, ok := n.egress.(networkstate.Egress)
+		policy, ok := n.egress.(tokenState)
 		if !ok {
 			return fmt.Errorf("the current egress cannot restore saved secret tokens")
 		}
@@ -92,4 +99,4 @@ func (n *Network) RestoreNetworkState(state networkstate.State) error {
 	return nil
 }
 
-var _ networkstate.Network = (*Network)(nil)
+var _ vmnet.StatefulNetwork = (*Network)(nil)

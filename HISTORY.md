@@ -9,6 +9,20 @@ compact before/after examples.
 
 ## 2026-09-12
 
+- Synthetic DNS addresses remain bound for their advertised TTL. Exhausting
+  a configured range returns SERVFAIL until a binding expires instead of
+  redirecting a guest's cached address to another hostname.
+- QEMU suspend saves synthetic DNS bindings and issued secret placeholders
+  with the NIC identity, and restores them before guest traffic resumes.
+  Secret values and permissions still come from the current policy. Suspend
+  state is now `qemu-v2`; older saves require the virtle version that wrote
+  them or a fresh boot.
+- Manifest-loaded QEMU backends preserve user and TAP NICs alongside a
+  virtle NIC. Inspected HTTP protocol upgrades keep their relay connections
+  alive until the stream closes.
+- Concurrent launches sharing a CA directory initialize one consistent
+  certificate/key pair. Interrupted initial publication can be completed
+  from the private bundle without changing its identity.
 - Virtle networks authorize DNS queries through their egress policy and
   proxy them to host DNS by default. `[networks.dns].upstream` selects an
   explicit IP:port for both DNS queries and outbound name resolution.

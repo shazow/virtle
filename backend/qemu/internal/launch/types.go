@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/shazow/virtle/internal/manifest"
+	"github.com/shazow/virtle/internal/networkstate"
 	"github.com/shazow/virtle/vm"
 )
 
@@ -62,6 +63,9 @@ type SuspendState struct {
 	// network, so a resume re-attaches with the lease the guest still holds.
 	NetworkMAC  string `json:"networkMac,omitempty"`
 	NetworkAddr string `json:"networkAddr,omitempty"`
+	// NetworkState preserves synthetic DNS addresses and guest secret tokens
+	// that remain cached in the saved VM's memory.
+	NetworkState *networkstate.State `json:"networkState,omitempty"`
 }
 
 type NotificationSink interface {

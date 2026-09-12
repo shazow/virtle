@@ -15,6 +15,7 @@ import (
 	"github.com/shazow/virtle/backend/qemu/internal/launch"
 	"github.com/shazow/virtle/internal/control"
 	"github.com/shazow/virtle/internal/manifest"
+	"github.com/shazow/virtle/internal/networkstate"
 	"github.com/shazow/virtle/vm"
 	"github.com/shazow/virtle/vmnet"
 )
@@ -70,7 +71,14 @@ func managedNetDevice(mf *manifest.Manifest) *manifest.QEMUNetDevice {
 // the identity it was suspended with.
 func (m *manager) attachNetwork(ctx context.Context, plan *launch.Plan) (*networkAttachment, error) {
 	dev := managedNetDevice(plan.Manifest)
+	var checkpoint *networkstate.State
+	if plan.ResumeState != nil {
+		checkpoint = plan.ResumeState.NetworkState
+	}
 	if dev == nil {
+		if checkpoint != nil {
+			return nil, fmt.Errorf("saved network state requires a virtle network device: %w", errors.ErrUnsupported)
+		}
 		return nil, nil
 	}
 	if m.network == nil {
@@ -94,6 +102,15 @@ func (m *manager) attachNetwork(ctx context.Context, plan *launch.Plan) (*networ
 			return nil, fmt.Errorf("saved network identity: %w", err)
 		}
 		opts.MAC, opts.Addr = mac, addr
+	}
+	if checkpoint != nil {
+		network, ok := m.network.(networkstate.Network)
+		if !ok {
+			return nil, fmt.Errorf("network %q cannot restore saved network state: %w", dev.ID, errors.ErrUnsupported)
+		}
+		if err := network.RestoreNetworkState(*checkpoint); err != nil {
+			return nil, fmt.Errorf("restore network %q state: %w", dev.ID, err)
+		}
 	}
 	mtu := networkMTU(m.network)
 	hostEnd, guestEnd, err := framePair()

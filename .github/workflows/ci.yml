@@ -91,7 +91,7 @@ jobs:
           cache-dependency-path: go.sum
 
       - name: Report API changes
-        uses: shazow/go-whatchanged@d12dd4ef625d4cce7111f484934e9934b47da3b2 # v1.0.0
+        uses: shazow/go-whatchanged@main # unpinned: always use the latest
 
   nix:
     name: Nix

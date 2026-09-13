@@ -1,0 +1,11 @@
+#!/bin/sh
+# udhcpc's script: apply the lease. The root may be read-only, so the
+# resolver file lives on /tmp (where /etc/resolv.conf points).
+case "$1" in
+  bound | renew)
+    ifconfig "$interface" "$ip" netmask "$subnet"
+    route add default gw "$router"
+    echo "nameserver $dns" > /tmp/resolv.conf
+    echo "$ip" > /tmp/ip
+    ;;
+esac

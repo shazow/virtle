@@ -1,12 +1,14 @@
 package manifest
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"net"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -23,16 +25,52 @@ func (d Document) Manifest() (*Manifest, error) {
 	return d.ManifestWithOptions(ResolveOptions{})
 }
 
+// validateHostName rejects VM names whose state lock
+// (<state_dir>/<host_name>.lock, shared by every backend) would land outside
+// the state directory. A separator nests the lock instead; the backends
+// create the directories on the way, so such names keep working.
+func validateHostName(name string) error {
+	clean := filepath.Clean(name)
+	if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("manifest.host_name %q must stay under the state directory", name)
+	}
+	return nil
+}
+
 func (d Document) ManifestWithOptions(options ResolveOptions) (*Manifest, error) {
+	switch d.Backend {
+	case "", BackendQEMU:
+	case BackendFirecracker:
+		return d.firecrackerManifest()
+	case BackendCloudHypervisor:
+		return d.cloudHypervisorManifest(options)
+	default:
+		return nil, fmt.Errorf("manifest.backend must be %s, %s or %s, got %q", BackendQEMU, BackendFirecracker, BackendCloudHypervisor, d.Backend)
+	}
+	if !unconfigured(d.Firecracker) {
+		return nil, fmt.Errorf("manifest.firecracker requires backend = %q", BackendFirecracker)
+	}
+	if !unconfigured(d.CloudHypervisor) {
+		return nil, fmt.Errorf("manifest.cloud-hypervisor requires backend = %q", BackendCloudHypervisor)
+	}
 	d = DocumentWithDefaults(d)
+	d.Mounts = d.Mounts.withVirtioFSDefaults()
+	if err := validateHostName(d.HostName); err != nil {
+		return nil, err
+	}
 	if d.Kernel.Path == "" {
 		return nil, fmt.Errorf("manifest.kernel.path is required")
 	}
-	if d.Kernel.InitrdPath == "" {
-		return nil, fmt.Errorf("manifest.kernel.initrd_path is required")
+	rootIndex, rootParams, err := rootDevice(d.Mounts.Image())
+	if err != nil {
+		return nil, err
+	}
+	if err := validateBootSource(d.Kernel, d.Mounts.Image(), rootIndex); err != nil {
+		return nil, err
 	}
 	host := d.Host.withDefaults()
 	m := &Manifest{
+		Backend: BackendQEMU,
 		Identity: Identity{
 			HostName: d.HostName,
 		},
@@ -67,7 +105,7 @@ func (d Document) ManifestWithOptions(options ResolveOptions) (*Manifest, error)
 		return nil, fmt.Errorf("manifest.qemu.hotplug_ports must not be negative, got %d", d.QEMU.HotplugPorts)
 	}
 	hotplugCount := d.hotplugCount()
-	qemu, err := d.resolveQEMU(host, hotplugCount)
+	qemu, err := d.resolveQEMU(host, hotplugCount, rootParams)
 	if err != nil {
 		return nil, err
 	}
@@ -84,6 +122,9 @@ func (d Document) ManifestWithOptions(options ResolveOptions) (*Manifest, error)
 	}
 	m.Hotplug = hotplug
 	m.WriteFiles = resolveWriteFiles(d.WriteFiles)
+	if m.Egress, err = m.resolveEgress(d); err != nil {
+		return nil, err
+	}
 
 	if err := m.Validate(); err != nil {
 		return nil, err
@@ -104,7 +145,7 @@ func (h HostInput) withDefaults() HostInput {
 	return h
 }
 
-func (d Document) resolveQEMU(host HostInput, hotplugCount int) (QEMU, error) {
+func (d Document) resolveQEMU(host HostInput, hotplugCount int, rootParams []string) (QEMU, error) {
 	machineType := d.Machine.Type
 	graphics := resolveGraphics(d.Graphics)
 	transport := qemuTransport(machineType, d.Mounts, graphics, hotplugCount > 0)
@@ -119,7 +160,7 @@ func (d Document) resolveQEMU(host HostInput, hotplugCount int) (QEMU, error) {
 	if d.Machine.KVM != nil {
 		enableKVM = *d.Machine.KVM
 	}
-	qemuRenderer, err := NewTemplateRenderer(QEMUTemplateProvider{
+	qemuRenderer, err := NewTemplateRendererIn(d.WorkingDir, QEMUTemplateProvider{
 		HostName:   d.HostName,
 		WorkingDir: d.WorkingDir,
 		StateDir:   d.StateDir,
@@ -141,10 +182,14 @@ func (d Document) resolveQEMU(host HostInput, hotplugCount int) (QEMU, error) {
 	}
 	qmpSocket := d.QEMU.QMPSocket
 	guestAgentSocket := d.QEMU.GuestAgentSocket
+	vsockID := "vsock0"
+	if d.VSock.Enabled != nil && !*d.VSock.Enabled {
+		vsockID = ""
+	}
 	sshReadySocket := d.SSH.ReadySocket
 	noGraphic := graphics.IsZero()
 	cpus := resolveCPUCount(d.Machine.VCPU)
-	networks, err := resolveNetwork(d.Networks, d.QEMU.FwdTunnelExec, host, transport, cpus)
+	networks, err := resolveNetwork(d.WorkingDir, d.Networks, d.QEMU.FwdTunnelExec, host, transport, cpus)
 	if err != nil {
 		return QEMU{}, err
 	}
@@ -175,7 +220,7 @@ func (d Document) resolveQEMU(host HostInput, hotplugCount int) (QEMU, error) {
 		Kernel: QEMUKernel{
 			Path:       d.Kernel.Path,
 			InitrdPath: d.Kernel.InitrdPath,
-			Params:     kernelParams(host, serialMode, d.Kernel.Params),
+			Params:     kernelParams(host, serialMode, rootParams, d.Kernel.Params),
 		},
 		SMP: QEMUSMP{
 			CPUs: cpus,
@@ -217,7 +262,7 @@ func (d Document) resolveQEMU(host HostInput, hotplugCount int) (QEMU, error) {
 			Mounts:   resolveQEMUMounts(d.Mounts, host, transport),
 			Network:  networks,
 			VSOCK: QEMUVSOCKDevice{
-				ID:        "vsock0",
+				ID:        vsockID,
 				Transport: transport,
 			},
 		},
@@ -329,11 +374,11 @@ func memoryBackend(host HostInput, hasVirtioFS bool) string {
 	return "default"
 }
 
-// kernelParams assembles the kernel command line: console parameters for
-// the resolved serial mode, virtle's fixed reboot/panic policy, then the
-// manifest's own parameters.
-func kernelParams(host HostInput, serialMode string, extra []string) string {
-	params := make([]string, 0, len(extra)+3)
+// kernelParams assembles the guest command line: console parameters for the
+// serial mode, virtle's fixed reboot/panic policy, the root device (see
+// rootDevice), then the manifest's own parameters, which therefore win.
+func kernelParams(host HostInput, serialMode string, root []string, extra []string) string {
+	params := make([]string, 0, len(extra)+len(root)+3)
 	if serialMode != KernelSerialOff {
 		switch host.System {
 		case "x86_64-linux":
@@ -343,8 +388,65 @@ func kernelParams(host HostInput, serialMode string, extra []string) string {
 		}
 	}
 	params = append(params, "reboot=t", "panic=-1")
+	params = append(params, root...)
 	params = append(params, extra...)
 	return strings.Join(params, " ")
+}
+
+// rootDevice picks the image mount the guest boots from: the one whose
+// target is "/". virtle passes the kernel's root= for it on every backend
+// (virtio-blk devices enumerate as /dev/vda, /dev/vdb, ... in mount order),
+// so one Spec boots the same way under QEMU and Firecracker. It returns the
+// mount's index, or -1, and the kernel parameters that select it. Errors
+// name image mounts by their position among the images
+// (manifest.mounts.image[i]), as the volume validation does.
+func rootDevice(mounts []ImageMountInput) (int, []string, error) {
+	root := -1
+	for i, mount := range mounts {
+		switch mount.Target {
+		case "":
+		case "/":
+			if root >= 0 {
+				return 0, nil, fmt.Errorf("manifest.mounts.image[%d].target: mounts.image[%d] is already the root device", i, root)
+			}
+			root = i
+		default:
+			return 0, nil, fmt.Errorf("manifest.mounts.image[%d].target %q: only \"/\" (the root device) is supported for images at boot", i, mount.Target)
+		}
+	}
+	if root < 0 {
+		return -1, nil, nil
+	}
+	if root >= 26 {
+		return 0, nil, fmt.Errorf("manifest.mounts.image[%d].target: the root device must be among the first 26 images", root)
+	}
+	access := "rw"
+	if mounts[root].ReadOnly {
+		access = "ro"
+	}
+	return root, []string{fmt.Sprintf("root=/dev/vd%c", 'a'+root), access}, nil
+}
+
+// validateBootSource rejects a boot that can only end in a kernel panic:
+// disks but no initrd, and neither a root device nor a root= parameter.
+func validateBootSource(kernel KernelInput, mounts []ImageMountInput, rootIndex int) error {
+	if kernel.InitrdPath != "" || len(mounts) == 0 || rootIndex >= 0 || hasKernelParam(kernel.Params, "root=") {
+		return nil
+	}
+	return fmt.Errorf("manifest.kernel.initrd_path is empty and no disk is the root device: set target = \"/\" on the root image mount (vm.Disk.GuestPath) or pass root= in kernel.params")
+}
+
+// hasKernelParam reports whether any parameter starts with prefix; a single
+// entry may carry several space-separated parameters.
+func hasKernelParam(params []string, prefix string) bool {
+	for _, param := range params {
+		for _, field := range strings.Fields(param) {
+			if strings.HasPrefix(field, prefix) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func kernelSerialMode(kernel KernelInput) (string, error) {
@@ -497,6 +599,11 @@ func (m *Manifest) resolveVirtioFSRuns(mounts []VirtioFSMountInput, options Reso
 			continue
 		}
 		if mount.VirtioFS.Bin == "" && len(mount.VirtioFS.Args) == 0 {
+			// A named socket and no daemon: served by someone else, whose
+			// own arguments decide whether the share is read-only.
+			if mount.ReadOnly && options.Logger != nil {
+				options.Logger.Info("read-only virtiofs share is served by another daemon; read_only is that daemon's to enforce", "tag", mount.Tag, "socket", mount.VirtioFS.Socket)
+			}
 			continue
 		}
 		socketPath, err := m.resolveSocketPath(mount.VirtioFS.Socket)
@@ -520,6 +627,9 @@ func (m *Manifest) resolveVirtioFSRuns(mounts []VirtioFSMountInput, options Reso
 					} else if options.Logger != nil {
 						options.Logger.Info("using existing virtiofs socket", "socket", socketPath)
 					}
+					if mount.ReadOnly && options.Logger != nil {
+						options.Logger.Info("read-only virtiofs share is served by another daemon; read_only is that daemon's to enforce", "tag", mount.Tag, "socket", socketPath)
+					}
 					continue
 				}
 			}
@@ -534,8 +644,15 @@ func (m *Manifest) resolveVirtioFSRuns(mounts []VirtioFSMountInput, options Reso
 				"--shared-dir={{.MountSource}}",
 				"--tag={{.MountTag}}",
 			}
+			if mount.ReadOnly {
+				args = append(args, virtioFSReadOnlyFlag)
+			}
+		} else if mount.ReadOnly && !slices.Contains(args, virtioFSReadOnlyFlag) && options.Logger != nil {
+			// Arguments the manifest spells are used as written: virtle
+			// cannot know what the daemon behind them accepts.
+			options.Logger.Info("read-only virtiofs share runs with the manifest's virtiofs.args; read_only is those arguments' to enforce", "tag", mount.Tag)
 		}
-		runs = append(runs, Run{
+		run := Run{
 			Exec: append([]string{m.resolveOptionalBin(mount.VirtioFS.Bin, defaultVirtioFSBin)}, args...),
 			Env:  []string{"VIRTIOFSD_SOCKET={{.Socket}}"},
 			Vars: VirtioFSTemplateProvider{
@@ -543,7 +660,11 @@ func (m *Manifest) resolveVirtioFSRuns(mounts []VirtioFSMountInput, options Reso
 				SourcePath: m.resolvePath(mount.SourcePath),
 				Tag:        mount.Tag,
 			}.TemplateContext(),
-		})
+		}
+		if err := validateRun(len(runs), run); err != nil {
+			return nil, err
+		}
+		runs = append(runs, run)
 		m.addCleanupFile(mount.VirtioFS.Socket)
 	}
 	return runs, nil
@@ -594,13 +715,18 @@ func (m *Manifest) ResolveHotplugMount(entry MountEntry) (HotplugDevice, error) 
 }
 
 func (m *Manifest) resolveImageHotplug(entry ImageMountInput) (HotplugDevice, error) {
+	if entry.Target != "" {
+		// Only a boot-time image can be the root device; a hotplugged one has
+		// no guest mount point without a guest agent.
+		return HotplugDevice{}, fmt.Errorf("target %q is not supported for hotplugged images", entry.Target)
+	}
 	// The image serial doubles as the hotplug id and may itself be a template.
 	serial := stringValue(entry.Image.Serial)
 	if serial == "" {
 		return HotplugDevice{}, fmt.Errorf("id is required")
 	}
 	format := resolveImageFormat(entry.Image.Format)
-	renderer, err := NewTemplateRenderer(StaticTemplateContext(executor.Context{
+	renderer, err := NewTemplateRendererIn(m.Paths.WorkingDir, StaticTemplateContext(executor.Context{
 		"Serial": serial,
 		"Source": entry.SourcePath,
 		"Format": format,
@@ -629,20 +755,17 @@ func (m *Manifest) resolveImageHotplug(entry ImageMountInput) (HotplugDevice, er
 
 func (m *Manifest) resolveVirtioFSHotplug(mount VirtioFSMountInput) (HotplugDevice, error) {
 	id := mount.Tag
-	socket := mount.VirtioFS.Socket
-	if socket == "" {
-		socket = id + ".sock"
-	}
-	socketPath, err := m.resolveSocketPath(socket)
+	defaultVirtioFSDaemon(&mount)
+	socketPath, err := m.resolveSocketPath(mount.VirtioFS.Socket)
 	if err != nil {
 		return HotplugDevice{}, err
 	}
 	source := m.resolvePath(mount.SourcePath)
 	args := append([]string(nil), mount.VirtioFS.Args...)
 	if len(args) == 0 {
-		args = DefaultVirtioFSArgs(socketPath, source, id)
+		args = DefaultVirtioFSArgs(socketPath, source, id, mount.ReadOnly)
 	} else {
-		renderedArgs, err := renderVirtioFSArgv(args, socketPath, source, id)
+		renderedArgs, err := renderVirtioFSArgv(m.Paths.WorkingDir, args, socketPath, source, id)
 		if err != nil {
 			return HotplugDevice{}, err
 		}
@@ -665,6 +788,27 @@ func (m *Manifest) resolveVirtioFSHotplug(mount VirtioFSMountInput) (HotplugDevi
 // it is left unresolved so the host PATH supplies it.
 const defaultVirtioFSBin = "virtiofsd"
 
+// virtioFSReadOnlyFlag makes virtiofsd refuse every guest write. It is how a
+// read-only share is enforced, so it joins virtle's default arguments for a
+// daemon it starts; arguments the manifest spells (virtiofs.args) and a
+// daemon started by someone else enforce read_only on their own terms.
+const virtioFSReadOnlyFlag = "--readonly"
+
+// defaultVirtioFSDaemon fills in a virtiofs mount that names no socket, the
+// same way on every backend: the socket is <tag>.sock under the state
+// directory and, unless the mount brings its own bin or args, virtle starts
+// virtiofsd from PATH on it. A mount that names a socket and nothing else is
+// served by someone else.
+func defaultVirtioFSDaemon(mount *VirtioFSMountInput) {
+	if mount.VirtioFS.Socket != "" {
+		return
+	}
+	mount.VirtioFS.Socket = mount.Tag + ".sock"
+	if mount.VirtioFS.Bin == "" && len(mount.VirtioFS.Args) == 0 {
+		mount.VirtioFS.Bin = defaultVirtioFSBin
+	}
+}
+
 func (m *Manifest) resolveOptionalBin(bin string, defaultBin string) string {
 	if bin == "" || bin == defaultBin {
 		return defaultBin
@@ -673,6 +817,9 @@ func (m *Manifest) resolveOptionalBin(bin string, defaultBin string) string {
 }
 
 func resolveNetworkHotplug(entry NetworkInput, index int) (HotplugDevice, error) {
+	if entry.DNS != nil {
+		return HotplugDevice{}, fmt.Errorf("manifest.hotplug.networks[%d].dns is not supported; configure DNS on a launch-time virtle network", index)
+	}
 	id := entry.ID
 	if id == "" {
 		id = fmt.Sprintf("net%d", index)
@@ -685,20 +832,9 @@ func resolveNetworkHotplug(entry NetworkInput, index int) (HotplugDevice, error)
 	if mac == "" {
 		mac = defaultNetworkMAC
 	}
-	forward := make([]HotplugForward, 0, len(entry.Forward))
-	for i, fwd := range entry.Forward {
-		normalized, err := normalizeForwardPort(fwd, fmt.Sprintf("forward[%d]", i))
-		if err != nil {
-			return HotplugDevice{}, err
-		}
-		if normalized.From == "guest" {
-			return HotplugDevice{}, fmt.Errorf("forward[%d].from guest is not supported for hotplug networks", i)
-		}
-		forward = append(forward, HotplugForward{
-			Proto: normalized.Proto,
-			Host:  formatPortEndpoint(normalized.Host),
-			Guest: formatPortEndpoint(normalized.Guest),
-		})
+	forward, err := resolveHostForwards(entry.Forward, "hotplug", func(i int) string { return fmt.Sprintf("forward[%d]", i) })
+	if err != nil {
+		return HotplugDevice{}, err
 	}
 	return HotplugDevice{
 		Kind: HotplugKindNet,
@@ -749,16 +885,17 @@ func (m *Manifest) addCleanupFile(path string) {
 	m.CleanupFiles = append(m.CleanupFiles, path)
 }
 
-func resolveNetwork(networks []NetworkInput, fwdTunnelExec []string, host HostInput, transport string, cpus CPUCount) ([]QEMUNetDevice, error) {
+func resolveNetwork(dir string, networks []NetworkInput, fwdTunnelExec []string, host HostInput, transport string, cpus CPUCount) ([]QEMUNetDevice, error) {
 	devices := make([]QEMUNetDevice, 0, len(networks))
+	managed := 0
 	for i, network := range networks {
 		id := network.ID
 		if id == "" {
 			id = defaultNetworkID
 		}
-		backend := network.Type
-		if backend == "" {
-			backend = defaultNetworkType
+		netType := network.Type
+		if netType == "" {
+			netType = defaultNetworkType
 		}
 		mac := network.MAC
 		if mac == "" {
@@ -772,21 +909,119 @@ func resolveNetwork(networks []NetworkInput, fwdTunnelExec []string, host HostIn
 		if cpus.Set && cpus.Value > 1 && transport == "pci" {
 			mqVectors = 2*cpus.Value + 2
 		}
-		forwardOptions, err := resolveForwardPorts(network.Forward, fwdTunnelExec, i)
+		if network.DNS != nil && netType != NetworkTypeVirtle {
+			return nil, fmt.Errorf("manifest.networks[%d].dns applies to type virtle only", i)
+		}
+		if network.Tap != "" && netType != NetworkTypeTAP {
+			return nil, fmt.Errorf("manifest.networks[%d].tap applies to type tap only", i)
+		}
+		device := QEMUNetDevice{
+			ID:         id,
+			MacAddress: mac,
+			Transport:  transport,
+			DisableROM: disableROM,
+			MQVectors:  mqVectors,
+		}
+		switch netType {
+		case NetworkTypeUser:
+			device.Backend = "user"
+			forwardOptions, err := resolveForwardPorts(dir, network.Forward, fwdTunnelExec, i)
+			if err != nil {
+				return nil, err
+			}
+			device.NetdevOptions = forwardOptions
+		case NetworkTypeVirtle:
+			if managed++; managed > 1 {
+				return nil, fmt.Errorf("manifest.networks[%d]: a machine attaches to one virtle network", i)
+			}
+			device.Backend = "stream"
+			device.Managed = true
+			upstream, err := resolveDNSUpstream(network.DNS)
+			if err != nil {
+				return nil, fmt.Errorf("manifest.networks[%d].dns.upstream: %w", i, err)
+			}
+			device.DNSUpstream = upstream
+			// The default MAC is the same address for every machine; on a
+			// shared network each port needs its own, so only a MAC the
+			// manifest chose is requested.
+			if network.MAC == "" || network.MAC == defaultNetworkMAC {
+				device.MacAddress = ""
+			}
+			forwards, err := resolveHostForwards(network.Forward, "virtle", func(j int) string {
+				return fmt.Sprintf("manifest.networks[%d].forward[%d]", i, j)
+			})
+			if err != nil {
+				return nil, err
+			}
+			device.Forward = forwards
+		case NetworkTypeTAP:
+			if len(network.Forward) > 0 {
+				return nil, fmt.Errorf("manifest.networks[%d].forward is not supported on a tap network; the host kernel routes it", i)
+			}
+			device.Backend = "tap"
+			// Without a name the device is QEMU's to pick and set up with
+			// its own ifup/ifdown scripts, as it was before virtle read
+			// the type.
+			if network.Tap != "" {
+				if err := validateTapName(network.Tap); err != nil {
+					return nil, fmt.Errorf("manifest.networks[%d].tap %w", i, err)
+				}
+				device.NetdevOptions = []string{"ifname=" + network.Tap, "script=no", "downscript=no"}
+			}
+		default:
+			// Any other type reaches QEMU verbatim as the -netdev backend,
+			// forwards and all, as every type did before virtle knew the
+			// three above; QEMU decides whether it exists.
+			device.Backend = netType
+			forwardOptions, err := resolveForwardPorts(dir, network.Forward, fwdTunnelExec, i)
+			if err != nil {
+				return nil, err
+			}
+			device.NetdevOptions = forwardOptions
+		}
+		devices = append(devices, device)
+	}
+	return devices, nil
+}
+
+// resolveHostForwards normalizes the host->guest forwards a NIC exposes
+// itself (a hotplugged NIC, a port on a virtle network), which carry no
+// guest->host direction; field names each entry for errors.
+func resolveHostForwards(ports []ForwardPort, network string, field func(i int) string) ([]HotplugForward, error) {
+	forwards := make([]HotplugForward, 0, len(ports))
+	for i, port := range ports {
+		normalized, err := normalizeForwardPort(port, field(i))
 		if err != nil {
 			return nil, err
 		}
-		devices = append(devices, QEMUNetDevice{
-			ID:            id,
-			Backend:       backend,
-			MacAddress:    mac,
-			Transport:     transport,
-			DisableROM:    disableROM,
-			NetdevOptions: forwardOptions,
-			MQVectors:     mqVectors,
+		if normalized.From != "host" {
+			return nil, fmt.Errorf("%s.from guest is not supported on a %s network", field(i), network)
+		}
+		forwards = append(forwards, HotplugForward{
+			Proto: normalized.Proto,
+			Host:  formatPortEndpoint(normalized.Host),
+			Guest: formatPortEndpoint(normalized.Guest),
 		})
 	}
-	return devices, nil
+	return forwards, nil
+}
+
+// validateTapName accepts a Linux interface name, which also keeps QEMU's
+// comma-separated option syntax intact.
+func validateTapName(name string) error {
+	const ifnamsiz = 15
+	if name == "" {
+		return errors.New("is required for type tap")
+	}
+	if len(name) > ifnamsiz {
+		return fmt.Errorf("%q is longer than %d characters", name, ifnamsiz)
+	}
+	for _, r := range name {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-' || r == '.') {
+			return fmt.Errorf("%q is not an interface name", name)
+		}
+	}
+	return nil
 }
 
 func parsePortEndpoint(value string) (PortEndpoint, error) {
@@ -820,17 +1055,11 @@ type normalizedForwardPort struct {
 }
 
 func normalizeForwardPort(port ForwardPort, fieldPath string) (normalizedForwardPort, error) {
-	proto := port.Proto
-	if proto == "" {
-		proto = "tcp"
-	}
+	proto := cmp.Or(port.Proto, "tcp")
 	if proto != "tcp" && proto != "udp" {
 		return normalizedForwardPort{}, fmt.Errorf("%s.proto must be one of tcp or udp", fieldPath)
 	}
-	from := port.From
-	if from == "" {
-		from = "host"
-	}
+	from := cmp.Or(port.From, "host")
 	if from != "host" && from != "guest" {
 		return normalizedForwardPort{}, fmt.Errorf("%s.from must be one of host or guest", fieldPath)
 	}
@@ -854,7 +1083,7 @@ func formatPortEndpoint(endpoint PortEndpoint) string {
 	return net.JoinHostPort(endpoint.Address, strconv.Itoa(endpoint.Port))
 }
 
-func resolveForwardPorts(ports []ForwardPort, fwdTunnelExec []string, networkIndex int) ([]string, error) {
+func resolveForwardPorts(dir string, ports []ForwardPort, fwdTunnelExec []string, networkIndex int) ([]string, error) {
 	options := make([]string, 0, len(ports))
 	if len(fwdTunnelExec) == 0 {
 		fwdTunnelExec = []string{"nc", "{{.Host}}", "{{.Port}}"}
@@ -867,10 +1096,7 @@ func resolveForwardPorts(ports []ForwardPort, fwdTunnelExec []string, networkInd
 		if normalized.From == "host" {
 			options = append(options, fmt.Sprintf("hostfwd=%s:%s:%d-%s:%d", normalized.Proto, normalized.Host.Address, normalized.Host.Port, normalized.Guest.Address, normalized.Guest.Port))
 		} else {
-			if err := rejectLegacyFwdTunnelExecEnv(fwdTunnelExec); err != nil {
-				return nil, fmt.Errorf("manifest.qemu.fwd_tunnel_exec (manifest.networks[%d].forward[%d]): %w", networkIndex, i, err)
-			}
-			command, err := renderFwdTunnelExec(fwdTunnelExec, normalized.Host)
+			command, err := renderFwdTunnelExec(dir, fwdTunnelExec, normalized.Host)
 			if err != nil {
 				return nil, fmt.Errorf("manifest.qemu.fwd_tunnel_exec (manifest.networks[%d].forward[%d]): %w", networkIndex, i, err)
 			}
@@ -880,20 +1106,8 @@ func resolveForwardPorts(ports []ForwardPort, fwdTunnelExec []string, networkInd
 	return options, nil
 }
 
-func rejectLegacyFwdTunnelExecEnv(exec []string) error {
-	for i, arg := range exec {
-		switch arg {
-		case "$HOST":
-			return fmt.Errorf("exec[%d] uses legacy $HOST; use {{.Host}}", i)
-		case "$PORT":
-			return fmt.Errorf("exec[%d] uses legacy $PORT; use {{.Port}}", i)
-		}
-	}
-	return nil
-}
-
-func renderFwdTunnelExec(exec []string, hostEndpoint PortEndpoint) ([]string, error) {
-	renderer, err := NewTemplateRenderer(ForwardTemplateProvider{
+func renderFwdTunnelExec(dir string, exec []string, hostEndpoint PortEndpoint) ([]string, error) {
+	renderer, err := NewTemplateRendererIn(dir, ForwardTemplateProvider{
 		Host: hostEndpoint.Address,
 		Port: hostEndpoint.Port,
 	})
@@ -966,8 +1180,8 @@ func resolveImageFormat(format string) string {
 	return format
 }
 
-func renderVirtioFSArgv(argv []string, socketPath string, source string, tag string) ([]string, error) {
-	renderer, err := NewTemplateRenderer(VirtioFSTemplateProvider{
+func renderVirtioFSArgv(dir string, argv []string, socketPath string, source string, tag string) ([]string, error) {
+	renderer, err := NewTemplateRendererIn(dir, VirtioFSTemplateProvider{
 		SocketPath: socketPath,
 		SourcePath: source,
 		Tag:        tag,

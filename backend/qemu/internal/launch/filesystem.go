@@ -5,14 +5,10 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
-	"os/user"
 	"path/filepath"
-	"strconv"
 	"syscall"
 
-	backendfile "github.com/diskfs/go-diskfs/backend/file"
-	"github.com/diskfs/go-diskfs/filesystem/ext4"
+	"github.com/shazow/virtle/internal/diskimage"
 	"github.com/shazow/virtle/internal/manifest"
 )
 
@@ -32,7 +28,7 @@ func EnsurePersistenceDirectory(path string, runAsUser string) error {
 	mode := privateDirectoryMode
 	gid := -1
 	if runAsUser != "" {
-		_, resolvedGID, err := lookupUserIDs(runAsUser)
+		_, resolvedGID, err := diskimage.LookupOwner(runAsUser)
 		if err != nil {
 			return err
 		}
@@ -107,7 +103,7 @@ func createPrivateFile(path string, runAsUser string) (*os.File, error) {
 		return nil, err
 	}
 	if runAsUser != "" {
-		uid, gid, err := lookupUserIDs(runAsUser)
+		uid, gid, err := diskimage.LookupOwner(runAsUser)
 		if err != nil {
 			return nil, err
 		}
@@ -119,74 +115,19 @@ func createPrivateFile(path string, runAsUser string) (*os.File, error) {
 	return file, nil
 }
 
-func lookupUserIDs(name string) (int, int, error) {
-	account, err := user.Lookup(name)
-	if err != nil {
-		return 0, 0, fmt.Errorf("look up qemu user %q: %w", name, err)
-	}
-	uid, err := strconv.Atoi(account.Uid)
-	if err != nil {
-		return 0, 0, fmt.Errorf("parse uid %q for qemu user %q: %w", account.Uid, name, err)
-	}
-	gid, err := strconv.Atoi(account.Gid)
-	if err != nil {
-		return 0, 0, fmt.Errorf("parse gid %q for qemu user %q: %w", account.Gid, name, err)
-	}
-	return uid, gid, nil
+// EnsureVolumeImage creates the volume image unless it already exists and
+// reports whether it did.
+func EnsureVolumeImage(volume manifest.Volume, runAsUser string) (bool, error) {
+	return diskimage.Ensure(volumeImage(volume, runAsUser))
 }
 
-// CreateVolumeImage creates a volume image and optionally assigns the new file
-// to the host account configured for privilege-dropped QEMU.
-func CreateVolumeImage(volume manifest.Volume, runAsUser string) error {
-	sizeBytes := volume.Size.Bytes().Int64()
-	file, err := createPrivateFile(volume.ImagePath, runAsUser)
-	if err != nil {
-		return fmt.Errorf("create volume image %q: %w", volume.ImagePath, err)
+func volumeImage(volume manifest.Volume, runAsUser string) diskimage.Image {
+	return diskimage.Image{
+		Path:  volume.ImagePath,
+		Size:  volume.Size.Bytes().Int64(),
+		Label: volume.Label,
+		Owner: runAsUser,
 	}
-
-	created := false
-	defer func() {
-		if !created {
-			_ = os.Remove(volume.ImagePath)
-		}
-	}()
-
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("close volume image %q: %w", volume.ImagePath, err)
-	}
-
-	if chattrPath, lookErr := exec.LookPath("chattr"); lookErr == nil {
-		cmd := exec.Command(chattrPath, "+C", volume.ImagePath)
-		_ = cmd.Run()
-	}
-
-	if err := os.Truncate(volume.ImagePath, sizeBytes); err != nil {
-		return fmt.Errorf("truncate volume image %q: %w", volume.ImagePath, err)
-	}
-
-	image, err := backendfile.OpenFromPath(volume.ImagePath, false)
-	if err != nil {
-		return fmt.Errorf("open volume image %q: %w", volume.ImagePath, err)
-	}
-	defer image.Close()
-
-	params := &ext4.Params{}
-	if volume.Label != "" {
-		params.VolumeName = volume.Label
-	}
-	params.SectorsPerBlock = 8
-	fs, err := ext4.Create(image, sizeBytes, 0, int64(ext4.SectorSize512), params)
-	if err != nil {
-		return fmt.Errorf("format ext4 volume image %q: %w", volume.ImagePath, err)
-	}
-	if volume.Label == "" {
-		if err := fs.SetLabel(""); err != nil {
-			return fmt.Errorf("clear default ext4 volume label for %q: %w", volume.ImagePath, err)
-		}
-	}
-
-	created = true
-	return nil
 }
 
 var ErrStaleSocket = errors.New("stale socket")

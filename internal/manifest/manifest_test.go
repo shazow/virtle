@@ -118,6 +118,30 @@ func TestLoadRejectsTrailingData(t *testing.T) {
 	}
 }
 
+// TestDocumentVirtioFSMountDefaultsItsDaemon covers a QEMU manifest share
+// that names no socket: it gets <tag>.sock and virtle's virtiofsd, as on
+// the other backends and the Go API.
+func TestDocumentVirtioFSMountDefaultsItsDaemon(t *testing.T) {
+	document := validDocument()
+	mount := document.Mounts[0].(VirtioFSMountInput)
+	mount.VirtioFS = VirtioFSInput{}
+	document.Mounts[0] = mount
+
+	manifest, err := document.Manifest()
+	if err != nil {
+		t.Fatalf("resolve manifest: %v", err)
+	}
+	if len(manifest.Run) != 1 || manifest.Run[0].Exec[0] != "virtiofsd" {
+		t.Fatalf("expected virtle's virtiofsd run, got %#v", manifest.Run)
+	}
+	if got, want := manifest.QEMU.Devices.VirtioFS[0].SocketPath, mount.Tag+".sock"; got != want {
+		t.Fatalf("share socket = %q, want %q", got, want)
+	}
+	if !reflect.DeepEqual(manifest.CleanupFiles, []string{mount.Tag + ".sock"}) {
+		t.Fatalf("cleanup files = %q", manifest.CleanupFiles)
+	}
+}
+
 func TestDocumentManagedVirtioFSDefaultBinUsesPATH(t *testing.T) {
 	document := validDocument()
 	mount := document.Mounts[0].(VirtioFSMountInput)
@@ -357,11 +381,11 @@ func TestDocumentRunValidation(t *testing.T) {
 			wantErr: `vars key "Workspace" is reserved`,
 		},
 		{
-			name: "bare workspace template",
+			name: "invalid command template",
 			run: RunInput{
-				Exec: []string{"proxy", "{{.Workspace}}"},
+				Exec: []string{"proxy", "{{.Workspace"},
 			},
-			wantErr: `uses {{.Workspace}}; use {{.Workspace.GuestPath}} or {{.Workspace.HostPath}}`,
+			wantErr: "manifest.run[0].exec[1]",
 		},
 		{
 			name:    "missing exec",
@@ -376,14 +400,18 @@ func TestDocumentRunValidation(t *testing.T) {
 			wantErr: "exec[0] is required",
 		},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
-			document := validDocument()
-			document.Run = []RunInput{tt.run}
-			_, err := document.Manifest()
-			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-				t.Fatalf("expected %q error, got %v", tt.wantErr, err)
-			}
-		})
+		for _, backend := range []string{BackendQEMU, BackendFirecracker, BackendCloudHypervisor} {
+			t.Run(backend+"/"+tt.name, func(t *testing.T) {
+				document := seededDocument()
+				document.Backend = backend
+				document.Kernel.Path = "kernel"
+				document.Run = []RunInput{tt.run}
+				_, err := document.Manifest()
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("expected %q error, got %v", tt.wantErr, err)
+				}
+			})
+		}
 	}
 }
 
@@ -975,11 +1003,35 @@ func TestDocumentSSHAutoprovisionResolvesToManifest(t *testing.T) {
 	}
 }
 
+func TestManifestResolvesPersistenceStateDir(t *testing.T) {
+	for _, test := range []struct {
+		name, baseDir, stateDir, wantBase, wantState string
+	}{
+		{"working directory fallback", "", "", "/work", "/work"},
+		{"base directory fallback", ".base", "", "/work/.base", "/work/.base"},
+		{"separate state directory", ".base", ".state", "/work/.base", "/work/.state"},
+		{"absolute state directory", ".base", "/state", "/work/.base", "/state"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			m := Manifest{
+				Paths:       Paths{WorkingDir: "/work", RuntimeDir: RuntimeDir{Mode: RuntimeDirPath, Path: ".runtime"}},
+				Persistence: Persistence{BaseDir: test.baseDir, StateDir: test.stateDir},
+			}
+			if got := m.ResolvedPersistenceBaseDir(); got != test.wantBase {
+				t.Fatalf("base directory = %q, want %q", got, test.wantBase)
+			}
+			if got := m.ResolvedPersistenceStateDir(); got != test.wantState {
+				t.Fatalf("state directory = %q, want %q", got, test.wantState)
+			}
+		})
+	}
+}
+
 func TestManifestResolvesSocketsFromRuntimeDir(t *testing.T) {
 	runtimeDir := t.TempDir()
+	t.Cleanup(xdg.Reload)
 	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
 	xdg.Reload()
-	t.Cleanup(xdg.Reload)
 
 	tests := []struct {
 		name       string
@@ -991,7 +1043,7 @@ func TestManifestResolvesSocketsFromRuntimeDir(t *testing.T) {
 		wantReady  string
 	}{
 		{
-			name:       "legacy working dir",
+			name:       "working directory",
 			runtimeDir: RuntimeDir{},
 			socketPath: "fs.sock",
 			wantSocket: "/tmp/work/fs.sock",
@@ -1000,7 +1052,7 @@ func TestManifestResolvesSocketsFromRuntimeDir(t *testing.T) {
 			wantReady:  "/tmp/work/ssh-ready.sock",
 		},
 		{
-			name:       "default runtime dir",
+			name:       "XDG runtime directory",
 			runtimeDir: RuntimeDir{Mode: RuntimeDirXDG},
 			socketPath: "fs.sock",
 			wantSocket: filepath.Join(runtimeDir, "agentspace", "agent-sandbox", "fs.sock"),
@@ -1041,10 +1093,14 @@ func TestManifestResolvesSocketsFromRuntimeDir(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			manifest := validManifest()
 			manifest.Paths.RuntimeDir = tt.runtimeDir
+			manifest.Persistence.StateDir = ".state"
 			manifest.CleanupFiles = []string{tt.socketPath}
 			manifest.QEMU.Devices.VirtioFS[0].SocketPath = tt.socketPath
 			manifest.QEMU.GuestAgent.SocketPath = "qga.sock"
 			manifest.QEMU.SSHReady.SocketPath = "ssh-ready.sock"
+			if got := manifest.ResolvedPersistenceStateDir(); got != "/tmp/work/.state" {
+				t.Fatalf("state directory = %q, want /tmp/work/.state", got)
+			}
 			if tt.name == "absolute socket path bypasses runtime dir" {
 				manifest.QEMU.QMP.SocketPath = "/tmp/explicit-qmp.sock"
 				manifest.QEMU.GuestAgent.SocketPath = "/tmp/explicit-qga.sock"
@@ -2277,7 +2333,7 @@ func TestDocumentHotplugNetworkForwardValidation(t *testing.T) {
 				Host:  "127.0.0.1:2223",
 				Guest: "10.0.2.15:22",
 			},
-			wantError: "manifest.hotplug.networks[0]: forward[0].from guest is not supported for hotplug networks",
+			wantError: "manifest.hotplug.networks[0]: forward[0].from guest is not supported on a hotplug network",
 		},
 	}
 
@@ -2486,6 +2542,13 @@ func TestDocumentTypedHotplugValidation(t *testing.T) {
 				document.Hotplug = HotplugInput{Mounts: MountsInput{ImageMountInput{SourcePath: "data.raw"}}}
 			},
 			want: "id is required",
+		},
+		{
+			name: "target on a hotplugged image",
+			mutate: func(document *Document) {
+				document.Hotplug = HotplugInput{Mounts: MountsInput{ImageMountInput{SourcePath: "data.raw", Target: "/data", Image: ImageInput{Serial: stringPtr("data")}}}}
+			},
+			want: `manifest.hotplug.mounts[0]: target "/data" is not supported for hotplugged images`,
 		},
 	}
 

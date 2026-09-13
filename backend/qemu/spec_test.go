@@ -2,9 +2,12 @@ package qemu
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"log/slog"
 	"maps"
 	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -13,6 +16,7 @@ import (
 	imanifest "github.com/shazow/virtle/internal/manifest"
 	"github.com/shazow/virtle/units"
 	"github.com/shazow/virtle/vm"
+	"github.com/shazow/virtle/vmnet"
 )
 
 func TestBackendLoggersAreConfiguredIndependently(t *testing.T) {
@@ -192,6 +196,41 @@ func TestSpecDocumentAcceleration(t *testing.T) {
 	}
 }
 
+// A Spec without Dir works in the process working directory, as for
+// exec.Cmd.Dir, while its runtime state goes to the directory Start
+// created for it alone.
+func TestResolveSpecWithoutDirUsesProcessWorkingDirectory(t *testing.T) {
+	t.Chdir(t.TempDir())
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := t.TempDir()
+	mf, err := (&Backend{}).resolveSpec(&vm.Spec{Kernel: vm.Kernel{Path: "vmlinuz", Initrd: "initrd.img"}}, state, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatalf("resolveSpec: %v", err)
+	}
+	if got := mf.Paths.WorkingDir; got != cwd {
+		t.Errorf("working dir = %q, want the process working directory %q", got, cwd)
+	}
+	if got := mf.ResolvedPersistenceStateDir(); got != state {
+		t.Errorf("state dir = %q, want %q", got, state)
+	}
+	if got := mf.ResolvedLockPath(); filepath.Dir(got) != state {
+		t.Errorf("lock path = %q, want it under the state directory %q", got, state)
+	}
+}
+
+// TestResumeRequiresDir: the matching Suspend rule lives in the VM runtime
+// (vmm.TestStartVMRefusesSuspendWithEphemeralState), where the control
+// socket's suspend request is refused as well.
+func TestResumeRequiresDir(t *testing.T) {
+	_, err := (&Backend{}).Resume(t.Context(), &vm.Spec{Kernel: vm.Kernel{Path: "vmlinuz", Initrd: "initrd.img"}})
+	if err == nil || !strings.Contains(err.Error(), "Dir") {
+		t.Errorf("Resume without Dir = %v, want an error naming vm.Spec.Dir", err)
+	}
+}
+
 func TestSpecDocumentRequiresKernel(t *testing.T) {
 	if _, err := specDocument(&vm.Spec{Dir: "/work"}, &Backend{}, nil); err == nil {
 		t.Fatal("expected error for missing kernel")
@@ -202,6 +241,18 @@ func TestSpecDocumentRejectsUnalignedMemory(t *testing.T) {
 	spec := &vm.Spec{Kernel: vm.Kernel{Path: "k", Initrd: "i"}, Memory: 100 * units.Kibibyte, Dir: "/work"}
 	if _, err := specDocument(spec, &Backend{}, nil); err == nil {
 		t.Fatal("expected error for non-MiB-aligned memory")
+	}
+}
+
+// TestSpecRejectsNonRootGuestPath: only "/" (the root device) has a meaning
+// without a guest agent, so any other mount point is refused rather than
+// silently ignored, as on Firecracker.
+func TestSpecRejectsNonRootGuestPath(t *testing.T) {
+	spec := testSpec()
+	spec.Disks = []vm.Disk{{Path: "data.img", GuestPath: "/data"}}
+	_, err := specDocument(spec, &Backend{}, nil)
+	if !errors.Is(err, errors.ErrUnsupported) || !strings.Contains(err.Error(), "GuestPath") {
+		t.Fatalf("GuestPath /data = %v, want ErrUnsupported naming vm.Disk.GuestPath", err)
 	}
 }
 
@@ -227,7 +278,7 @@ func TestSpecDocumentOverlaysBase(t *testing.T) {
 			VirtioFS: imanifest.VirtioFSInput{
 				Socket: "custom.sock",
 				Bin:    "/custom/virtiofsd",
-				Args:   []string{"--socket={{.Socket}}", "--source={{.MountSource}}", "--tag={{.MountTag}}"},
+				Args:   []string{"--socket={{.Socket}}", "--source={{.MountSource}}", "--tag={{.MountTag}}", "--readonly"},
 			},
 		},
 		imanifest.NinePMountInput{
@@ -272,7 +323,7 @@ func TestSpecDocumentOverlaysBase(t *testing.T) {
 		Memory: 4096 * units.Mebibyte,
 		Kernel: vm.Kernel{Path: "vmlinuz", Initrd: "initrd.img"},
 		Shares: []vm.Share{{Tag: "src", HostPath: "/host/new", GuestPath: "/workspace", ReadOnly: true}},
-		Disks:  []vm.Disk{{Path: "new.qcow2", Format: "qcow2", Size: 256 * units.Mebibyte}},
+		Disks:  []vm.Disk{{Path: "new.qcow2", Format: "qcow2", Size: 256 * units.Mebibyte, ReadOnly: true}},
 		Ports:  []vm.Forward{{Proto: "udp", HostAddr: "127.0.0.1:8080", GuestAddr: "10.0.2.15:80"}},
 		Files:  []vm.File{{GuestPath: "/etc/new", Content: strings.NewReader("new content"), Mode: 0o640}},
 	}
@@ -299,7 +350,7 @@ func TestSpecDocumentOverlaysBase(t *testing.T) {
 	if len(runs) != 1 {
 		t.Fatalf("runs = %+v, want one virtiofs helper", runs)
 	}
-	if got, want := runs[0].Exec, []string{"/custom/virtiofsd", "--socket=/state/custom.sock", "--source=/host/new", "--tag=src"}; !reflect.DeepEqual(got, want) {
+	if got, want := runs[0].Exec, []string{"/custom/virtiofsd", "--socket=/state/custom.sock", "--source=/host/new", "--tag=src", "--readonly"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("virtiofs helper = %#v, want %#v", got, want)
 	}
 	if got := mf.QEMU.Devices.VirtioFS; len(got) != 1 || got[0].Tag != "src" || got[0].SocketPath != "custom.sock" {
@@ -335,5 +386,128 @@ func TestSpecDocumentOverlaysBase(t *testing.T) {
 	}
 	if got := files[0]; got.GuestPath != "/etc/backend.conf" || got.Content.Kind != imanifest.WriteFileContentPath || got.Content.Path != "/work/host.conf" || !got.WriteBack {
 		t.Errorf("backend-owned host file = %+v", got)
+	}
+}
+
+// fakeVMNet stands in for a vmnet.Network that is never attached to.
+type fakeVMNet struct{}
+
+func (fakeVMNet) MTU() int { return 1500 }
+
+func (fakeVMNet) Attach(context.Context, vmnet.Link, vmnet.AttachOptions) (vmnet.Port, error) {
+	return nil, errors.New("not attached in this test")
+}
+
+func TestSpecDocumentAppliesLink(t *testing.T) {
+	network := fakeVMNet{}
+	for name, tc := range map[string]struct {
+		cfg      Backend
+		wantType string
+		wantTap  string
+		wantErr  error
+		anyErr   bool
+	}{
+		"default":                {cfg: Backend{}, wantType: "user"},
+		"network selects stream": {cfg: Backend{Network: network}, wantType: "virtle"},
+		"stream":                 {cfg: Backend{Network: network, Link: Stream{}}, wantType: "virtle"},
+		"user":                   {cfg: Backend{Link: User{}}, wantType: "user"},
+		"tap":                    {cfg: Backend{Link: TAP{Name: "tap0"}}, wantType: "tap", wantTap: "tap0"},
+		"stream without network": {cfg: Backend{Link: Stream{}}, wantErr: errors.ErrUnsupported},
+		"user with network":      {cfg: Backend{Network: network, Link: User{}}, wantErr: errors.ErrUnsupported},
+		"tap with network":       {cfg: Backend{Network: network, Link: TAP{Name: "tap0"}}, wantErr: errors.ErrUnsupported},
+		"tap without name":       {cfg: Backend{Link: TAP{}}, anyErr: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			doc, err := specDocument(testSpec(), &tc.cfg, nil)
+			switch {
+			case tc.wantErr != nil:
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("error = %v, want %v", err, tc.wantErr)
+				}
+				return
+			case tc.anyErr:
+				if err == nil {
+					t.Fatal("specDocument succeeded")
+				}
+				return
+			case err != nil:
+				t.Fatalf("specDocument: %v", err)
+			}
+			if len(doc.Networks) != 1 || doc.Networks[0].Type != tc.wantType || doc.Networks[0].Tap != tc.wantTap {
+				t.Fatalf("networks = %+v, want one of type %q tap %q", doc.Networks, tc.wantType, tc.wantTap)
+			}
+		})
+	}
+
+	// A Network-backed document resolves to a managed NIC carrying the
+	// Spec's forwards for the port, with no slirp options.
+	doc, err := specDocument(testSpec(), &Backend{Network: network}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mf, err := doc.Manifest()
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	devices := mf.QEMU.Devices.Network
+	if len(devices) != 1 || !devices[0].Managed || devices[0].Backend != "stream" || len(devices[0].NetdevOptions) != 0 {
+		t.Fatalf("network devices = %+v, want one managed stream device", devices)
+	}
+	if want := []imanifest.HotplugForward{{Proto: "tcp", Host: "127.0.0.1:8080", Guest: "10.0.2.15:80"}}; !reflect.DeepEqual(devices[0].Forward, want) {
+		t.Fatalf("forwards = %+v, want %+v", devices[0].Forward, want)
+	}
+}
+
+func TestResolveSpecKeepsManifestNetworkTypes(t *testing.T) {
+	doc, err := imanifest.DecodeDocumentBytes([]byte(`
+[kernel]
+path = "vmlinuz"
+
+[[networks]]
+id = "managed"
+type = "virtle"
+
+[[networks]]
+id = "default"
+
+[[networks]]
+id = "slirp"
+type = "user"
+forward = [{ from = "guest", host = "127.0.0.1:2000", guest = "10.0.2.15:20" }]
+
+[[networks]]
+id = "host"
+type = "tap"
+tap = "tap0"
+`), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The loader sets Network for the virtle NIC and leaves Link nil. Use
+	// the same backend construction and resolution path that Start uses.
+	b := NewBackendFromDocument(doc, Backend{Network: fakeVMNet{}}).(*Backend)
+	mf, err := b.resolveSpec(&vm.Spec{}, "", b.logger())
+	if err != nil {
+		t.Fatalf("resolve mixed network manifest: %v", err)
+	}
+	devices := mf.QEMU.Devices.Network
+	want := []struct {
+		id, backend string
+		managed     bool
+		options     []string
+	}{
+		{id: "managed", backend: "stream", managed: true},
+		{id: "default", backend: "user"},
+		{id: "slirp", backend: "user", options: []string{"guestfwd=tcp:10.0.2.15:20-cmd:nc 127.0.0.1 2000"}},
+		{id: "host", backend: "tap", options: []string{"ifname=tap0", "script=no", "downscript=no"}},
+	}
+	if len(devices) != len(want) {
+		t.Fatalf("network devices = %+v, want %d", devices, len(want))
+	}
+	for i, expected := range want {
+		got := devices[i]
+		if got.ID != expected.id || got.Backend != expected.backend || got.Managed != expected.managed || !slices.Equal(got.NetdevOptions, expected.options) {
+			t.Errorf("network %d = %+v, want %+v", i, got, expected)
+		}
 	}
 }

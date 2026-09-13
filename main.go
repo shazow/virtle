@@ -1,4 +1,4 @@
-// Command virtle launches and controls QEMU sandbox VMs described by a
+// Command virtle launches and controls sandbox VMs described by a
 // manifest. Run virtle --help for the command list; see README.md for the
 // manifest format.
 package main
@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -19,11 +20,14 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/jessevdk/go-flags"
 	"github.com/shazow/virtle/backend"
+	"github.com/shazow/virtle/backend/cloudhypervisor"
+	"github.com/shazow/virtle/backend/firecracker"
 	"github.com/shazow/virtle/backend/qemu"
-	"github.com/shazow/virtle/backend/qemu/session"
+	qemusession "github.com/shazow/virtle/backend/qemu/session"
 	"github.com/shazow/virtle/internal/control"
 	"github.com/shazow/virtle/internal/manifest"
 	manifestschema "github.com/shazow/virtle/internal/manifest/schema"
+	"github.com/shazow/virtle/internal/session"
 	manifestapi "github.com/shazow/virtle/manifest"
 )
 
@@ -39,7 +43,7 @@ type Options struct {
 		Args struct {
 			RemoteCommand []string `positional-arg-name:"remote-cmd"`
 		} `positional-args:"yes"`
-	} `command:"launch" description:"Launch a virtiofs + ssh sandbox session" long-description:"Start configured host-side run processes, launch QEMU directly, then optionally attach over ssh."`
+	} `command:"launch" description:"Launch a virtual machine session" long-description:"Launch the selected backend, then optionally attach over SSH when supported."`
 
 	Suspend struct{} `command:"suspend" description:"Suspend a running sandbox session" long-description:"Save QEMU state to disk and exit the launch session."`
 
@@ -91,21 +95,34 @@ func runLaunch(options *Options) error {
 	if err != nil {
 		return fmt.Errorf("load manifest %q: %w", resolvedPath, err)
 	}
-	if qemuBackend, ok := b.(*qemu.Backend); ok {
-		qemuBackend.Logger = rootLogger
-		qemuBackend.ConsoleOutput = os.Stderr
+	if closer, ok := b.(io.Closer); ok {
+		defer closer.Close() // the network the loader built, once the session is over
+	}
+	opts := session.Options{
+		Resume:        session.ResumeMode(options.Launch.Resume),
+		SSH:           options.Launch.SSH,
+		RemoteCommand: options.Launch.Args.RemoteCommand,
+		Logger:        rootLogger,
+	}
+	// The CLI is the driver: it knows which backend the manifest selected and
+	// wires that backend's logging and CLI-only session adapters explicitly.
+	switch b := b.(type) {
+	case *qemu.Backend:
+		b.Logger = rootLogger
+		b.ConsoleOutput = os.Stderr
+		opts.Hooks = qemusession.Hooks()
+	case *firecracker.Backend:
+		b.Logger = rootLogger
+		b.ConsoleOutput = os.Stderr
+	case *cloudhypervisor.Backend:
+		b.Logger = rootLogger
+		b.ConsoleOutput = os.Stderr
 	}
 	loaded, err := doc.ManifestWithOptions(manifest.ResolveOptions{Logger: rootLogger.With("package", "manifest")})
 	if err != nil {
 		return fmt.Errorf("load manifest %q: %w", resolvedPath, err)
 	}
-
-	return session.Run(context.Background(), b, spec, loaded, session.Options{
-		Resume:        options.Launch.Resume,
-		SSH:           options.Launch.SSH,
-		RemoteCommand: options.Launch.Args.RemoteCommand,
-		Logger:        rootLogger,
-	})
+	return session.Run(context.Background(), b, spec, loaded, opts)
 }
 
 // controlSession loads the manifest, resolves its control socket, and returns

@@ -1,8 +1,6 @@
 // Package qemu implements a virtle backend that launches virtual machines
 // with QEMU. Backend.RemoteControl selects the guest-control transport
-// wired into Machine.RemoteControl: QGA (the QEMU Guest Agent, equivalent
-// to the virtle CLI today) now, a virtle-native guest daemon transport
-// later.
+// wired into Machine.RemoteControl: QGA (the QEMU Guest Agent).
 //
 // # Resource limits
 //
@@ -25,11 +23,12 @@ import (
 	"os"
 
 	"github.com/shazow/virtle/backend"
-	"github.com/shazow/virtle/backend/qemu/internal/sessionbridge"
 	"github.com/shazow/virtle/backend/qemu/internal/vmm"
 	imanifest "github.com/shazow/virtle/internal/manifest"
+	"github.com/shazow/virtle/internal/sessionbridge"
 	"github.com/shazow/virtle/units"
 	"github.com/shazow/virtle/vm"
+	"github.com/shazow/virtle/vmnet"
 )
 
 // DefaultMemory is the guest memory size used when vm.Spec.Memory is zero.
@@ -73,6 +72,26 @@ type Backend struct {
 	// the PCI transport (as any hotplug configuration does).
 	HotplugPorts int
 
+	// DisableVSock omits the vhost-vsock device, so the host needs no
+	// /dev/vhost-vsock and no CID is allocated. Guests then have no vsock
+	// transport for SSH; guest-agent control over virtio-serial still works.
+	DisableVSock bool
+
+	// Network attaches the guest's NIC to a network virtle runs (see
+	// vmnet): the network fixes the guest's address and MAC, dials its
+	// traffic through the network's Egress, and exposes Spec.Ports on its
+	// port, so Attach(vm.Forward) needs no hotplug ports and the host can
+	// dial the guest directly; Status reports the address. Nil keeps QEMU's
+	// built-in user networking, today's default, until the userspace
+	// network reaches parity with it.
+	Network vmnet.Network
+
+	// Link selects the guest NIC's frame path: User (QEMU's built-in user
+	// networking), TAP (a host TAP device), or Stream (frames to Network).
+	// Nil means User without a Network and Stream with one. A manifest.Load
+	// backend leaves it nil and follows the manifest's [[networks]] type.
+	Link Link
+
 	// RemoteControl selects the guest-control transport wired into
 	// Machine.RemoteControl, declaring what the VM image runs. Nil
 	// declares an image with no control agent: guest-dependent features
@@ -89,14 +108,12 @@ type Backend struct {
 	// is os.Stderr.
 	ConsoleOutput io.Writer
 
-	doc *imanifest.Document // base document of a manifest.Load backend; nil when configured in Go
-
-	disableVSock bool // integration-only: nested CI guests have no vhost-vsock device
+	doc          *imanifest.Document // base document of a manifest.Load backend; nil when configured in Go
+	ownedNetwork io.Closer           // a Network manifest.Load built for the document, released by Close
 }
 
 // RemoteControl is a guest-control transport for Backend.RemoteControl.
-// It is sealed (unexported method): QGA today, the virtle-native guest
-// daemon later. Each transport carries its own knobs.
+// The supported transport is QGA.
 type RemoteControl interface{ remoteControl() }
 
 // QGA is the qemu-guest-agent transport: the guest image runs
@@ -128,10 +145,8 @@ func (b *Backend) consoleOutput() io.Writer {
 
 func (b *Backend) hasRemoteControl() bool { return b.RemoteControl != nil }
 
-// StateVersion implements backend.Resumer: it reports the suspend-state
-// version this backend's machinery stamps on saves and compares on
-// resume. Only an exact match is resumable, since the saved VM state is a
-// QEMU migration stream.
+// StateVersion reports the suspend-state format this backend writes and can
+// resume. The format includes the QEMU migration stream and host network state.
 func (b *Backend) StateVersion() string { return vmm.StateVersion }
 
 // NewBackendFromDocument is the bridge for the public manifest package:
@@ -144,8 +159,24 @@ func NewBackendFromDocument(doc imanifest.Document, b Backend) backend.Backend {
 	if b.RemoteControl == nil {
 		b.RemoteControl = QGA{}
 	}
+	if closer, ok := b.Network.(io.Closer); ok {
+		// The loader built this network for the document; nobody else
+		// holds it.
+		b.ownedNetwork = closer
+	}
 	b.doc = &doc
 	return &b
+}
+
+// Close releases what the backend owns beyond its machines: the network
+// manifest.Load built for a [[networks]] entry of type virtle. A Network
+// the caller set is the caller's to close. Machines already started keep
+// running but lose their network, so stop them first.
+func (b *Backend) Close() error {
+	if b.ownedNetwork == nil {
+		return nil
+	}
+	return b.ownedNetwork.Close()
 }
 
 // Start implements backend.Backend: it lowers spec through the manifest
@@ -156,39 +187,72 @@ func (b *Backend) Start(ctx context.Context, spec *vm.Spec) (backend.Machine, er
 }
 
 // resolveSpec lowers the spec (plus any base document) through the manifest
-// resolution pipeline.
-func (b *Backend) resolveSpec(spec *vm.Spec, logger *slog.Logger) (*imanifest.Manifest, error) {
+// resolution pipeline. A non-empty stateDir replaces the document's state
+// directory.
+func (b *Backend) resolveSpec(spec *vm.Spec, stateDir string, logger *slog.Logger) (*imanifest.Manifest, error) {
 	doc, err := specDocument(spec, b, b.doc)
 	if err != nil {
 		return nil, err
 	}
+	if stateDir != "" {
+		doc.StateDir = stateDir
+	}
 	mf, err := doc.ManifestWithOptions(imanifest.ResolveOptions{Logger: logger.With("package", "manifest")})
 	if err != nil {
 		return nil, fmt.Errorf("resolve vm spec: %w", err)
-	}
-	if b.disableVSock {
-		mf.QEMU.Devices.VSOCK.ID = ""
 	}
 	return mf, nil
 }
 
 func (b *Backend) start(ctx context.Context, spec *vm.Spec, resume vmm.ResumeMode) (backend.Machine, error) {
 	logger := b.logger()
-	mf, err := b.resolveSpec(spec, logger)
+	// A Go-configured backend without a Spec.Dir works in the process working
+	// directory and keeps its runtime state in a private temporary directory
+	// that is removed when the machine exits, so nothing lands in the working
+	// directory (see vm.Spec.Dir). Saved suspend state would go with it, so
+	// resuming needs a Dir.
+	ephemeralState := ""
+	if b.doc == nil && (spec == nil || spec.Dir == "") {
+		if resume != vmm.ResumeModeNo {
+			return nil, fmt.Errorf("resume requires vm.Spec.Dir: saved state lives in its state directory")
+		}
+		dir, err := os.MkdirTemp("", "virtle-state-")
+		if err != nil {
+			return nil, fmt.Errorf("create state directory: %w", err)
+		}
+		ephemeralState = dir
+	}
+	removeEphemeralState := func() {
+		if ephemeralState != "" {
+			_ = os.RemoveAll(ephemeralState)
+		}
+	}
+	mf, err := b.resolveSpec(spec, ephemeralState, logger)
 	if err != nil {
+		removeEphemeralState()
 		return nil, err
 	}
 	bridge := sessionbridge.FromContext(ctx)
+	var egress *vm.Egress
+	if spec != nil {
+		egress = spec.Egress
+	}
 	handle, err := vmm.StartVM(ctx, mf, vmm.StartOptions{
 		Resume:               resume,
 		HasRemoteControl:     b.hasRemoteControl(),
 		DeferResumeCommit:    bridge != nil,
 		DeferSuspendHandling: bridge != nil,
+		EphemeralState:       ephemeralState != "",
+		Egress:               egress,
 	}, vmm.Config{
 		Logger:        logger,
 		ConsoleOutput: b.consoleOutput(),
+		Network:       b.Network,
 	})
 	if err != nil {
+		// A launch that failed before taking the runtime lock has not
+		// released the directory itself.
+		removeEphemeralState()
 		return nil, err
 	}
 	machine := &Machine{vm: handle, hasRemoteControl: b.hasRemoteControl()}
@@ -248,14 +312,27 @@ func (m *Machine) Status(ctx context.Context) (backend.Status, error) {
 	return m.vm.Status(ctx)
 }
 
+// Console implements backend.ConsoleProvider: a vm.Term over the guest's
+// serial port, available when Backend.Console is ConsolePrint. The session
+// replays the recent console output first, so one attached after boot still
+// sees what the guest printed. Closing it leaves the machine running.
+func (m *Machine) Console(ctx context.Context) (vm.Term, error) {
+	return m.vm.Console(ctx)
+}
+
 // Suspend implements backend.Suspender: it saves the running machine's state
-// via QMP migration to its state directory and stops the VM.
+// via QMP migration to its state directory and stops the VM. A machine
+// started without vm.Spec.Dir has no durable state directory, so Suspend
+// (and the control socket's suspend request) returns an error wrapping
+// errors.ErrUnsupported instead of saving state that would be removed with
+// it.
 func (m *Machine) Suspend(ctx context.Context) error {
 	return m.vm.Suspend(ctx)
 }
 
 // Resume implements backend.Resumer: it restores a previously suspended
-// machine. The spec must resolve to the state directory containing the save.
+// machine. The spec must resolve to the state directory containing the save,
+// so it needs the Dir the machine was suspended with.
 func (b *Backend) Resume(ctx context.Context, spec *vm.Spec) (backend.Machine, error) {
 	return b.start(ctx, spec, vmm.ResumeModeForce)
 }
@@ -267,11 +344,16 @@ func (m *Machine) ResizeMemory(ctx context.Context, size units.Bytes) error {
 	return m.vm.ResizeMemory(ctx, size.Int64())
 }
 
-// Attach implements backend.DeviceAttacher over QMP hotplug. The machine
-// must have PCIe hotplug ports reserved at Start: set Backend.HotplugPorts
-// (or a manifest [hotplug] section / hotplug.ports for manifest.Load
-// backends).
+// Attach implements backend.DeviceAttacher. On a machine with a
+// Backend.Network, a vm.Forward is exposed on its network port and needs
+// nothing else. Everything else goes over QMP hotplug, for which the
+// machine must have PCIe hotplug ports reserved at Start: set
+// Backend.HotplugPorts (or a manifest [hotplug] section / hotplug.ports
+// for manifest.Load backends).
 func (m *Machine) Attach(ctx context.Context, dev vm.Device) error {
+	if f, ok := dev.(vm.Forward); ok && m.vm.HasNetworkPort() {
+		return m.vm.ExposeForward(ctx, f)
+	}
 	hdev, err := m.vm.HotplugDevice(dev)
 	if err != nil {
 		return err
@@ -279,8 +361,12 @@ func (m *Machine) Attach(ctx context.Context, dev vm.Device) error {
 	return m.vm.AttachHotplugDevice(ctx, hdev)
 }
 
-// Detach implements backend.DeviceAttacher; see Attach.
+// Detach implements backend.DeviceAttacher; see Attach. On a machine with a
+// Backend.Network it also removes forwards given in Spec.Ports.
 func (m *Machine) Detach(ctx context.Context, dev vm.Device) error {
+	if f, ok := dev.(vm.Forward); ok && m.vm.HasNetworkPort() {
+		return m.vm.UnexposeForward(f)
+	}
 	hdev, err := m.vm.HotplugDevice(dev)
 	if err != nil {
 		return err
@@ -289,11 +375,12 @@ func (m *Machine) Detach(ctx context.Context, dev vm.Device) error {
 }
 
 var (
-	_ backend.Backend        = (*Backend)(nil)
-	_ backend.Resumer        = (*Backend)(nil)
-	_ backend.Machine        = (*Machine)(nil)
-	_ backend.Suspender      = (*Machine)(nil)
-	_ backend.MemoryResizer  = (*Machine)(nil)
-	_ backend.DeviceAttacher = (*Machine)(nil)
-	_ backend.StatusReporter = (*Machine)(nil)
+	_ backend.Backend         = (*Backend)(nil)
+	_ backend.Resumer         = (*Backend)(nil)
+	_ backend.Machine         = (*Machine)(nil)
+	_ backend.Suspender       = (*Machine)(nil)
+	_ backend.MemoryResizer   = (*Machine)(nil)
+	_ backend.DeviceAttacher  = (*Machine)(nil)
+	_ backend.StatusReporter  = (*Machine)(nil)
+	_ backend.ConsoleProvider = (*Machine)(nil)
 )

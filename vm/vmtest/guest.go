@@ -27,8 +27,8 @@ type Guest struct {
 	// FS backs Open and receives files written through Create when the
 	// writer is closed. It is created on first write when nil.
 	FS fstest.MapFS
-	// Commands scripts Run results by GuestCmd.Path; Args, Env, Dir, and
-	// Stdin are ignored. An unscripted path returns an error wrapping
+	// Commands scripts Run results by GuestCmd.Path; Args, Env, and Dir
+	// are ignored. An unscripted path returns an error wrapping
 	// errors.ErrUnsupported.
 	Commands map[string]Result
 
@@ -129,7 +129,5 @@ func (g *Guest) Shutdowns() int {
 	defer g.mu.Unlock()
 	return g.shutdowns
 }
-
-func (*Guest) Close() error { return nil }
 
 var _ vm.Guest = (*Guest)(nil)

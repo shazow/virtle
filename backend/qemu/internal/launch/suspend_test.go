@@ -62,3 +62,13 @@ func TestHandleQueuedSuspendReturnsNilWhenNoRequest(t *testing.T) {
 		t.Fatalf("queued suspend without request: %v", err)
 	}
 }
+
+func TestSuspendCoordinatorPreservesCompletedResult(t *testing.T) {
+	coordinator := NewSuspendCoordinator()
+	wantErr := errors.New("saved suspend")
+	coordinator.Complete(wantErr)
+	coordinator.Complete(errors.New("runtime stopped"))
+	if err := coordinator.RequestAndWait(t.Context()); !errors.Is(err, wantErr) {
+		t.Fatalf("completed suspend result: got %v want %v", err, wantErr)
+	}
+}

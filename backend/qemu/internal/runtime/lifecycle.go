@@ -18,13 +18,14 @@ func markReady(state *state) {
 	state.Set(control.RuntimeReady)
 }
 
-func status(state *state, cid, pid int, paths control.StatusPaths, stats *launch.Stats) control.StatusResponse {
+func status(state *state, cid, pid int, paths control.StatusPaths, stats *launch.Stats, networks []control.NetworkStatus) control.StatusResponse {
 	return control.StatusResponse{
-		State: state.Current(),
-		CID:   cid,
-		PID:   pid,
-		Paths: paths,
-		Stats: launch.ControlStats(stats),
+		State:    state.Current(),
+		CID:      cid,
+		PID:      pid,
+		Paths:    paths,
+		Stats:    launch.ControlStats(stats),
+		Networks: networks,
 	}
 }
 

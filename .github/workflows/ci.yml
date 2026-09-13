@@ -112,5 +112,16 @@ jobs:
       - name: Validate Nix package
         run: nix build .#virtle --no-link
 
+      # Built on its own so the kernel compile stays out of the check logs.
+      - name: Build the e2e fixture
+        run: nix build .#e2e-fast-fixture --no-link
+
+      # The checks stream their logs (-L) so the run shows which scenarios
+      # ran, how long they took, and where a VMM wedged under nested
+      # virtualization stopped: Nix cannot kill such a process and waits
+      # for it past every timeout inside the check, so the step is bounded
+      # here too. One job at a time keeps the KVM checks from booting VMMs
+      # concurrently on the runner.
       - name: Run integration tests
-        run: nix flake check
+        timeout-minutes: 15
+        run: nix flake check -L --max-jobs 1

@@ -6,6 +6,7 @@ import (
 	"github.com/shazow/virtle/backend/qemu/internal/launch"
 	"github.com/shazow/virtle/backend/qemu/internal/qmpclient"
 	runtimepkg "github.com/shazow/virtle/backend/qemu/internal/runtime"
+	"github.com/shazow/virtle/internal/console"
 )
 
 type runningLaunch struct {
@@ -16,6 +17,8 @@ type runningLaunch struct {
 	suspend        *launch.SuspendCoordinator
 	suspendHandler *launchSuspendHandler
 	processes      *launch.ProcessSet
+	console        *console.Hub       // serial console fan-out; nil without a print console
+	network        *networkAttachment // the guest NIC on a vmnet.Network; nil without one
 }
 
 func (r *runningLaunch) Close() error {

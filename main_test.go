@@ -28,8 +28,8 @@ func TestOptionsDeclaresCommands(t *testing.T) {
 		{
 			field:           "Launch",
 			command:         "launch",
-			description:     "Launch a virtiofs + ssh sandbox session",
-			longDescription: "Start configured host-side run processes, launch QEMU directly, then optionally attach over ssh.",
+			description:     "Launch a virtual machine session",
+			longDescription: "Launch the selected backend, then optionally attach over SSH when supported.",
 		},
 		{
 			field:           "Suspend",

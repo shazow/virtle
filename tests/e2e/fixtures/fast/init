@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+export PATH=/bin
+# Applets are linked at build time; the root may be read-only.
+/bin/busybox --install -s /bin 2>/dev/null || true
+mount -t devtmpfs devtmpfs /dev
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+# The root may be a read-only disk image; the workload writes under /tmp.
+mount -t tmpfs tmpfs /tmp
+exec </dev/console >/dev/console 2>&1
+exec /bin/busybox init

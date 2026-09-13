@@ -15,14 +15,45 @@ import (
 // no live resources and is reusable across Start and Resume calls, with
 // one caveat: Files content readers are consumed by Start (see File).
 type Spec struct {
-	CPUs   int         // default: runtime.NumCPU
-	Memory units.Bytes // default: 2048 * units.Mebibyte
+	CPUs   int         // zero selects the host CPU count (within the backend's limit)
+	Memory units.Bytes // zero selects the backend's default (e.g. qemu.DefaultMemory)
 	Kernel Kernel      // direct kernel boot (microVM style); zero value: none
 	Shares []Share     // host dirs shared into the guest (virtio-fs or similar)
 	Disks  []Disk      // block devices / volume images
 	Ports  []Forward   // host<->guest port forwards
 	Files  []File      // small files placed in the guest before workload start
-	Dir    string      // host working/state directory; default: derived tmp
+
+	// Dir is the host working directory: relative Kernel, Disk, and Share
+	// paths resolve against it (a disk image created from Disk.Size is
+	// written at its Path), and the machine's runtime state (lock, sockets,
+	// suspend state) lives in its .virtle subdirectory, as for a manifest's
+	// working_dir. Empty means the process
+	// working directory, as for exec.Cmd.Dir, with runtime state in a private
+	// temporary directory that is removed when the machine exits; set Dir to
+	// keep state across runs, which Suspend and Resume require.
+	Dir string
+
+	// Egress is this guest's egress policy on a network that dials its
+	// flows in userspace (see vmnet). Nil means the network's default policy.
+	Egress *Egress
+}
+
+// Egress is what a guest may reach on a network that dials its flows in
+// userspace, and which named secrets it may present. It is data, not
+// mechanism: secret values, certificates, and inspection live on the host
+// side (vmnet/egress), keyed by the names here. It can only narrow the
+// host's policy, never widen it; a kernel-backed network ignores it.
+type Egress struct {
+	Allow   []Reach  // empty with a non-nil Egress means the guest reaches nothing
+	Deny    []Reach  // wins over Allow
+	Secrets []string // names of host-side secrets whose tokens this guest receives
+}
+
+// Reach is one destination pattern: a domain glob ("*.github.com") or a
+// CIDR, with the ports it applies to (empty: any port).
+type Reach struct {
+	Host  string
+	Ports []int
 }
 
 // Kernel configures direct kernel boot (microVM style).
@@ -37,13 +68,14 @@ type Share struct {
 	Tag       string // mount tag visible in the guest
 	HostPath  string
 	GuestPath string
-	ReadOnly  bool
+	ReadOnly  bool // the virtiofsd virtle starts with its default arguments refuses guest writes (--readonly); a manifest's virtiofs.args or another daemon decide on their own
 }
 
 // Disk is a block device or volume image attached to the guest.
 type Disk struct {
+	ReadOnly  bool        // attach without allowing guest writes
 	Path      string      // host image path
-	GuestPath string      // guest mount point; optional
+	GuestPath string      // "/" selects the root device (virtle passes root=); empty attaches without mounting; other paths return errors.ErrUnsupported
 	Format    string      // image format (e.g. "qcow2", "raw"); backend default when empty
 	Size      units.Bytes // created at this size if the image is absent
 }
@@ -63,10 +95,9 @@ type Forward struct {
 	Proto     Proto  // zero value means TCP
 }
 
-// File is a small file placed in the guest before the workload starts;
-// large trees go through GuestWithCopy after boot. Content is consumed by
-// Start — refresh it (e.g. a fresh bytes.NewReader) before reusing the
-// Spec.
+// File is a small file placed in the guest before the workload starts.
+// Content is consumed by Start; refresh it (e.g. a fresh bytes.NewReader)
+// before reusing the Spec.
 type File struct {
 	GuestPath string
 	Content   io.Reader

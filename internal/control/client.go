@@ -20,18 +20,15 @@ import (
 	"github.com/shazow/virtle/vm"
 )
 
+const legacyStatusPollInterval = 250 * time.Millisecond
+
 // Dial connects to a control socket and returns its remote machine. Dial
 // discovers server capabilities before returning and begins observing machine
 // exit immediately.
 func Dial(ctx context.Context, path string) (backend.Machine, error) {
 	c := &client{dial: unixDialer(path), completion: func() (bool, error) {
-		// Servers from v0.3.3 and earlier have no wait RPC, and virtle suspend
-		// or status may still talk to a VM launched by such a binary. Their
-		// Unix listener unlinks this endpoint during orderly teardown, while an
-		// abrupt exit leaves a stale socket behind, so disappearance is the
-		// persisted completion record. This fallback, the status polling in
-		// observeExit, and TestLegacyMachineTreatsRemovedSocketAsCompletion
-		// go together once pre-wait servers are out of support.
+		// Pre-wait servers unlink the socket during orderly teardown. A
+		// stale socket left by an abrupt exit is not proof of completion.
 		_, err := os.Stat(path)
 		if errors.Is(err, os.ErrNotExist) {
 			return true, nil
@@ -71,7 +68,6 @@ type machine struct {
 	client  *client
 	methods map[rpcMethod]bool
 	done    chan struct{}
-	once    sync.Once
 	mu      sync.Mutex
 	err     error
 }
@@ -83,49 +79,41 @@ func (m *machine) supports(method rpcMethod) error {
 	return fmt.Errorf("control method %q: %w", method, errors.ErrUnsupported)
 }
 
-func (m *machine) finish(err error) {
-	m.once.Do(func() {
-		m.mu.Lock()
-		m.err = err
-		m.mu.Unlock()
-		close(m.done)
-	})
+func (m *machine) observeExit() {
+	err := m.waitForExit()
+	m.mu.Lock()
+	m.err = err
+	m.mu.Unlock()
+	close(m.done)
 }
 
-func (m *machine) observeExit() {
+func (m *machine) waitForExit() error {
 	if m.methods[rpcWait] {
 		_, err := callTyped[WaitRequest, WaitResponse](m.client, context.Background(), rpcWait, WaitRequest{})
-		m.finish(err)
-		return
+		return err
 	}
 
-	ticker := time.NewTicker(250 * time.Millisecond)
+	// A CLI can connect to a VM launched by an older virtle binary. Those
+	// servers expose status but cannot hold a wait request open until exit.
+	ticker := time.NewTicker(legacyStatusPollInterval)
 	defer ticker.Stop()
 	for {
 		status, err := callTyped[StatusRequest, StatusResponse](m.client, context.Background(), rpcStatus, StatusRequest{})
 		if err != nil {
-			// A v0.3.3-or-earlier server closes its listener before it can expose
-			// stopped via status. Reconcile that EOF/dial failure with the socket
-			// record before treating it as an unreported exit.
-			completed, completionErr := m.client.completed()
-			if completionErr != nil {
-				m.finish(fmt.Errorf("machine exited without status: %w", errors.Join(err, completionErr)))
-				return
-			}
-			if completed {
-				m.finish(nil)
-				return
+			if m.client.completion != nil {
+				completed, completionErr := m.client.completion()
+				if completionErr != nil {
+					return fmt.Errorf("machine exited without status: %w", errors.Join(err, completionErr))
+				}
+				if completed {
+					return nil
+				}
 			}
 			if !IsSocketUnavailable(err) && !errors.Is(err, io.EOF) {
-				m.finish(fmt.Errorf("machine exited without status: %w", err))
-				return
+				return fmt.Errorf("machine exited without status: %w", err)
 			}
-			<-ticker.C
-			continue
-		}
-		if status.State == backend.StateStopped {
-			m.finish(nil)
-			return
+		} else if status.State == backend.StateStopped {
+			return nil
 		}
 		<-ticker.C
 	}
@@ -162,27 +150,27 @@ func (m *machine) Shutdown(ctx context.Context) error {
 		return nil // already stopped; the contract makes repeated calls safe
 	default:
 	}
-	if m.methods[rpcShutdown] {
-		_, err := callTyped[ShutdownRequest, ShutdownResponse](m.client, ctx, rpcShutdown, ShutdownRequest{})
-		if err != nil && ctx.Err() != nil {
-			// The graceful request did not complete within ctx; fall back to
-			// the hard stop the Machine contract promises.
-			return errors.Join(err, m.Kill())
+	if !m.methods[rpcShutdown] {
+		g, err := m.RemoteControl()
+		if err != nil {
+			return m.Kill()
 		}
-		return err
+		if err := g.Shutdown(ctx); err != nil {
+			return errors.Join(context.Cause(ctx), m.Kill())
+		}
+		if err := m.Wait(ctx); err != nil && ctx.Err() != nil {
+			return errors.Join(err, m.Kill())
+		} else {
+			return err
+		}
 	}
-	g, err := m.RemoteControl()
-	if err != nil {
-		return m.Kill()
-	}
-	if err := g.Shutdown(ctx); err != nil {
-		return m.Kill()
-	}
-	if err := m.Wait(ctx); err != nil && ctx.Err() != nil {
+	_, err := callTyped[ShutdownRequest, ShutdownResponse](m.client, ctx, rpcShutdown, ShutdownRequest{})
+	if err != nil && ctx.Err() != nil {
+		// The graceful request did not complete within ctx; fall back to
+		// the hard stop the Machine contract promises.
 		return errors.Join(err, m.Kill())
-	} else {
-		return err
 	}
+	return err
 }
 
 func (m *machine) Suspend(ctx context.Context) error {
@@ -255,9 +243,6 @@ type guest struct{ machine *machine }
 func (g *guest) Run(ctx context.Context, cmd *vm.GuestCmd) error {
 	if cmd == nil || cmd.Path == "" {
 		return fmt.Errorf("guest command path is required")
-	}
-	if cmd.Stdin != nil {
-		return fmt.Errorf("guest command stdin over control socket: %w", errors.ErrUnsupported)
 	}
 	req := GuestExecRequest{Path: cmd.Path, Args: cmd.Args, Env: cmd.Env, Dir: cmd.Dir, CaptureOutput: true}
 	if deadline, ok := ctx.Deadline(); ok {
@@ -334,8 +319,6 @@ func (g *guest) Shutdown(ctx context.Context) error {
 	return err
 }
 
-func (*guest) Close() error { return nil }
-
 var (
 	_ backend.Machine        = (*machine)(nil)
 	_ backend.Suspender      = (*machine)(nil)
@@ -350,13 +333,6 @@ type client struct {
 	completion func() (bool, error)
 }
 
-func (c *client) completed() (bool, error) {
-	if c == nil || c.completion == nil {
-		return false, nil
-	}
-	return c.completion()
-}
-
 func callTyped[Req any, Resp any](c *client, ctx context.Context, method rpcMethod, req Req) (Resp, error) {
 	var resp Resp
 	err := c.call(ctx, method, req, &resp)
@@ -369,6 +345,8 @@ func (c *client) call(ctx context.Context, method rpcMethod, params any, result 
 		return fmt.Errorf("control dial: %w", err)
 	}
 	defer conn.Close()
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = conn.SetDeadline(deadline)
 	}
@@ -377,11 +355,11 @@ func (c *client) call(ctx context.Context, method rpcMethod, params any, result 
 		return err
 	}
 	if err := json.NewEncoder(conn).Encode(requestEnvelope{ID: 1, Method: method, Params: payload}); err != nil {
-		return fmt.Errorf("control request: %w", err)
+		return fmt.Errorf("control request: %w", errors.Join(err, context.Cause(ctx)))
 	}
 	line, err := bufio.NewReader(conn).ReadBytes('\n')
 	if err != nil {
-		return fmt.Errorf("control response: %w", err)
+		return fmt.Errorf("control response: %w", errors.Join(err, context.Cause(ctx)))
 	}
 	var resp responseEnvelope
 	if err := json.Unmarshal(line, &resp); err != nil {

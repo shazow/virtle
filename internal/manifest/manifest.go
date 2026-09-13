@@ -19,19 +19,23 @@ type ResolveOptions struct {
 }
 
 type Manifest struct {
-	Identity      Identity        `json:"identity"`
-	Paths         Paths           `json:"paths"`
-	Persistence   Persistence     `json:"persistence"`
-	SSH           SSH             `json:"ssh"`
-	QEMU          QEMU            `json:"qemu"`
-	Volumes       []Volume        `json:"volumes,omitempty"`
-	VSock         VSock           `json:"vsock"`
-	Workspace     Workspace       `json:"workspace,omitempty"`
-	WriteFiles    WriteFiles      `json:"writeFiles,omitempty"`
-	Notifications Notifications   `json:"notifications,omitempty"`
-	Run           []Run           `json:"run,omitempty"`
-	Hotplug       []HotplugDevice `json:"hotplug,omitempty"`
-	CleanupFiles  []string        `json:"cleanupFiles,omitempty"`
+	Backend         string           `json:"backend"`
+	Firecracker     *Firecracker     `json:"firecracker,omitempty"`
+	CloudHypervisor *CloudHypervisor `json:"cloudHypervisor,omitempty"`
+	Identity        Identity         `json:"identity"`
+	Paths           Paths            `json:"paths"`
+	Persistence     Persistence      `json:"persistence"`
+	SSH             SSH              `json:"ssh"`
+	QEMU            QEMU             `json:"qemu"`
+	Volumes         []Volume         `json:"volumes,omitempty"`
+	VSock           VSock            `json:"vsock"`
+	Workspace       Workspace        `json:"workspace,omitempty"`
+	WriteFiles      WriteFiles       `json:"writeFiles,omitempty"`
+	Notifications   Notifications    `json:"notifications,omitempty"`
+	Run             []Run            `json:"run,omitempty"`
+	Hotplug         []HotplugDevice  `json:"hotplug,omitempty"`
+	Egress          *Egress          `json:"egress,omitempty"`
+	CleanupFiles    []string         `json:"cleanupFiles,omitempty"`
 }
 
 type Identity struct {
@@ -39,19 +43,25 @@ type Identity struct {
 }
 
 type Paths struct {
-	WorkingDir string     `json:"workingDir"`
-	LockPath   string     `json:"lockPath"`
+	WorkingDir string `json:"workingDir"`
+	LockPath   string `json:"lockPath"`
+	// RuntimeDir locates relative sockets independently of persistent VM
+	// state. Document loaders default it to Persistence.StateDir.
 	RuntimeDir RuntimeDir `json:"runtimeDir,omitempty"`
 }
 
+// RuntimeDirMode selects how relative runtime socket paths are resolved.
 type RuntimeDirMode int
 
 const (
-	RuntimeDirWorking RuntimeDirMode = iota
-	RuntimeDirXDG
-	RuntimeDirPath
+	RuntimeDirWorking RuntimeDirMode = iota // relative to Paths.WorkingDir
+	RuntimeDirXDG                           // in the user's XDG runtime directory
+	RuntimeDirPath                          // relative to RuntimeDir.Path
 )
 
+// RuntimeDir selects a location for sockets. It does not relocate persistent
+// state, and absolute socket paths bypass it. Path is used by RuntimeDirPath;
+// a relative Path resolves against Paths.WorkingDir.
 type RuntimeDir struct {
 	Mode RuntimeDirMode `json:"mode,omitempty"`
 	Path string         `json:"path,omitempty"`
@@ -59,8 +69,11 @@ type RuntimeDir struct {
 
 type Persistence struct {
 	Directories []string `json:"directories"`
-	BaseDir     string   `json:"baseDir,omitempty"`
-	StateDir    string   `json:"stateDir,omitempty"`
+	// BaseDir is the fallback for an empty StateDir. An empty BaseDir falls
+	// back to Paths.WorkingDir; document loaders set both to state_dir.
+	BaseDir string `json:"baseDir,omitempty"`
+	// StateDir holds persistent VM state independently of runtime sockets.
+	StateDir string `json:"stateDir,omitempty"`
 }
 
 type SSH struct {

@@ -3,6 +3,8 @@
 /.update-release-nix.*
 /dist/
 /coverage.out
+/benchmark-results/
+__pycache__/
 /virtle
 *.test
 *.prof

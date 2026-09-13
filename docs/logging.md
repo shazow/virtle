@@ -60,8 +60,8 @@ $ virtle -v launch --ssh -- echo ready
 2026/08/20 00:01:02 INFO loading launch manifest package=main path=/home/user/project/manifest.toml
 2026/08/20 00:01:02 INFO starting vm session package=session resume=auto ssh=true
 2026/08/20 00:01:03 INFO waiting for guest agent readiness package=vmm
-2026/08/20 00:01:03 INFO waiting for ssh readiness package=ssh
-2026/08/20 00:01:04 INFO guest is ready package=ssh
+2026/08/20 00:01:03 INFO waiting for machine readiness package=session
+2026/08/20 00:01:04 INFO vm startup complete package=session
 2026/08/20 00:01:04 INFO vm started; entering foreground session package=session
 2026/08/20 00:01:04 INFO ssh command package=ssh command="ssh ... echo ready"
 ready

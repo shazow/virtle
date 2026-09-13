@@ -35,21 +35,55 @@
 
           default = virtle;
         }
+        // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
+          e2e-fast-fixture = import ./tests/e2e/fixtures/fast { inherit pkgs; };
+          e2e-fast-userspace-fixture = import ./tests/e2e/fixtures/fast {
+            inherit pkgs;
+            userspace = true;
+          };
+          benchmark-backends = pkgs.writeShellApplication {
+            name = "virtle-benchmark-backends";
+            runtimeInputs = [ pkgs.python3 ];
+            text = ''
+              exec python ${./tests/e2e/run.py} \
+                --virtle ${self.packages.${system}.virtle}/bin/virtle \
+                --fixture ${self.packages.${system}.e2e-fast-fixture} "$@"
+            '';
+          };
+        }
       );
 
-      apps = forAllSystems (system: {
-        default = {
-          type = "app";
-          program = "${self.packages.${system}.virtle}/bin/virtle";
-          meta.description = "Run virtle";
-        };
-      });
+      apps = forAllSystems (
+        system:
+        {
+          default = {
+            type = "app";
+            program = "${self.packages.${system}.virtle}/bin/virtle";
+            meta.description = "Run virtle";
+          };
+        }
+        // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
+          benchmark-backends = {
+            type = "app";
+            program = "${self.packages.${system}.benchmark-backends}/bin/virtle-benchmark-backends";
+            meta.description = "Directional comparison of the Firecracker, QEMU/KVM, and Cloud Hypervisor backends";
+          };
+        }
+      );
 
       checks = forAllSystems (
         system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
           guestKernelPackage = pkgs.linuxPackages.kernel;
+          firecrackerGuest = import ./docs/recipes/firecracker/guest.nix {
+            inherit pkgs;
+            virtle = self.packages.${system}.virtle;
+          };
+          cloudHypervisorGuest = import ./docs/recipes/cloud-hypervisor/guest.nix {
+            inherit pkgs;
+            virtle = self.packages.${system}.virtle;
+          };
           guestCompressedModules = pkgs.makeModulesClosure {
             kernel = guestKernelPackage.modules;
             firmware = guestKernelPackage;
@@ -120,8 +154,27 @@
             env.CGO_ENABLED = 0;
             buildTestBinaries = true;
           };
+          # Public-API scenarios against real VMMs (tests/e2e); run under KVM.
+          e2eTest = pkgs.buildGoModule {
+            pname = "virtle-e2e-test-binary";
+            inherit (release) version vendorHash;
+            src = ./.;
+            subPackages = [ "tests/e2e" ];
+            tags = [ "integration" ];
+            env.CGO_ENABLED = 0;
+            buildTestBinaries = true;
+          };
         in
         {
+          e2e-runner =
+            pkgs.runCommand "virtle-e2e-runner-tests"
+              {
+                nativeBuildInputs = [ pkgs.python3 ];
+              }
+              ''
+                PYTHONDONTWRITEBYTECODE=1 python -m unittest discover -s ${./tests/e2e} -v
+                touch $out
+              '';
           # Runs the launch integration tests in a small VM where /bin/sh is
           # dash, covering the absolute guest shell path Virtle sends to QGA.
           integration = pkgs.vmTools.runInLinuxVM (
@@ -142,6 +195,91 @@
                 touch $out
               ''
           );
+        }
+        // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
+          # Nothing boots the userspace-capable fixture yet; generating its
+          # kernel configuration keeps the Kconfig fragment valid without a
+          # second kernel build.
+          e2e-fast-userspace-config = pkgs.runCommand "virtle-fast-userspace-config" { } ''
+            test -s ${self.packages.${system}.e2e-fast-userspace-fixture.kernel.configfile}
+            touch $out
+          '';
+          e2e-fast =
+            pkgs.runCommand "virtle-fast-e2e"
+              {
+                requiredSystemFeatures = [ "kvm" ];
+                nativeBuildInputs = [ pkgs.python3 ];
+              }
+              ''
+                output=$(mktemp -d)
+                # Bound the whole run: a VMM wedged under nested virtualization
+                # must fail the check with its log, not hold the CI job until
+                # its own timeout.
+                timeout --kill-after=30 600 python ${./tests/e2e/run.py} \
+                  --virtle ${self.packages.${system}.virtle}/bin/virtle \
+                  --fixture ${self.packages.${system}.e2e-fast-fixture} \
+                  --rounds 3 --warmup-rounds 0 \
+                  --output "$output/results"
+                touch $out
+              '';
+          # The three backends driven through the Go API (vm.Spec,
+          # backend.Machine) on the same tiny guest: the backend conformance
+          # suite plus the Spec.Dir, root disk (raw and qcow2), scratch disk,
+          # console, guest shutdown, and share scenarios, and on QEMU the virtle network
+          # (lease, forwards, egress policy).
+          e2e-api =
+            pkgs.runCommand "virtle-e2e-api"
+              {
+                requiredSystemFeatures = [ "kvm" ];
+                nativeBuildInputs = [
+                  pkgs.e2fsprogs
+                  # The share daemon's own namespace sandbox needs privileges
+                  # the Nix sandbox does not grant.
+                  (pkgs.writeShellScriptBin "virtiofsd" ''exec ${pkgs.virtiofsd}/bin/virtiofsd --sandbox none "$@"'')
+                ];
+              }
+              ''
+                export VIRTLE_E2E_FIXTURE=${self.packages.${system}.e2e-fast-fixture}
+                export VIRTLE_E2E_QEMU=${pkgs.qemu_kvm}/bin/qemu-system-x86_64
+                export VIRTLE_E2E_QEMU_IMG=${pkgs.qemu_kvm}/bin/qemu-img
+                export VIRTLE_E2E_FIRECRACKER=${pkgs.firecracker}/bin/firecracker
+                export VIRTLE_E2E_CLOUD_HYPERVISOR=${pkgs.cloud-hypervisor}/bin/cloud-hypervisor
+                # A scenario that cannot run fails the check instead of skipping.
+                export VIRTLE_E2E_REQUIRED=1
+                # Go's own timeout fires first, so a hang ends with a goroutine
+                # dump rather than the outer SIGTERM.
+                timeout --kill-after=30 600 ${e2eTest}/bin/e2e.test -test.v -test.timeout 9m
+                touch $out
+              '';
+          # Firecracker requires real KVM; no TCG fallback and no skip-success.
+          # SendCtrlAltDel (used to verify guest shutdown) is x86-only.
+          firecracker =
+            pkgs.runCommand "virtle-firecracker-e2e"
+              {
+                requiredSystemFeatures = [ "kvm" ];
+                nativeBuildInputs = [ pkgs.python3 ];
+              }
+              ''
+                test -r /dev/kvm && test -w /dev/kvm
+                timeout --kill-after=30 600 python ${./docs/recipes/firecracker/check.py} \
+                  ${self.packages.${system}.virtle}/bin/virtle ${firecrackerGuest.manifest}
+                touch $out
+              '';
+          # Cloud Hypervisor requires real KVM as well; its shutdown request is
+          # the ACPI power button, which the distribution kernel and BusyBox
+          # acpid turn into a power-off.
+          cloud-hypervisor =
+            pkgs.runCommand "virtle-cloud-hypervisor-e2e"
+              {
+                requiredSystemFeatures = [ "kvm" ];
+                nativeBuildInputs = [ pkgs.python3 ];
+              }
+              ''
+                test -r /dev/kvm && test -w /dev/kvm
+                timeout --kill-after=30 600 python ${./docs/recipes/cloud-hypervisor/check.py} \
+                  ${self.packages.${system}.virtle}/bin/virtle ${cloudHypervisorGuest.manifest}
+                touch $out
+              '';
         }
       );
 

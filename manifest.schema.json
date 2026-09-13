@@ -1,6 +1,74 @@
 {
   "type": "object",
   "properties": {
+    "backend": {
+      "type": "string",
+      "description": "Virtual machine backend: qemu (default), or the experimental firecracker or cloud-hypervisor.",
+      "default": "qemu",
+      "enum": [
+        "qemu",
+        "firecracker",
+        "cloud-hypervisor"
+      ]
+    },
+    "firecracker": {
+      "type": "object",
+      "properties": {
+        "binary": {
+          "type": "string",
+          "description": "Firecracker executable; default firecracker. No shell expansion."
+        },
+        "startup_timeout": {
+          "type": "string",
+          "description": "Maximum time for API startup and configuration; zero uses 10s."
+        },
+        "shutdown_timeout": {
+          "type": "string",
+          "description": "Maximum graceful shutdown time; zero uses 10s."
+        },
+        "args": {
+          "type": [
+            "null",
+            "array"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Extra command-line arguments appended after the ones virtle passes; no shell expansion or templates."
+        }
+      },
+      "description": "Firecracker executable and lifecycle timeouts.",
+      "additionalProperties": false
+    },
+    "cloud-hypervisor": {
+      "type": "object",
+      "properties": {
+        "binary": {
+          "type": "string",
+          "description": "Cloud Hypervisor executable; default cloud-hypervisor. No shell expansion."
+        },
+        "startup_timeout": {
+          "type": "string",
+          "description": "Maximum time for API startup, share daemons, and configuration; zero uses 10s."
+        },
+        "shutdown_timeout": {
+          "type": "string",
+          "description": "Maximum graceful shutdown time; zero uses 10s."
+        },
+        "args": {
+          "type": [
+            "null",
+            "array"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Extra command-line arguments appended after the ones virtle passes; no shell expansion or templates."
+        }
+      },
+      "description": "Cloud Hypervisor executable and lifecycle timeouts.",
+      "additionalProperties": false
+    },
     "host_name": {
       "type": "string",
       "description": "Guest-visible VM name used for QEMU naming and derived runtime files.",
@@ -163,8 +231,7 @@
       },
       "description": "Guest kernel initrd and kernel command-line settings.",
       "required": [
-        "path",
-        "initrd_path"
+        "path"
       ],
       "additionalProperties": false
     },
@@ -196,7 +263,7 @@
               },
               "tag": {
                 "type": "string",
-                "description": "Stable QEMU mount tag or device identifier."
+                "description": "Stable mount tag or device identifier."
               },
               "source": {
                 "type": "string",
@@ -251,7 +318,7 @@
               },
               "tag": {
                 "type": "string",
-                "description": "Stable QEMU mount tag or device identifier."
+                "description": "Stable mount tag or device identifier."
               },
               "source": {
                 "type": "string",
@@ -289,6 +356,10 @@
               "source": {
                 "type": "string",
                 "description": "Host disk image path."
+              },
+              "target": {
+                "type": "string",
+                "description": "Guest mount point for a boot-time image; only / is supported. It makes this image the root device, and virtle passes root= for it to the kernel on every backend. Not supported on hotplugged images."
               },
               "read_only": {
                 "type": "boolean",
@@ -375,15 +446,19 @@
         "properties": {
           "id": {
             "type": "string",
-            "description": "QEMU network device identifier."
+            "description": "Network device identifier."
           },
           "type": {
             "type": "string",
-            "description": "Network backend type."
+            "description": "Network type: user (the VMM's built-in user networking, the default), virtle (a network virtle runs in userspace), or tap (a host TAP device). QEMU also takes any of its own -netdev backends verbatim."
           },
           "mac": {
             "type": "string",
-            "description": "Guest network interface MAC address."
+            "description": "Guest network interface MAC address; a virtle network allocates one when omitted."
+          },
+          "tap": {
+            "type": "string",
+            "description": "Host TAP device name, for type tap; QEMU picks and sets up the device itself when omitted."
           },
           "forward": {
             "type": [
@@ -416,7 +491,21 @@
               ],
               "additionalProperties": false
             },
-            "description": "Port forwarding rules for this network backend."
+            "description": "Port forwarding rules for this network."
+          },
+          "dns": {
+            "type": [
+              "null",
+              "object"
+            ],
+            "properties": {
+              "upstream": {
+                "type": "string",
+                "description": "DNS upstream: host (the default) uses the host's configured DNS servers; an IP address with a port selects one server, such as 127.0.0.1:53 or [::1]:53."
+              }
+            },
+            "description": "DNS upstream for a virtle network; not supported on other network types or hotplugged networks.",
+            "additionalProperties": false
           }
         },
         "additionalProperties": false
@@ -534,6 +623,13 @@
     "vsock": {
       "type": "object",
       "properties": {
+        "enabled": {
+          "type": [
+            "null",
+            "boolean"
+          ],
+          "description": "Attach the QEMU vsock device; defaults to true. Disable for guests that do not use host-guest vsock communication."
+        },
         "cid_range": {
           "type": "object",
           "properties": {
@@ -680,7 +776,7 @@
         ],
         "additionalProperties": false
       },
-      "description": "Host-side processes started before QEMU and stopped during teardown."
+      "description": "Host-side processes started before the virtual machine and stopped during teardown."
     },
     "hotplug": {
       "type": "object",
@@ -698,7 +794,7 @@
                   },
                   "tag": {
                     "type": "string",
-                    "description": "Stable QEMU mount tag or device identifier."
+                    "description": "Stable mount tag or device identifier."
                   },
                   "source": {
                     "type": "string",
@@ -753,7 +849,7 @@
                   },
                   "tag": {
                     "type": "string",
-                    "description": "Stable QEMU mount tag or device identifier."
+                    "description": "Stable mount tag or device identifier."
                   },
                   "source": {
                     "type": "string",
@@ -791,6 +887,10 @@
                   "source": {
                     "type": "string",
                     "description": "Host disk image path."
+                  },
+                  "target": {
+                    "type": "string",
+                    "description": "Guest mount point for a boot-time image; only / is supported. It makes this image the root device, and virtle passes root= for it to the kernel on every backend. Not supported on hotplugged images."
                   },
                   "read_only": {
                     "type": "boolean",
@@ -858,15 +958,19 @@
             "properties": {
               "id": {
                 "type": "string",
-                "description": "QEMU network device identifier."
+                "description": "Network device identifier."
               },
               "type": {
                 "type": "string",
-                "description": "Network backend type."
+                "description": "Network type: user (the VMM's built-in user networking, the default), virtle (a network virtle runs in userspace), or tap (a host TAP device). QEMU also takes any of its own -netdev backends verbatim."
               },
               "mac": {
                 "type": "string",
-                "description": "Guest network interface MAC address."
+                "description": "Guest network interface MAC address; a virtle network allocates one when omitted."
+              },
+              "tap": {
+                "type": "string",
+                "description": "Host TAP device name, for type tap; QEMU picks and sets up the device itself when omitted."
               },
               "forward": {
                 "type": [
@@ -899,7 +1003,21 @@
                   ],
                   "additionalProperties": false
                 },
-                "description": "Port forwarding rules for this network backend."
+                "description": "Port forwarding rules for this network."
+              },
+              "dns": {
+                "type": [
+                  "null",
+                  "object"
+                ],
+                "properties": {
+                  "upstream": {
+                    "type": "string",
+                    "description": "DNS upstream: host (the default) uses the host's configured DNS servers; an IP address with a port selects one server, such as 127.0.0.1:53 or [::1]:53."
+                  }
+                },
+                "description": "DNS upstream for a virtle network; not supported on other network types or hotplugged networks.",
+                "additionalProperties": false
               }
             },
             "additionalProperties": false
@@ -908,6 +1026,154 @@
         }
       },
       "description": "Devices that may be attached or detached after launch.",
+      "additionalProperties": false
+    },
+    "egress": {
+      "type": [
+        "null",
+        "object"
+      ],
+      "properties": {
+        "reach": {
+          "type": "string",
+          "description": "What the guest may reach besides the allow entries: rules is only those entries, internet is any public destination and nothing on the host or its networks, all is anything the host can reach. Default internet; required when there are allow entries."
+        },
+        "allow": {
+          "type": [
+            "null",
+            "array"
+          ],
+          "items": {
+            "type": "object",
+            "properties": {
+              "host": {
+                "type": "string",
+                "description": "Destination: a name pattern such as *.github.com, a CIDR, or an address."
+              },
+              "ports": {
+                "type": [
+                  "null",
+                  "array"
+                ],
+                "items": {
+                  "type": "integer"
+                },
+                "description": "Ports the entry applies to; empty means any."
+              },
+              "inspect": {
+                "type": "boolean",
+                "description": "Terminate TLS and HTTP to record each request and replace secret tokens; the guest must trust the CA."
+              }
+            },
+            "required": [
+              "host"
+            ],
+            "additionalProperties": false
+          },
+          "description": "Destinations the guest may reach, on the host's networks too, and which of them to inspect; reach must say whether they are the whole reach (rules) or exceptions on top of it (internet, all)."
+        },
+        "deny": {
+          "type": [
+            "null",
+            "array"
+          ],
+          "items": {
+            "type": "object",
+            "properties": {
+              "host": {
+                "type": "string",
+                "description": "Destination: a name pattern such as *.github.com, a CIDR, or an address."
+              },
+              "ports": {
+                "type": [
+                  "null",
+                  "array"
+                ],
+                "items": {
+                  "type": "integer"
+                },
+                "description": "Ports the entry applies to; empty means any."
+              }
+            },
+            "required": [
+              "host"
+            ],
+            "additionalProperties": false
+          },
+          "description": "Destinations refused even when an allow entry matches."
+        },
+        "secrets": {
+          "type": [
+            "null",
+            "array"
+          ],
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Environment variable the guest receives the token in, and the name the token is derived from."
+              },
+              "from": {
+                "type": "string",
+                "description": "Go text/template rendering the value when a request carries the token: the host environment is .Env ({{.Env.GITHUB_TOKEN}}) and fromFile reads a file relative to the manifest ({{fromFile \"npm.token\"}}). The value itself never appears in the manifest."
+              },
+              "hosts": {
+                "type": [
+                  "null",
+                  "array"
+                ],
+                "items": {
+                  "type": "string"
+                },
+                "description": "Name patterns of the inspected destinations that may receive the value."
+              },
+              "methods": {
+                "type": [
+                  "null",
+                  "array"
+                ],
+                "items": {
+                  "type": "string"
+                },
+                "description": "HTTP methods the value may be sent with; empty means any."
+              },
+              "paths": {
+                "type": [
+                  "null",
+                  "array"
+                ],
+                "items": {
+                  "type": "string"
+                },
+                "description": "URL path patterns the value may be sent to; empty means any."
+              },
+              "in": {
+                "type": [
+                  "null",
+                  "array"
+                ],
+                "items": {
+                  "type": "string"
+                },
+                "description": "Where the token is replaced: header, query, path, body; empty means everywhere."
+              }
+            },
+            "required": [
+              "name",
+              "from",
+              "hosts"
+            ],
+            "additionalProperties": false
+          },
+          "description": "Secrets the guest uses through a token that inspected requests replace with the real value."
+        },
+        "ca_dir": {
+          "type": "string",
+          "description": "Directory of the certificate authority that signs inspected connections; default \u003cstate_dir\u003e/egress-ca."
+        }
+      },
+      "description": "What the guest may reach through a network of type virtle, and the secrets it uses without holding them. Without this section such a network reaches the internet and nothing on the host or its networks.",
       "additionalProperties": false
     }
   },

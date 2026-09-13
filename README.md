@@ -13,13 +13,16 @@ Background: Originally designed to be used with [`agentspace`](https://github.co
 ## How does it work?
 
 `virtle` reads a manifest, starts the required host processes, launches QEMU,
-waits for guest SSH readiness, attaches an active session with `--ssh`.
+waits for SSH readiness, and attaches an active session with `--ssh`.
 
 It also handles teardown, QMP-based shutdown, disk-backed suspend/resume, runtime vsock CID allocation, QGA-based remote commands, and more.
 
 ### Features
 
-- Runs a QEMU microvm.
+- Networks guests in userspace with an egress policy: the internet and nothing
+  on the host or its LAN by default, allow and deny by name, record every
+  connection, and let the guest use secrets it never holds (see
+  [docs/networking.md](docs/networking.md)).
 - Allocates block overlay images.
 - Manages [`virtiofsd`](https://gitlab.com/virtio-fs/virtiofsd) daemons for virtiofs mounts.
 - Provisions SSH between host and guest.
@@ -30,6 +33,14 @@ It also handles teardown, QMP-based shutdown, disk-backed suspend/resume, runtim
 - Exposes a `virtle.sock` for RPC (also usable via `virtle rpc` sub-command).
 - (Experimental) Balloon memory: Auto-adjust memory available to the VM based on internal memory pressure metrics.
 - (Experimental) Hotplug: Attach/detach devices during runtime (requires full VM).
+
+### Backends
+
+QEMU is the backend. Experimental Firecracker and Cloud Hypervisor backends
+exist behind the same manifest and Go interfaces for microVM setups; they are
+early, cover much less than QEMU (no guest control, SSH, or virtle network),
+and may change. Their guides are [docs/firecracker.md](docs/firecracker.md)
+and [docs/cloud-hypervisor.md](docs/cloud-hypervisor.md).
 
 ## Usage
 
@@ -61,7 +72,9 @@ There are some handy sub-commands for working with manifest files:
 - `virtle manifest schema`
 
 Manifest exec arrays render each argv element as a Go `text/template`. The host
-process environment is available as `.Env` on every surface.
+process environment is available as `.Env` on every surface, and
+`{{fromFile "path"}}` reads a file (relative to the manifest's directory)
+without its trailing newline.
 
 | Surface | Template values | Injected environment |
 | --- | --- | --- |
@@ -71,6 +84,7 @@ process environment is available as `.Env` on every surface.
 | `mounts[type=virtiofs].virtiofs` | `Socket`, `MountSource`, `MountTag`, `CID`, `StateDir`, `.Env` | `SOCKET`, `MOUNT_SOURCE`, `MOUNT_TAG`, `CID`, `STATE_DIR`, `VIRTIOFSD_SOCKET` |
 | `run[].exec` | `CID`, `StateDir`, `Workspace.GuestPath`, `Workspace.HostPath`, user vars, `.Env` | scalar top-level values only |
 | `notifications.exec` | `State`, `Message`, notification context values, `.Env` | `STATE`, `MESSAGE`, normalized context values, `VIRTLE_NOTIFY_STATE`, `VIRTLE_NOTIFY_MESSAGE`, `VIRTLE_NOTIFY_CONTEXT_<KEY>` |
+| `egress.secrets[].from` | `.Env`, `fromFile`; rendered when a request carries the token | none |
 
 ## Library
 
@@ -99,6 +113,20 @@ if err != nil {
 	log.Fatal(err) // this VM has no guest agent
 }
 err = g.Run(ctx, &vm.GuestCmd{Path: "make", Dir: "/workspace", Stdout: os.Stdout})
+```
+
+Put the guest on a network virtle runs, with a policy on what it may reach
+(see [docs/networking.md](docs/networking.md)):
+
+```go
+policy := &egress.Policy{Rules: []egress.Rule{{Hosts: []string{"*.github.com"}, Ports: []int{443}}}}
+network, err := userspace.New(userspace.Config{DNS: userspace.DNSFakeIP, Egress: policy})
+defer network.Close()
+
+b := &qemu.Backend{Network: network, RemoteControl: qemu.QGA{}}
+m, err := b.Start(ctx, spec)
+status, _ := m.(backend.StatusReporter).Status(ctx)
+conn, err := network.DialContext(ctx, "tcp", status.Networks[0].Addr+":22")
 ```
 
 Optional functionality is discovered by type assertion, as in

@@ -1,14 +1,14 @@
 package qemu
 
 import (
+	"cmp"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
-	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
-	"strings"
 
 	imanifest "github.com/shazow/virtle/internal/manifest"
 	"github.com/shazow/virtle/units"
@@ -38,16 +38,13 @@ func specDocument(spec *vm.Spec, cfg *Backend, base *imanifest.Document) (imanif
 		doc.HostName = cfg.HostName
 	}
 
-	// Spec.Dir wins; a Go-configured backend without one gets a fresh
-	// temporary directory, a manifest.Load backend keeps the manifest's.
+	// Spec.Dir wins; without one a Go-configured backend works in the process
+	// working directory (relative paths resolve there, as for exec.Cmd.Dir)
+	// and a manifest.Load backend keeps the manifest's.
 	dir := spec.Dir
 	if dir == "" {
 		if base == nil {
-			tmp, err := os.MkdirTemp("", "virtle-")
-			if err != nil {
-				return imanifest.Document{}, fmt.Errorf("create working directory: %w", err)
-			}
-			dir = tmp
+			dir = "."
 		} else {
 			dir = doc.WorkingDir
 		}
@@ -80,7 +77,12 @@ func specDocument(spec *vm.Spec, cfg *Backend, base *imanifest.Document) (imanif
 	if spec.Kernel != (vm.Kernel{}) {
 		doc.Kernel.Path = spec.Kernel.Path
 		doc.Kernel.InitrdPath = spec.Kernel.Initrd
-		doc.Kernel.Params = strings.Fields(spec.Kernel.Cmdline)
+		// The command line is passed through verbatim as one parameter, the
+		// same way every backend treats vm.Kernel.Cmdline.
+		doc.Kernel.Params = nil
+		if spec.Kernel.Cmdline != "" {
+			doc.Kernel.Params = []string{spec.Kernel.Cmdline}
+		}
 	}
 	if doc.Kernel.Path == "" {
 		return imanifest.Document{}, fmt.Errorf("the qemu backend requires a direct kernel boot source (vm.Spec.Kernel)")
@@ -144,11 +146,67 @@ func specDocument(spec *vm.Spec, cfg *Backend, base *imanifest.Document) (imanif
 	if cfg.HotplugPorts > doc.QEMU.HotplugPorts {
 		doc.QEMU.HotplugPorts = cfg.HotplugPorts
 	}
+	if cfg.DisableVSock {
+		enabled := false
+		doc.VSock.Enabled = &enabled
+	}
+	// A loaded manifest owns each NIC's frame path. Its Network serves the
+	// virtle NIC without changing the other NICs; only an explicit Link
+	// overrides those choices. Go-created specs infer Stream from Network.
+	if base == nil || cfg.Link != nil {
+		if err := applySpecLink(&doc, cfg); err != nil {
+			return imanifest.Document{}, err
+		}
+	}
 
 	if err := applySpecDevices(&doc, spec); err != nil {
 		return imanifest.Document{}, err
 	}
 	return doc, nil
+}
+
+// applySpecLink lowers Backend.Network and Backend.Link onto the network
+// type of the document's NICs. A nil Link with no Network leaves the
+// document's own choice in place.
+func applySpecLink(doc *imanifest.Document, cfg *Backend) error {
+	link := cfg.Link
+	if link == nil {
+		if cfg.Network == nil {
+			return nil
+		}
+		link = Stream{}
+	}
+	var netType, tap string
+	switch l := link.(type) {
+	case User:
+		if cfg.Network != nil {
+			return fmt.Errorf("qemu.Backend.Link User keeps networking inside QEMU and cannot attach to Network: %w", errors.ErrUnsupported)
+		}
+		netType = imanifest.NetworkTypeUser
+	case TAP:
+		if cfg.Network != nil {
+			return fmt.Errorf("qemu.Backend.Link TAP is networked by the host kernel and cannot attach to Network: %w", errors.ErrUnsupported)
+		}
+		if l.Name == "" {
+			return fmt.Errorf("qemu.Backend.Link TAP requires the device Name")
+		}
+		netType, tap = imanifest.NetworkTypeTAP, l.Name
+	case Stream:
+		if cfg.Network == nil {
+			return fmt.Errorf("qemu.Backend.Link Stream carries frames to Network, which is nil: %w", errors.ErrUnsupported)
+		}
+		netType = imanifest.NetworkTypeVirtle
+	default:
+		return fmt.Errorf("unsupported qemu.Backend.Link %T", link)
+	}
+	if len(doc.Networks) == 0 {
+		doc.Networks = imanifest.DefaultDocument().Networks
+	}
+	for i := range doc.Networks {
+		doc.Networks[i].Type = netType
+		doc.Networks[i].Tap = tap
+	}
+	return nil
 }
 
 // applySpecDevices replaces the document entries represented by the neutral
@@ -224,10 +282,8 @@ func overlayShare(input imanifest.VirtioFSMountInput, share vm.Share) (imanifest
 	input.SourcePath = share.HostPath
 	input.ReadOnly = share.ReadOnly
 	input.Target = share.GuestPath
-	if input.VirtioFS.Socket == "" {
-		input.VirtioFS.Socket = share.Tag + ".sock"
-		input.VirtioFS.Bin = "virtiofsd"
-	}
+	// Manifest resolution defaults the socket and daemon of a share that
+	// names none, the same way on every backend.
 	return input, nil
 }
 
@@ -238,8 +294,16 @@ func overlayDisk(input imanifest.ImageMountInput, disk vm.Disk) (imanifest.Image
 	if disk.Size != 0 && disk.Size%units.Mebibyte != 0 {
 		return imanifest.ImageMountInput{}, fmt.Errorf("disk %q: size %s is not MiB-aligned", disk.Path, disk.Size)
 	}
+	// "/" names the root device, which the kernel mounts itself; any other
+	// mount point needs an agent in the guest, which no backend has yet, so
+	// it is refused rather than silently ignored.
+	if disk.GuestPath != "" && disk.GuestPath != "/" {
+		return imanifest.ImageMountInput{}, fmt.Errorf("disk %q: guest mounting at %q (vm.Disk.GuestPath) needs a guest control transport: %w", disk.Path, disk.GuestPath, errors.ErrUnsupported)
+	}
 	input.Type = imanifest.MountTypeImage
+	input.ReadOnly = disk.ReadOnly
 	input.SourcePath = disk.Path
+	input.Target = disk.GuestPath
 	input.Image.Size = disk.Size.Mebibytes()
 	input.Image.Format = disk.Format
 	input.Image.AutoCreate = disk.Size != 0
@@ -274,11 +338,7 @@ func overlaySpecPorts(doc *imanifest.Document, ports []vm.Forward) error {
 }
 
 func specForward(forward vm.Forward) imanifest.ForwardPort {
-	proto := forward.Proto
-	if proto == "" {
-		proto = vm.TCP
-	}
-	return imanifest.ForwardPort{Proto: string(proto), From: "host", Host: forward.HostAddr, Guest: forward.GuestAddr}
+	return imanifest.ForwardPort{Proto: string(cmp.Or(forward.Proto, vm.TCP)), From: "host", Host: forward.HostAddr, Guest: forward.GuestAddr}
 }
 
 func overlaySpecFiles(inputs []imanifest.WriteFileInput, files []vm.File) ([]imanifest.WriteFileInput, error) {

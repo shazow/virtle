@@ -4,235 +4,100 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
-	"log/slog"
 	"net"
-	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/shazow/virtle/backend"
 	"github.com/shazow/virtle/backend/backendtest"
 	"github.com/shazow/virtle/backend/qemu/internal/launch"
-	"github.com/shazow/virtle/backend/qemu/internal/sessionbridge"
 	"github.com/shazow/virtle/internal/manifest"
+	shared "github.com/shazow/virtle/internal/session"
+	"github.com/shazow/virtle/internal/sessionbridge"
 	"github.com/shazow/virtle/vm"
 	"github.com/shazow/virtle/vm/vmtest"
 )
 
-type sessionTestMachine struct {
-	backend.Machine
-	suspendRequests chan struct{}
-	handled         chan struct{}
-
-	commitMu  sync.Mutex
+// commitTracker resumes in-memory machines and records whether the session
+// committed the restored state, the one bridge hook the SSH attach drives.
+type commitTracker struct {
+	backend.Backend
+	mu        sync.Mutex
 	committed bool
-	readyPath string
 }
 
-func (m *sessionTestMachine) SuspendRequests() <-chan struct{} { return m.suspendRequests }
-
-func (m *sessionTestMachine) HandleSuspendRequest(ctx context.Context) error {
-	if err := m.Machine.(backend.Suspender).Suspend(ctx); err != nil {
-		return err
-	}
-	close(m.handled)
-	return launch.ErrSavedSuspendExit
-}
-
-func (m *sessionTestMachine) CommitResume() error {
-	m.commitMu.Lock()
-	m.committed = true
-	m.commitMu.Unlock()
-	return nil
-}
-
-func (m *sessionTestMachine) committedResume() bool {
-	m.commitMu.Lock()
-	defer m.commitMu.Unlock()
-	return m.committed
-}
-
-func (m *sessionTestMachine) Status(ctx context.Context) (backend.Status, error) {
-	status, err := m.Machine.(backend.StatusReporter).Status(ctx)
-	status.Paths.ReadySocket = m.readyPath
-	return status, err
-}
-
-type sessionTestBackend struct {
-	machine *sessionTestMachine
-	started chan struct{}
-}
-
-func (b *sessionTestBackend) Start(ctx context.Context, spec *vm.Spec) (backend.Machine, error) {
-	return b.start(ctx)
-}
-
-func (b *sessionTestBackend) Resume(ctx context.Context, _ *vm.Spec) (backend.Machine, error) {
-	return b.start(ctx)
-}
-
-func (*sessionTestBackend) StateVersion() string { return "test-v1" }
-
-func (b *sessionTestBackend) start(ctx context.Context) (backend.Machine, error) {
+func (b *commitTracker) Resume(ctx context.Context, spec *vm.Spec) (backend.Machine, error) {
 	if bridge := sessionbridge.FromContext(ctx); bridge != nil {
-		bridge.Bind(sessionbridge.Hooks{
-			SuspendRequests:      b.machine.SuspendRequests,
-			HandleSuspendRequest: b.machine.HandleSuspendRequest,
-			Suspend:              b.machine.HandleSuspendRequest,
-			CommitResume:         b.machine.CommitResume,
-		})
+		bridge.Bind(sessionbridge.Hooks{CommitResume: func() error {
+			b.mu.Lock()
+			b.committed = true
+			b.mu.Unlock()
+			return nil
+		}})
 	}
-	close(b.started)
-	return b.machine, nil
+	return b.Backend.Start(ctx, spec)
 }
 
-type notifyingWriter struct {
-	bytes.Buffer
-	wrote chan struct{}
-	once  sync.Once
+func (*commitTracker) StateVersion() string { return "test-v1" }
+
+func (b *commitTracker) committedResume() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.committed
 }
 
-func (w *notifyingWriter) Write(p []byte) (int, error) {
-	n, err := w.Buffer.Write(p)
-	w.once.Do(func() { close(w.wrote) })
-	return n, err
+// noVSockBackend resumes in-memory machines whose status reports CID 0, as a
+// QEMU machine with vsock.enabled = false does.
+type noVSockBackend struct{ backend.Backend }
+
+type noVSockMachine struct{ backend.Machine }
+
+func (noVSockMachine) Status(context.Context) (backend.Status, error) {
+	return backend.Status{State: backend.StateReady}, nil
 }
 
-type blockingBackend struct{ started chan struct{} }
-
-func (b *blockingBackend) Start(ctx context.Context, _ *vm.Spec) (backend.Machine, error) {
-	close(b.started)
-	<-ctx.Done()
-	return nil, context.Cause(ctx)
-}
-
-type notifyingBackend struct {
-	delegate backend.Backend
-	started  chan backend.Machine
-}
-
-func (b *notifyingBackend) Start(ctx context.Context, spec *vm.Spec) (backend.Machine, error) {
-	m, err := b.delegate.Start(ctx, spec)
-	if err == nil {
-		b.started <- m
-	}
-	return m, err
-}
-
-func newNotifyingBackend(guest *vmtest.Guest) *notifyingBackend {
-	return &notifyingBackend{delegate: backendtest.NewMemoryBackend(guest), started: make(chan backend.Machine, 1)}
-}
-
-func newMemoryMachine(t *testing.T) backend.Machine {
-	t.Helper()
-	m, err := backendtest.NewMemoryBackend(nil).Start(context.Background(), &vm.Spec{})
+func (b noVSockBackend) Resume(ctx context.Context, spec *vm.Spec) (backend.Machine, error) {
+	m, err := b.Backend.Start(ctx, spec)
 	if err != nil {
-		t.Fatalf("start memory machine: %v", err)
+		return nil, err
 	}
-	return m
+	return noVSockMachine{m}, nil
 }
 
-func TestRunShutsMachineDownWhenContextEnds(t *testing.T) {
-	g := &vmtest.Guest{}
-	b := newNotifyingBackend(g)
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() {
-		done <- Run(ctx, b, &vm.Spec{}, &manifest.Manifest{}, Options{Resume: "no"})
-	}()
-	<-b.started
-	cancel()
-	if err := <-done; !errors.Is(err, context.Canceled) {
-		t.Fatalf("Run error = %v, want context.Canceled", err)
-	}
-	if got := g.Shutdowns(); got != 1 {
-		t.Fatalf("guest shutdowns = %d, want 1", got)
-	}
-}
+func (noVSockBackend) StateVersion() string { return "test-v1" }
 
-func TestRunRejectsUnknownResumeModeBeforeStart(t *testing.T) {
-	b := newNotifyingBackend(nil)
-	err := Run(context.Background(), b, &vm.Spec{}, &manifest.Manifest{}, Options{Resume: "sometimes"})
-	if err == nil {
-		t.Fatal("Run unexpectedly accepted an unknown resume mode")
+// TestSSHNeedsVSock covers a machine without a vsock device: there is no SSH
+// destination, so the session prints no hint and --ssh fails with
+// ErrUnsupported instead of running ssh against CID 0.
+func TestSSHNeedsVSock(t *testing.T) {
+	mf := &manifest.Manifest{SSH: manifest.SSH{Argv: []string{"ssh"}, User: "agent"}}
+	if hint, err := Hooks().SSHCommandHint(mf, 0); err != nil || hint != "" {
+		t.Fatalf("hint for CID 0 = %q, %v; want none", hint, err)
 	}
-	select {
-	case <-b.started:
-		t.Fatal("Run started a machine before rejecting the resume mode")
-	default:
+	if hint, err := Hooks().SSHCommandHint(mf, 3); err != nil || hint == "" {
+		t.Fatalf("hint for CID 3 = %q, %v; want a command", hint, err)
 	}
-}
-
-func TestRunValidatesSSHBeforeStart(t *testing.T) {
-	b := newNotifyingBackend(nil)
-	err := Run(context.Background(), b, &vm.Spec{}, &manifest.Manifest{}, Options{Resume: "no", SSH: true})
-	if err == nil {
-		t.Fatal("Run unexpectedly accepted an empty ssh.exec")
+	var stdout bytes.Buffer
+	b := noVSockBackend{backendtest.NewMemoryBackend(nil)}
+	err := shared.Run(context.Background(), b, &vm.Spec{}, mf, shared.Options{Resume: shared.ResumeForce, SSH: true, Stdout: &stdout, Hooks: Hooks()})
+	if !errors.Is(err, errors.ErrUnsupported) || !strings.Contains(err.Error(), "vsock") {
+		t.Fatalf("Run --ssh without vsock = %v, want ErrUnsupported naming vsock", err)
 	}
-	select {
-	case <-b.started:
-		t.Fatal("Run started a machine before validating ssh.exec")
-	default:
-	}
-}
-
-func TestRunInstallsInterruptHandlerBeforeStart(t *testing.T) {
-	b := &blockingBackend{started: make(chan struct{})}
-	done := make(chan error, 1)
-	go func() {
-		done <- Run(context.Background(), b, &vm.Spec{}, &manifest.Manifest{}, Options{Resume: "no"})
-	}()
-	<-b.started
-	process, err := os.FindProcess(os.Getpid())
-	if err != nil {
-		t.Fatalf("FindProcess: %v", err)
-	}
-	if err := process.Signal(os.Interrupt); err != nil {
-		t.Fatalf("signal interrupt: %v", err)
-	}
-	if err := <-done; !errors.Is(err, context.Canceled) {
-		t.Fatalf("Run error = %v, want context.Canceled", err)
-	}
-}
-
-func TestRunServicesQueuedSuspend(t *testing.T) {
-	m := &sessionTestMachine{
-		Machine:         newMemoryMachine(t),
-		suspendRequests: make(chan struct{}, 1),
-		handled:         make(chan struct{}),
-	}
-	b := &sessionTestBackend{machine: m, started: make(chan struct{})}
-	done := make(chan error, 1)
-	go func() {
-		done <- Run(context.Background(), b, &vm.Spec{}, &manifest.Manifest{}, Options{Resume: "no"})
-	}()
-	<-b.started
-	m.suspendRequests <- struct{}{}
-	if err := <-done; err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	select {
-	case <-m.handled:
-	default:
-		t.Fatal("queued suspend was not handled")
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want no ssh hint", stdout.String())
 	}
 }
 
 func TestRunPreservesResumeStateWhenSSHStartFails(t *testing.T) {
-	m := &sessionTestMachine{
-		Machine:         newMemoryMachine(t),
-		suspendRequests: make(chan struct{}, 1),
-		handled:         make(chan struct{}),
-	}
-	b := &sessionTestBackend{machine: m, started: make(chan struct{})}
+	b := &commitTracker{Backend: backendtest.NewMemoryBackend(nil)}
 	mf := &manifest.Manifest{SSH: manifest.SSH{Argv: []string{filepath.Join(t.TempDir(), "missing-ssh")}}}
-	err := Run(context.Background(), b, &vm.Spec{}, mf, Options{Resume: "force", SSH: true})
+	err := shared.Run(context.Background(), b, &vm.Spec{}, mf, shared.Options{Resume: shared.ResumeForce, SSH: true, Hooks: Hooks()})
 	if err == nil {
 		t.Fatal("Run unexpectedly started a missing SSH executable")
 	}
-	if m.committedResume() {
+	if b.committedResume() {
 		t.Fatal("Run committed restored state before the SSH process started")
 	}
 }
@@ -259,44 +124,33 @@ func TestInstallSSHKeyWritesTemporaryAuthorizedKey(t *testing.T) {
 	}
 }
 
-func TestRunPrintsSSHHintToStdout(t *testing.T) {
-	b := newNotifyingBackend(nil)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	stdout := &notifyingWriter{wrote: make(chan struct{})}
-	done := make(chan error, 1)
-	go func() {
-		done <- Run(ctx, b, &vm.Spec{}, &manifest.Manifest{SSH: manifest.SSH{Argv: []string{"ssh"}, User: "agent"}}, Options{
-			Resume: "no", Stdout: stdout,
-		})
-	}()
-	m := <-b.started
-	status, err := m.(backend.StatusReporter).Status(context.Background())
-	if err != nil {
-		t.Fatalf("Status: %v", err)
-	}
-	<-stdout.wrote
-	cancel()
-	if err := <-done; !errors.Is(err, context.Canceled) {
-		t.Fatalf("Run error = %v, want context.Canceled", err)
-	}
-	want := fmt.Sprintf("connect with ssh: ssh agent@vsock/%d\n", status.CID)
-	if got := stdout.String(); got != want {
-		t.Fatalf("stdout = %q, want %q", got, want)
-	}
+// readyReporter reports a readiness socket for an in-memory machine.
+type readyReporter struct {
+	backend.Machine
+	readyPath string
 }
 
-func TestWaitReadyHasDeadline(t *testing.T) {
-	t.Setenv(sshReadyTimeoutEnv, "20ms")
+func (m *readyReporter) Status(ctx context.Context) (backend.Status, error) {
+	status, err := m.Machine.(backend.StatusReporter).Status(ctx)
+	status.Paths.ReadySocket = m.readyPath
+	return status, err
+}
+
+func TestReadyHasDeadline(t *testing.T) {
+	t.Setenv("VIRTLE_SSH_READY_TIMEOUT", "20ms")
 	path := filepath.Join(t.TempDir(), "ready.sock")
 	listener, err := net.Listen("unix", path)
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
 	defer listener.Close()
-	m := &sessionTestMachine{Machine: newMemoryMachine(t), readyPath: path}
-	err = waitReady(context.Background(), m, &sessionbridge.Bridge{}, make(chan os.Signal), slog.New(slog.DiscardHandler))
+	m, err := backendtest.NewMemoryBackend(nil).Start(context.Background(), &vm.Spec{})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	// The listener accepts but never writes the token.
+	err = ready(context.Background(), &readyReporter{Machine: m, readyPath: path})
 	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("waitReady error = %v, want context.DeadlineExceeded", err)
+		t.Fatalf("ready error = %v, want context.DeadlineExceeded", err)
 	}
 }

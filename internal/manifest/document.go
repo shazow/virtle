@@ -3,6 +3,7 @@ package manifest
 import (
 	"fmt"
 	"path/filepath"
+	"slices"
 
 	"github.com/shazow/virtle/internal/manifest/tagged"
 	"github.com/shazow/virtle/units"
@@ -18,25 +19,70 @@ const (
 	defaultNetworkMAC = "02:02:00:00:00:01"
 )
 
+// Backend names accepted by the manifest's top-level backend key.
+const (
+	BackendQEMU            = "qemu"
+	BackendFirecracker     = "firecracker"
+	BackendCloudHypervisor = "cloud-hypervisor"
+)
+
 type Document struct {
-	HostName      string             `json:"host_name,omitempty" toml:"host_name" default:"virtle" jsonschema:"Guest-visible VM name used for QEMU naming and derived runtime files."`
-	WorkingDir    string             `json:"working_dir,omitempty" toml:"working_dir" default:"." jsonschema:"Host working directory used to resolve relative paths in the manifest."`
-	StateDir      string             `json:"state_dir,omitempty" toml:"state_dir" default:".virtle" jsonschema:"Host directory used for runtime state such as locks sockets and generated files."`
-	Host          HostInput          `json:"host,omitempty" toml:"host" jsonschema:"Host platform facts used while resolving QEMU defaults."`
-	QEMU          QEMUInput          `json:"qemu,omitempty" toml:"qemu" jsonschema:"QEMU executable and host-side socket settings."`
-	Machine       MachineInput       `json:"machine,omitempty" toml:"machine" jsonschema:"Virtual machine type CPU memory and acceleration settings."`
-	Kernel        KernelInput        `json:"kernel" toml:"kernel" jsonschema:"Guest kernel initrd and kernel command-line settings."`
-	Graphics      *GraphicsInput     `json:"graphics,omitempty" toml:"graphics" jsonschema:"Graphical display backend settings."`
-	Mounts        MountsInput        `json:"mounts,omitempty" toml:"mounts" jsonschema:"Storage and filesystem devices attached at launch."`
-	Workspace     WorkspaceInput     `json:"workspace,omitempty" toml:"workspace" jsonschema:"Workspace directories made available to guest-side templates and helpers."`
-	Networks      []NetworkInput     `json:"networks,omitempty" toml:"networks" jsonschema:"Network devices and port forwards attached at launch."`
-	Balloon       *BalloonInput      `json:"balloon,omitempty" toml:"balloon" jsonschema:"Virtio memory balloon device and optional controller settings."`
-	SSH           SSHInput           `json:"ssh,omitempty" toml:"ssh" jsonschema:"SSH command and readiness settings for attaching to the guest."`
-	VSock         VSockInput         `json:"vsock,omitempty" toml:"vsock" jsonschema:"Allowed runtime vsock CID allocation range."`
-	WriteFiles    []WriteFileInput   `json:"write_files,omitempty" toml:"write_files" jsonschema:"Files copied into or synchronized with the guest through qemu guest agent."`
-	Notifications NotificationsInput `json:"notifications,omitempty" toml:"notifications" jsonschema:"Host command hooks invoked for selected runtime notification states."`
-	Run           []RunInput         `json:"run,omitempty" toml:"run" jsonschema:"Host-side processes started before QEMU and stopped during teardown."`
-	Hotplug       HotplugInput       `json:"hotplug,omitempty" toml:"hotplug" jsonschema:"Devices that may be attached or detached after launch."`
+	Backend         string               `json:"backend,omitempty" toml:"backend" default:"qemu" jsonschema:"Virtual machine backend: qemu (default), or the experimental firecracker or cloud-hypervisor."`
+	Firecracker     FirecrackerInput     `json:"firecracker,omitempty" toml:"firecracker" jsonschema:"Firecracker executable and lifecycle timeouts."`
+	CloudHypervisor CloudHypervisorInput `json:"cloud-hypervisor,omitempty" toml:"cloud-hypervisor" jsonschema:"Cloud Hypervisor executable and lifecycle timeouts."`
+	HostName        string               `json:"host_name,omitempty" toml:"host_name" default:"virtle" jsonschema:"Guest-visible VM name used for QEMU naming and derived runtime files."`
+	WorkingDir      string               `json:"working_dir,omitempty" toml:"working_dir" default:"." jsonschema:"Host working directory used to resolve relative paths in the manifest."`
+	StateDir        string               `json:"state_dir,omitempty" toml:"state_dir" default:".virtle" jsonschema:"Host directory used for runtime state such as locks sockets and generated files."`
+	Host            HostInput            `json:"host,omitempty" toml:"host" jsonschema:"Host platform facts used while resolving QEMU defaults."`
+	QEMU            QEMUInput            `json:"qemu,omitempty" toml:"qemu" jsonschema:"QEMU executable and host-side socket settings."`
+	Machine         MachineInput         `json:"machine,omitempty" toml:"machine" jsonschema:"Virtual machine type CPU memory and acceleration settings."`
+	Kernel          KernelInput          `json:"kernel" toml:"kernel" jsonschema:"Guest kernel initrd and kernel command-line settings."`
+	Graphics        *GraphicsInput       `json:"graphics,omitempty" toml:"graphics" jsonschema:"Graphical display backend settings."`
+	Mounts          MountsInput          `json:"mounts,omitempty" toml:"mounts" jsonschema:"Storage and filesystem devices attached at launch."`
+	Workspace       WorkspaceInput       `json:"workspace,omitempty" toml:"workspace" jsonschema:"Workspace directories made available to guest-side templates and helpers."`
+	Networks        []NetworkInput       `json:"networks,omitempty" toml:"networks" jsonschema:"Network devices and port forwards attached at launch."`
+	Balloon         *BalloonInput        `json:"balloon,omitempty" toml:"balloon" jsonschema:"Virtio memory balloon device and optional controller settings."`
+	SSH             SSHInput             `json:"ssh,omitempty" toml:"ssh" jsonschema:"SSH command and readiness settings for attaching to the guest."`
+	VSock           VSockInput           `json:"vsock,omitempty" toml:"vsock" jsonschema:"Allowed runtime vsock CID allocation range."`
+	WriteFiles      []WriteFileInput     `json:"write_files,omitempty" toml:"write_files" jsonschema:"Files copied into or synchronized with the guest through qemu guest agent."`
+	Notifications   NotificationsInput   `json:"notifications,omitempty" toml:"notifications" jsonschema:"Host command hooks invoked for selected runtime notification states."`
+	Run             []RunInput           `json:"run,omitempty" toml:"run" jsonschema:"Host-side processes started before the virtual machine and stopped during teardown."`
+	Hotplug         HotplugInput         `json:"hotplug,omitempty" toml:"hotplug" jsonschema:"Devices that may be attached or detached after launch."`
+	Egress          *EgressInput         `json:"egress,omitempty" toml:"egress" jsonschema:"What the guest may reach through a network of type virtle, and the secrets it uses without holding them. Without this section such a network reaches the internet and nothing on the host or its networks."`
+}
+
+// EgressInput is the [egress] section: the policy of a network of type
+// virtle. Its allow and deny entries become both the network's rules and
+// the guest's own vm.Egress; reach says what lies beyond them.
+type EgressInput struct {
+	Reach   string              `json:"reach,omitempty" toml:"reach" jsonschema:"What the guest may reach besides the allow entries: rules is only those entries, internet is any public destination and nothing on the host or its networks, all is anything the host can reach. Default internet; required when there are allow entries."`
+	Allow   []EgressRuleInput   `json:"allow,omitempty" toml:"allow" jsonschema:"Destinations the guest may reach, on the host's networks too, and which of them to inspect; reach must say whether they are the whole reach (rules) or exceptions on top of it (internet, all)."`
+	Deny    []EgressReachInput  `json:"deny,omitempty" toml:"deny" jsonschema:"Destinations refused even when an allow entry matches."`
+	Secrets []EgressSecretInput `json:"secrets,omitempty" toml:"secrets" jsonschema:"Secrets the guest uses through a token that inspected requests replace with the real value."`
+	CADir   string              `json:"ca_dir,omitempty" toml:"ca_dir" jsonschema:"Directory of the certificate authority that signs inspected connections; default <state_dir>/egress-ca."`
+}
+
+// EgressReachInput is one destination pattern with optional ports.
+type EgressReachInput struct {
+	Host  string `json:"host" toml:"host" jsonschema:"Destination: a name pattern such as *.github.com, a CIDR, or an address."`
+	Ports []int  `json:"ports,omitempty" toml:"ports" jsonschema:"Ports the entry applies to; empty means any."`
+}
+
+// EgressRuleInput is an allow entry.
+type EgressRuleInput struct {
+	Host    string `json:"host" toml:"host" jsonschema:"Destination: a name pattern such as *.github.com, a CIDR, or an address."`
+	Ports   []int  `json:"ports,omitempty" toml:"ports" jsonschema:"Ports the entry applies to; empty means any."`
+	Inspect bool   `json:"inspect,omitempty" toml:"inspect" jsonschema:"Terminate TLS and HTTP to record each request and replace secret tokens; the guest must trust the CA."`
+}
+
+// EgressSecretInput is a secret the guest uses without holding.
+type EgressSecretInput struct {
+	Name    string   `json:"name" toml:"name" jsonschema:"Environment variable the guest receives the token in, and the name the token is derived from."`
+	From    string   `json:"from" toml:"from" jsonschema:"Go text/template rendering the value when a request carries the token: the host environment is .Env ({{.Env.GITHUB_TOKEN}}) and fromFile reads a file relative to the manifest ({{fromFile \"npm.token\"}}). The value itself never appears in the manifest."`
+	Hosts   []string `json:"hosts" toml:"hosts" jsonschema:"Name patterns of the inspected destinations that may receive the value."`
+	Methods []string `json:"methods,omitempty" toml:"methods" jsonschema:"HTTP methods the value may be sent with; empty means any."`
+	Paths   []string `json:"paths,omitempty" toml:"paths" jsonschema:"URL path patterns the value may be sent to; empty means any."`
+	In      []string `json:"in,omitempty" toml:"in" jsonschema:"Where the token is replaced: header, query, path, body; empty means everywhere."`
 }
 
 // ResolveWorkingDir makes WorkingDir absolute against the process working
@@ -135,6 +181,30 @@ func (m MountsInput) Image() []ImageMountInput {
 	return filterMounts[ImageMountInput](m)
 }
 
+// withVirtioFSDefaults returns the mounts with every virtiofs entry's daemon
+// defaulted (see defaultVirtioFSDaemon); the receiver is left alone.
+func (m MountsInput) withVirtioFSDefaults() MountsInput {
+	result := slices.Clone(m)
+	for i, entry := range result {
+		if mount, ok := entry.(VirtioFSMountInput); ok {
+			defaultVirtioFSDaemon(&mount)
+			result[i] = mount
+		}
+	}
+	return result
+}
+
+// firstMountNot reports the first mount whose kind is none of kinds, for a
+// backend that rejects the other kinds by name.
+func (m MountsInput) firstMountNot(kinds ...string) (index int, kind string, found bool) {
+	for i, mount := range m {
+		if !slices.Contains(kinds, mount.mountType()) {
+			return i, mount.mountType(), true
+		}
+	}
+	return 0, "", false
+}
+
 func (m *MountsInput) UnmarshalJSON(data []byte) error {
 	mounts, err := tagged.DecodeJSONList(data, "manifest.mounts", mountRegistry)
 	*m = mounts
@@ -164,7 +234,7 @@ func filterMounts[T MountEntry](mounts MountsInput) []T {
 }
 
 type MountInput struct {
-	Tag        string `json:"tag" toml:"tag" jsonschema:"Stable QEMU mount tag or device identifier."`
+	Tag        string `json:"tag" toml:"tag" jsonschema:"Stable mount tag or device identifier."`
 	SourcePath string `json:"source,omitempty" toml:"source" jsonschema:"Host path or image path backing this mount."`
 	ReadOnly   bool   `json:"read_only,omitempty" toml:"read_only" jsonschema:"Attach the mount or image read-only."`
 }
@@ -205,6 +275,7 @@ type NinePInput struct {
 type ImageMountInput struct {
 	Type       string     `json:"type" toml:"type" jsonschema:"Mount kind; must be image for this entry."`
 	SourcePath string     `json:"source" toml:"source" jsonschema:"Host disk image path."`
+	Target     string     `json:"target,omitempty" toml:"target" jsonschema:"Guest mount point for a boot-time image; only / is supported. It makes this image the root device, and virtle passes root= for it to the kernel on every backend. Not supported on hotplugged images."`
 	ReadOnly   bool       `json:"read_only,omitempty" toml:"read_only" jsonschema:"Attach the image read-only."`
 	Image      ImageInput `json:"image,omitempty" toml:"image" jsonschema:"Disk image creation and format settings."`
 }
@@ -231,11 +302,25 @@ type WorkspaceInput struct {
 	MountCWD bool   `json:"mount_cwd,omitempty" toml:"mount_cwd" jsonschema:"Mount the current working directory into the guest after launch."`
 }
 
+// Network types accepted by networks[].type.
+const (
+	NetworkTypeUser   = "user"   // the VMM's built-in user networking (QEMU slirp)
+	NetworkTypeVirtle = "virtle" // a network virtle runs in userspace (vmnet)
+	NetworkTypeTAP    = "tap"    // a host TAP device the host kernel networks
+)
+
 type NetworkInput struct {
-	ID      string        `json:"id,omitempty" toml:"id" jsonschema:"QEMU network device identifier."`
-	Type    string        `json:"type,omitempty" toml:"type" jsonschema:"Network backend type."`
-	MAC     string        `json:"mac,omitempty" toml:"mac" jsonschema:"Guest network interface MAC address."`
-	Forward []ForwardPort `json:"forward,omitempty" toml:"forward" jsonschema:"Port forwarding rules for this network backend."`
+	ID      string        `json:"id,omitempty" toml:"id" jsonschema:"Network device identifier."`
+	Type    string        `json:"type,omitempty" toml:"type" jsonschema:"Network type: user (the VMM's built-in user networking, the default), virtle (a network virtle runs in userspace), or tap (a host TAP device). QEMU also takes any of its own -netdev backends verbatim."`
+	MAC     string        `json:"mac,omitempty" toml:"mac" jsonschema:"Guest network interface MAC address; a virtle network allocates one when omitted."`
+	Tap     string        `json:"tap,omitempty" toml:"tap" jsonschema:"Host TAP device name, for type tap; QEMU picks and sets up the device itself when omitted."`
+	Forward []ForwardPort `json:"forward,omitempty" toml:"forward" jsonschema:"Port forwarding rules for this network."`
+	DNS     *DNSInput     `json:"dns,omitempty" toml:"dns" jsonschema:"DNS upstream for a virtle network; not supported on other network types or hotplugged networks."`
+}
+
+// DNSInput selects the upstream used by a virtle network's DNS service.
+type DNSInput struct {
+	Upstream string `json:"upstream,omitempty" toml:"upstream" jsonschema:"DNS upstream: host (the default) uses the host's configured DNS servers; an IP address with a port selects one server, such as 127.0.0.1:53 or [::1]:53."`
 }
 
 type ForwardPort struct {
@@ -277,6 +362,7 @@ type SSHInput struct {
 }
 
 type VSockInput struct {
+	Enabled  *bool      `json:"enabled,omitempty" toml:"enabled" jsonschema:"Attach the QEMU vsock device; defaults to true. Disable for guests that do not use host-guest vsock communication."`
 	CIDRange RangeInput `json:"cid_range,omitempty" toml:"cid_range" jsonschema:"Inclusive range of vsock CIDs virtle may allocate at launch."`
 }
 

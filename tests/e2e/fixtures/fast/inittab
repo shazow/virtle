@@ -1,0 +1,4 @@
+::sysinit:/bin/ready
+::ctrlaltdel:/bin/shutdown reboot
+::shutdown:/bin/shutdown
+::askfirst:-/bin/sh

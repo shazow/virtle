@@ -30,6 +30,14 @@ type StartOptions struct {
 	// DeferSuspendHandling leaves control-socket suspend requests for a
 	// foreground session to coordinate with its active process.
 	DeferSuspendHandling bool
+
+	// EphemeralState removes the manifest's state directory once runtime
+	// state is released; the caller created it for this launch alone.
+	EphemeralState bool
+
+	// Egress is the guest's egress policy on the network a virtle NIC
+	// attaches to; nil means the network's default.
+	Egress *vm.Egress
 }
 
 // StartVM starts a VM from a resolved manifest and returns a handle without
@@ -48,6 +56,8 @@ func StartVM(ctx context.Context, mf *manifest.Manifest, options StartOptions, c
 	v, err := m.startVM(ctx, launch.Spec{Manifest: mf, Options: launch.Options{
 		Resume:           options.Resume,
 		HasRemoteControl: options.HasRemoteControl,
+		RemoveStateDir:   options.EphemeralState,
+		Egress:           options.Egress,
 	}})
 	if err != nil {
 		return nil, err
@@ -233,6 +243,19 @@ func (v *VM) DialGuestAgent(ctx context.Context) (qga.Client, error) {
 	return v.m.waitForGuestAgent(ctx, v.running.plan.Paths.GuestAgentSocket, v.running.processes.Watchers())
 }
 
+// Console returns a vm.Term over the guest's serial port when the console
+// is printed (kernel.serial = "print"); see backend.ConsoleProvider. The
+// session replays recent output before live output.
+func (v *VM) Console(ctx context.Context) (vm.Term, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if v.running.console == nil {
+		return nil, fmt.Errorf("no serial console to attach; set kernel.serial (qemu.Backend.Console) to print: %w", errors.ErrUnsupported)
+	}
+	return v.running.console.Attach(), nil
+}
+
 // ShutdownGuest asks the guest to power down through the guest agent (or
 // the manifest's shutdown_exec command). It does not wait for the VM to
 // exit; pair it with Wait.
@@ -248,12 +271,25 @@ func (v *VM) ShutdownGuest(ctx context.Context) error {
 // the VM down without guest file write-back. The VM is not usable
 // afterwards; resume with StartVM and ResumeModeForce.
 func (v *VM) Suspend(ctx context.Context) error {
+	if err := v.suspendSupported(); err != nil {
+		return err
+	}
 	plan := v.running.plan
 	if err := v.m.saveSuspendStateConnected(ctx, plan.Paths.QMPSocket, v.running.qmp, plan.CID, plan.Notifier); err != nil {
 		return err
 	}
 	v.running.runtime.MarkSavedSuspend()
 	return v.close()
+}
+
+// suspendSupported rejects suspending a machine whose state directory is
+// removed on exit (a vm.Spec without Dir): the saved state would go with it.
+// The control server of such a machine has no suspend entry point either.
+func (v *VM) suspendSupported() error {
+	if v.running.plan.Options.RemoveStateDir {
+		return fmt.Errorf("suspend requires vm.Spec.Dir: saved state would be removed with the temporary state directory: %w", errors.ErrUnsupported)
+	}
+	return nil
 }
 
 // SuspendRequests reports suspend work queued by the control server.
@@ -274,6 +310,9 @@ func (v *VM) HandleSuspendRequest(ctx context.Context) error {
 
 // SuspendSession queues and services a foreground job-control suspend.
 func (v *VM) SuspendSession(ctx context.Context) error {
+	if err := v.suspendSupported(); err != nil {
+		return err
+	}
 	v.running.suspend.Request()
 	return v.HandleSuspendRequest(ctx)
 }
@@ -285,6 +324,27 @@ func (v *VM) ResizeMemory(ctx context.Context, sizeBytes int64) error {
 		return fmt.Errorf("resize memory: no balloon device configured: %w", errors.ErrUnsupported)
 	}
 	return balloon.SetActual(ctx, v.running.qmp, sizeBytes)
+}
+
+// HasNetworkPort reports whether the guest NIC is a port on a vmnet.Network,
+// where forwards are exposed rather than hotplugged.
+func (v *VM) HasNetworkPort() bool { return v.running.network != nil }
+
+// ExposeForward exposes a host->guest forward on the machine's network
+// port; it needs no hotplug ports.
+func (v *VM) ExposeForward(ctx context.Context, f vm.Forward) error {
+	if v.running.network == nil {
+		return fmt.Errorf("expose forward: the machine has no vmnet port: %w", errors.ErrUnsupported)
+	}
+	return v.running.network.expose(ctx, f)
+}
+
+// UnexposeForward removes a forward exposed at Start or by ExposeForward.
+func (v *VM) UnexposeForward(f vm.Forward) error {
+	if v.running.network == nil {
+		return fmt.Errorf("unexpose forward: the machine has no vmnet port: %w", errors.ErrUnsupported)
+	}
+	return v.running.network.unexpose(f)
 }
 
 // HotplugDevice lowers a vm.Device onto the manifest's hotplug defaults,

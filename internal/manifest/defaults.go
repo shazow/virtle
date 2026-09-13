@@ -7,7 +7,7 @@ const (
 
 // DefaultDocument returns the manifest input defaults that virtle assumes when
 // optional fields are omitted. Required fields without defaults, such as
-// kernel.path and kernel.initrd_path, are intentionally left unset.
+// kernel.path, are intentionally left unset.
 func DefaultDocument() Document {
 	doc := Document{
 		Graphics: &GraphicsInput{
@@ -43,7 +43,11 @@ func DefaultDocument() Document {
 // explicitly.
 func DocumentWithDefaults(document Document) Document {
 	defaults := DefaultDocument()
-
+	if document.Backend != "" {
+		defaults.Backend = document.Backend
+	}
+	defaults.Firecracker = document.Firecracker
+	defaults.CloudHypervisor = document.CloudHypervisor
 	if document.HostName != "" {
 		defaults.HostName = document.HostName
 	}
@@ -78,6 +82,9 @@ func DocumentWithDefaults(document Document) Document {
 	defaults.Notifications = mergeNotificationsInput(defaults.Notifications, document.Notifications)
 	if document.Run != nil {
 		defaults.Run = document.Run
+	}
+	if document.Egress != nil {
+		defaults.Egress = document.Egress
 	}
 	defaults.Hotplug = mergeHotplugInput(defaults.Hotplug, document.Hotplug)
 
@@ -206,6 +213,9 @@ func mergeSSHInput(base SSHInput, override SSHInput) SSHInput {
 }
 
 func mergeVSockInput(base VSockInput, override VSockInput) VSockInput {
+	if override.Enabled != nil {
+		base.Enabled = override.Enabled
+	}
 	if override.CIDRange.Min != 0 {
 		base.CIDRange.Min = override.CIDRange.Min
 	}

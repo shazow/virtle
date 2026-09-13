@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/shazow/virtle/internal/manifest"
+	"github.com/shazow/virtle/vm"
+	"github.com/shazow/virtle/vmnet"
 )
 
 type ResumeMode string
@@ -26,6 +28,15 @@ type Options struct {
 	// explicitly: the CLI always expects an agent, backend constructors
 	// declare it per guest-control implementation.
 	HasRemoteControl bool
+
+	// RemoveStateDir removes the manifest's state directory once runtime
+	// state is released. Callers set it for a state directory they created
+	// for this launch alone (a Spec without Dir).
+	RemoveStateDir bool
+
+	// Egress is the guest's egress policy, handed to the network a virtle
+	// NIC attaches to; nil means the network's default.
+	Egress *vm.Egress
 }
 
 type Spec struct {
@@ -48,6 +59,13 @@ type SuspendState struct {
 	CID           int       `json:"cid,omitempty"`
 	Timestamp     time.Time `json:"timestamp"`
 	Status        string    `json:"status"`
+	// NetworkMAC and NetworkAddr identify the guest NIC on its virtle
+	// network, so a resume re-attaches with the lease the guest still holds.
+	NetworkMAC  string `json:"networkMac,omitempty"`
+	NetworkAddr string `json:"networkAddr,omitempty"`
+	// NetworkState preserves synthetic DNS addresses and guest secret tokens
+	// that remain cached in the saved VM's memory.
+	NetworkState *vmnet.NetworkState `json:"networkState,omitempty"`
 }
 
 type NotificationSink interface {
@@ -56,7 +74,6 @@ type NotificationSink interface {
 
 type RuntimePaths struct {
 	StateDir         string
-	RuntimeDir       string
 	ControlSocket    string
 	QMPSocket        string
 	GuestAgentSocket string

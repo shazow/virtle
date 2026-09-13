@@ -24,6 +24,8 @@ func (m *Manifest) ResolvedPersistenceDirectories() []string {
 	return dirs
 }
 
+// ResolvedPersistenceBaseDir resolves BaseDir against the working directory,
+// using the working directory itself when BaseDir is empty.
 func (m *Manifest) ResolvedPersistenceBaseDir() string {
 	if m.Persistence.BaseDir == "" {
 		return m.resolvePath(".")
@@ -31,6 +33,8 @@ func (m *Manifest) ResolvedPersistenceBaseDir() string {
 	return m.resolvePath(m.Persistence.BaseDir)
 }
 
+// ResolvedPersistenceStateDir resolves the persistent state location, falling
+// back to BaseDir when StateDir is empty. RuntimeDir is resolved separately.
 func (m *Manifest) ResolvedPersistenceStateDir() string {
 	if m.Persistence.StateDir != "" {
 		return m.resolvePath(m.Persistence.StateDir)
@@ -226,7 +230,7 @@ func cloneQEMUMountDevices(mounts []QEMUMountDevice) []QEMUMountDevice {
 func (m *Manifest) ResolvedRuns(cid int) ([]ResolvedRun, error) {
 	runs := make([]ResolvedRun, 0, len(m.Run))
 	for i, run := range m.Run {
-		renderer, err := NewTemplateRenderer(RunTemplateProvider{
+		renderer, err := NewTemplateRendererIn(m.Paths.WorkingDir, RunTemplateProvider{
 			CID:       cid,
 			StateDir:  m.ResolvedPersistenceStateDir(),
 			Workspace: m.Workspace,

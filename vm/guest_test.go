@@ -26,7 +26,6 @@ func (outputGuest) Create(context.Context, string, fs.FileMode) (io.WriteCloser,
 	return nil, errors.ErrUnsupported
 }
 func (outputGuest) Shutdown(context.Context) error { return nil }
-func (outputGuest) Close() error                   { return nil }
 
 func TestOutputCapturesStandardOutput(t *testing.T) {
 	wantErr := &ExitError{Code: 2, Stderr: []byte("failed")}
@@ -49,7 +48,9 @@ func TestArchiveFS(t *testing.T) {
 		"dir/world.txt": {Data: []byte("world"), Mode: 0o600},
 	}
 
-	tr := tar.NewReader(ArchiveFS(fsys))
+	archive := ArchiveFS(fsys)
+	defer archive.Close()
+	tr := tar.NewReader(archive)
 	got := map[string]string{}
 	for {
 		hdr, err := tr.Next()

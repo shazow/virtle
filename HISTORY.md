@@ -7,6 +7,309 @@ Keep entries terse. When a day includes both CLI and library changes, group
 them by type, CLI first. For compatibility-breaking usage migrations, include
 compact before/after examples.
 
+## 2026-09-12
+
+- Virtle network TCP SYN handlers retain their originating attachment through
+  asynchronous dispatch and address reuse. Pending handshakes are bounded
+  per attachment, with separate capacity for DNS. Closing a port forward
+  cancels and joins pending guest dials and established connections.
+  UDP flows and forwarded peers stay alive while either direction is active.
+
+- Resolved manifests retain separate runtime socket and persistent state
+  directories. Runtime sockets support working-directory, XDG, and explicit
+  path placement; an unset state directory falls back to `persistence.baseDir`.
+  Document loading continues to place sockets under the state directory.
+- Firecracker and Cloud Hypervisor validate `[[run]]` helpers at manifest
+  load, including empty commands, template syntax, and reserved variables.
+  Existing disk images can use any filesystem; the ext4 restriction applies
+  only when `image.create = true`.
+- Helper templates accept ordinary Go template constructs such as
+  `{{with .Workspace}}`; forwarding command arguments retain literal dollar
+  strings. `manifest defaults --resolved` leaves the optional initrd unset.
+- `docs/recipes/networking` demonstrates QEMU managed DNS, egress filtering,
+  HTTPS inspection, and scoped secret injection with local mock services.
+  Use `nix run` to explore or `nix run .#check` to verify the full demo.
+- Synthetic DNS addresses remain bound for their advertised TTL. Exhausting
+  a configured range returns SERVFAIL until a binding expires instead of
+  redirecting a guest's cached address to another hostname.
+- QEMU suspend saves synthetic DNS bindings and issued secret placeholders
+  with the NIC identity, and restores them before guest traffic resumes.
+  Secret values and permissions still come from the current policy. Suspend
+  state is now `qemu-v2`; older saves require the virtle version that wrote
+  them or a fresh boot.
+- Manifest-loaded QEMU backends preserve user and TAP NICs alongside a
+  virtle NIC. Inspected HTTP protocol upgrades keep their relay connections
+  alive until the stream closes.
+- Concurrent launches sharing a CA directory initialize one consistent
+  certificate/key pair. Interrupted initial publication can be completed
+  from the private bundle without changing its identity. Existing separate
+  `ca.pem` and `ca-key.pem` files remain readable without rotating the CA.
+- Virtle networks authorize DNS queries through their egress policy and
+  proxy them to host DNS by default. `[networks.dns].upstream` selects an
+  explicit IP:port for both DNS queries and outbound name resolution.
+  Synthetic mode retains synthetic A addresses, empty AAAA answers, and
+  local synthetic PTR records. Other ordinary record types are proxied; query
+  decisions and exchanges are logged, and direct guest DNS outside the
+  gateway is blocked.
+- Egress address and CIDR deny entries also apply after DNS resolution, and
+  the default denied ranges include the IPv6 unspecified address. Inspected
+  HTTP requests must match the authorized host and port before admission
+  hooks or secret injection run.
+- Closing a network port ends its outgoing flows before releasing its
+  address, so a replacement guest establishes connections under its own
+  policy. DNS requests are also bound to their originating port. Fragmented
+  TCP and UDP packets to the gateway are rejected; large DNS messages can
+  use TCP.
+
+### Library changes
+
+- Removed the unimplemented `vm.TermOptions`, `vm.GuestWithCopy`, and
+  `vm.CopyOptions` declarations. `GuestCmd.Stdin`, `Term.Resize`, and
+  `Term.Wait` are removed because no backend implemented them. `Guest.Close`
+  is removed because guest operations own their connections; close file and
+  console streams as before, and use `Machine.Wait` to wait for VM exit.
+  The working `vm.Output` and `vm.ArchiveFS` conveniences remain available.
+- `backend.Resumer.StateVersion` remains available for querying the save
+  format before resume. Control clients retain completion and shutdown
+  fallbacks for older running servers without the current lifecycle RPCs.
+- Networks may optionally report `MTU() int`; QEMU uses a positive reported
+  value or defaults to 1500. `userspace.Network.Listen` and `Gateway`,
+  `vmnet.DenyAll`, and `Passthrough.Dialer` remain available.
+  Gateway listeners reserve port 53 for the network's DNS service.
+- Custom networks can implement `vmnet.StatefulNetwork` using the public
+  `vmnet.NetworkState` and `vmnet.DNSBinding` types to participate in QEMU
+  suspend/resume. The public types preserve the checkpoint JSON representation.
+- Control RPCs honor context cancellation, including the forced-stop fallback
+  for a canceled shutdown. Userspace network attachment and dialing reject
+  canceled contexts before acquiring resources. Firecracker and Cloud
+  Hypervisor status results own their network snapshots.
+- `userspace.Config.DNS` retains `DNSForward` (the Go default, returning
+  real A addresses) and `DNSFakeIP` (synthetic A addresses). Manifest egress
+  policies select synthetic mode to retain hostnames on outgoing flows.
+- `userspace.Config.DNSUpstream` selects `"host"` (the default) or an explicit
+  resolver IP:port. `"host"` reads DNS servers from `/etc/resolv.conf`; this
+  wire-DNS path does not consult `/etc/hosts` or use `net.DefaultResolver`.
+  Custom egress implementations must implement `vmnet.DNSAuthorizer` to
+  permit upstream DNS queries. Query filtering follows hostname permissions,
+  with service ports checked at connection time. Synthetic A allocation now
+  requires a successful upstream answer, preserving NXDOMAIN and NODATA.
+  `Policy.Resolver` and `Passthrough.Dialer.Resolver` override connection
+  lookups only; names known to a custom resolver must also be served by the
+  configured DNS upstream. Passthrough dialer timeouts and deadlines cover
+  both name resolution and connection attempts.
+- `egress.Request.Host` exposes the validated HTTP authority to admission
+  and injection callbacks.
+- Cloud Hypervisor's interactive console serializes writes to
+  `Backend.ConsoleOutput`, as print mode does; callers can supply an ordinary
+  `io.Writer` without adding their own synchronization.
+
+## 2026-09-11
+
+- The Firecracker and Cloud Hypervisor backends are experimental: they stay
+  out of the README's feature list, and their manifest sections and Go
+  packages may change.
+- `backend = "cloud-hypervisor"` (experimental) launches a
+  [Cloud Hypervisor](https://www.cloudhypervisor.org/) microVM: everything
+  the Firecracker backend does (direct kernel boot, raw disks, serial output,
+  a host TAP NIC, the usual `virtle launch`, `status`, and `rpc` lifecycle)
+  plus `[[mounts]] type = "virtiofs"` shares served by a `virtiofsd` virtle
+  starts. `rpc shutdown` presses the guest's ACPI power button. Linux with
+  KVM only; the guest kernel needs PCI, ACPI, and (for an ELF `vmlinux`) the
+  PVH entry point. See [docs/cloud-hypervisor.md](docs/cloud-hypervisor.md)
+  and the [recipe](docs/recipes/cloud-hypervisor/README.md).
+- `nix run .#benchmark-backends` rotates over three backends and takes
+  rounds instead of pairs: `--pairs 10 --warmup-pairs 2` becomes `--rounds 9
+  --warmup-rounds 3` (multiples of three), and `results.json` records
+  `rounds` and `warmup_rounds`.
+- `[cloud-hypervisor] args` and `[firecracker] args` append command-line
+  arguments to the VMM after virtle's own, as `[qemu] exec` allows for QEMU.
+- `kernel.serial = "console"` works on Cloud Hypervisor as it does on QEMU:
+  the guest console is the host terminal `virtle launch` runs in.
+- On Cloud Hypervisor, `[[mounts]] type = "image"` takes `image.format =
+  "qcow2"` for an existing image (created images stay raw) and honors
+  `image.serial` and `image.direct`; Firecracker keeps rejecting them.
+- `[[run]]` host helpers start before Firecracker and Cloud Hypervisor
+  microVMs and stop after them, as they do for QEMU; the sections used to
+  be rejected there. `[notifications]` stays QEMU-only.
+- `[[mounts]] type = "virtiofs"` with `read_only = true` now makes the
+  `virtiofsd` virtle starts refuse guest writes: `--readonly` joins virtle's
+  default daemon arguments. Before, `read_only` did nothing for virtiofs
+  shares on any backend. A mount that spells `virtiofs.args` keeps them as
+  written (add `--readonly` there yourself), and a share served by another
+  daemon (`virtiofs.socket` alone) still relies on that daemon; virtle logs
+  both. A QEMU manifest's virtiofs mount that names no `virtiofs.socket`
+  now gets `<tag>.sock` and virtle's `virtiofsd`, as it already did through
+  the Go API.
+- Firecracker and Cloud Hypervisor manifests accept `[balloon] enabled =
+  false` and `[workspace]` `guest_dir` / `host_dir` (template data for
+  `[[run]]`); `mount_cwd`, `write_files`, and an enabled balloon stay
+  rejected there.
+
+### Library changes
+
+- New experimental `backend/cloudhypervisor` package: `&cloudhypervisor.Backend{}`
+  implements `backend.Backend` with the same `vm.Spec` and `backend.Machine`
+  as the other backends, its machines implement `backend.StatusReporter` and
+  `backend.ConsoleProvider`, and `vm.Spec.Shares` become virtio-fs shares.
+  `manifest.Load` returns it for `backend = "cloud-hypervisor"`.
+- `cloudhypervisor.Backend` accepts `vm.Disk.Format = "qcow2"` and
+  `Console: cloudhypervisor.ConsoleInteractive`; `cloudhypervisor.Backend`
+  and `firecracker.Backend` gain `ExtraArgs`, as `qemu.Backend` has. With
+  that slice field `firecracker.Backend` values are no longer comparable
+  with `==`, like `qemu.Backend`.
+- `vm.Share.ReadOnly` reaches the `virtiofsd` virtle starts with its default
+  arguments as `--readonly`.
+
+## 2026-09-10
+
+- Manifest templates gain `fromFile "path"`, the file's contents without a
+  trailing newline, on every surface; relative paths are the manifest's.
+- `[[networks]] type = "virtle"` puts the guest on a network virtle runs in
+  userspace (no privilege, no host network changes): a fixed address and MAC
+  with a DHCP lease, DNS, `virtle status` reporting the address, and
+  `[[networks.forward]]` entries served by virtle rather than QEMU's slirp.
+  `type = "tap"` with `tap = "tap0"` hands a host TAP device to the VMM on
+  QEMU and Firecracker. `type = "user"` stays the default; any other value
+  still reaches QEMU verbatim as its `-netdev` backend, and `type = "tap"`
+  without a `tap` name still leaves the device to QEMU's own scripts. See
+  [docs/networking.md](docs/networking.md).
+- A virtle network reaches the internet and nothing on the host or its
+  networks unless the manifest says otherwise. `[egress] reach` names what
+  lies beyond the allow entries: `"rules"` (only them), `"internet"` (the
+  default), or `"all"` (anything the host can reach); with allow entries it
+  is required.
+- New `[egress]` section for virtle networks: `[[egress.allow]]` and
+  `[[egress.deny]]` entries by name pattern, CIDR, or address with optional
+  `ports`; beyond them the guest reaches what `reach` says, and loopback,
+  link-local, and metadata ranges are always refused. `inspect = true` on an
+  allow entry terminates TLS and HTTP to record each request; the guest gets
+  the CA certificate at `/etc/virtle/ca.pem`. `[[egress.secrets]]` names a
+  secret, a template that renders its value when a request needs it
+  (`from = "{{.Env.NAME}}"` or `'{{fromFile "path"}}'`), and the hosts that
+  may receive it; the guest gets a token at
+  `/etc/virtle/secrets.env` that inspected requests replace with the value.
+  See [examples/manifest-sandbox.toml](examples/manifest-sandbox.toml).
+- Firecracker manifests accept `[[networks]] type = "tap"`.
+
+### Library changes
+
+- New `vmnet` package: the networking contracts (`Link`, `Network`, `Port`,
+  `Egress`, `Flow`, `ErrDenied`) and frame adapters, with the in-process
+  gVisor network in `vmnet/userspace` (`userspace.New`, `Network.DialContext`
+  and `Listen`, fake-IP DNS) and the standard policy in `vmnet/egress`
+  (`Policy` with rules, deny ranges, a `Recorder`, inspection, and
+  injections; `LoadOrCreateCA`, `GuestEnv`, `GuestFiles`).
+- `egress.Policy.Reach` is what a flow no rule matches may reach:
+  `ReachRules` (the zero value), `ReachInternet`, or `ReachAll`.
+  `ReachInternet` refuses `egress.LocalPrefixes` and the host's own
+  addresses, on what names resolve to as well as on addresses dialed.
+- `egress.Policy.Injections` replaces a token the guest writes with a value
+  computed as each inspected request passes, or refuses the request that
+  carries it (`egress.Injection`; a `Value` returning an error wrapping
+  `vmnet.ErrDenied` refuses). A secret is a named injection: its token is
+  generated and issued per guest. `egress.Policy.Admit` decides on every
+  inspected request before any token is replaced. Values are read only when
+  a request carries the token, and `egress.Event` records refusals and the
+  injections applied.
+- `qemu.Backend` gains `Network vmnet.Network` and `Link` (`qemu.User`,
+  `qemu.TAP`, `qemu.Stream`); `firecracker.Backend` gains `Link`
+  (`firecracker.TAP`). A pair that cannot work fails `Start` with an error
+  wrapping `errors.ErrUnsupported`. With a `Network`, `Spec.Ports` and
+  `Attach(vm.Forward)` are exposed on the network port instead of slirp
+  forwards and hotplugged NICs, `Detach` removes them, and a suspended
+  machine resumes with its address and MAC.
+- `backend.Status` gains `Networks []backend.NetworkStatus` (ID, MAC,
+  whether the NIC is attached to a virtle network, and its address there).
+- `vm.Spec` gains `Egress *vm.Egress` (`Allow`, `Deny []vm.Reach`,
+  `Secrets []string`): the guest's own policy, which only narrows the
+  network's.
+- `manifest.Load` builds the network and policy a manifest declares; the
+  returned `*qemu.Backend` owns them and implements `io.Closer`.
+
+## 2026-09-09
+
+- `backend = "firecracker"` launches a Firecracker microVM instead of QEMU:
+  direct kernel boot, raw disks, serial output, and the usual `virtle launch`,
+  `status`, and `rpc` lifecycle. Linux with KVM only; guest control, SSH,
+  networking, shares, suspend, balloon, and hotplug stay QEMU-only and fail
+  validation. See [docs/firecracker.md](docs/firecracker.md).
+- `[[mounts]] type = "image"` gains `target = "/"`, naming the root device on
+  both backends: virtle passes `root=/dev/vdX` and `ro`/`rw` for it, and
+  `kernel.initrd_path` is optional when a boot names its root device (or
+  carries its own `root=`). Nothing is picked automatically on either
+  backend: a disk boot without an initrd must set `target = "/"` on its
+  root image or pass `root=`, and fails validation otherwise.
+- QEMU manifests can set `vsock.enabled = false` for guests that do not use
+  host-guest vsock, dropping the `/dev/vhost-vsock` requirement.
+- `virtle launch` lets `Machine.Shutdown` stop the guest gracefully on
+  SIGINT/SIGTERM before canceling the machine, and drains accepted
+  wait/kill/shutdown/suspend RPC responses before exiting; a second
+  SIGINT/SIGTERM during that shutdown kills the machine instead of waiting
+  for the guest. `^Z` (SIGTSTP) on a backend that cannot suspend is ignored
+  with a warning instead of shutting the VM down.
+- `host_name` must stay under the state directory (`..` and absolute names
+  are refused, since the name is the state lock's); nested names such as
+  `team/vm` keep working on every backend.
+- `nix flake check` gains real-KVM end-to-end checks that boot both backends
+  on a shared tiny kernel, through the CLI and through the Go API (the
+  `backendtest` contract, root and scratch disks, the console); they need a
+  `kvm` builder (see CONTRIBUTING.md). `nix run .#benchmark-backends`
+  compares the backends.
+
+### Library changes
+
+- New `backend/firecracker` package: `&firecracker.Backend{}` implements
+  `backend.Backend`, and its machines implement `backend.StatusReporter` and
+  `backend.ConsoleProvider`, with the same `vm.Spec` and `backend.Machine`
+  as QEMU. Spec features it cannot honor fail `Start` with an error wrapping
+  `errors.ErrUnsupported`.
+- `vm.Disk{GuestPath: "/"}` names the root device on both backends (virtle
+  passes `root=` for it). Any other `GuestPath` needs a guest agent and now
+  fails `Start` with an error wrapping `errors.ErrUnsupported` on both
+  backends; QEMU used to ignore it silently.
+- `vm.Disk.Size` (manifest `image.create` + `image.size`) creates a missing
+  raw ext4 image on Firecracker too, with QEMU's 256 MiB minimum.
+- `backend.ConsoleProvider` is implemented by QEMU and Firecracker machines
+  whose console is `print`: `Machine.Console` returns a `vm.Term` over the
+  guest's serial port that replays recent output before live output, so
+  readiness detection and driving a console shell need only `bufio` and
+  `io`; without a print console it reports `errors.ErrUnsupported`. A
+  session whose reader falls 1 MiB behind is dropped with an error wrapping
+  `vm.ErrTermFellBehind` and a warning on the backend's `Logger`, so a
+  stalled consumer never stalls the guest.
+- `vm.Disk.ReadOnly` is honored by both backends and by QEMU hotplug.
+  **Breaking:** a `vm.Disk` that replaces a manifest disk must now set
+  `ReadOnly: true` itself to keep a read-only mount:
+  ```go
+  // Before: the manifest's read_only = true survived the overlay.
+  spec.Disks[0] = vm.Disk{Path: "rootfs.img"}
+  // After: the Spec entry is the whole truth.
+  spec.Disks[0] = vm.Disk{Path: "rootfs.img", ReadOnly: true}
+  ```
+- **Breaking:** an empty `vm.Spec.Dir` now means the process working
+  directory on both backends, as for `exec.Cmd.Dir`: relative kernel, disk,
+  and share paths resolve there, and runtime state goes to a private
+  temporary directory that is removed when the machine exits. QEMU used to
+  work in a never-removed temporary directory, so relative Spec paths did
+  not resolve against the caller's directory. `Suspend` and `Resume` need a
+  `Dir`, since saved state lives in its `.virtle`:
+  ```go
+  // Before: state landed in a temporary directory that outlived the machine.
+  m, err := b.Start(ctx, &vm.Spec{Kernel: vm.Kernel{Path: "vmlinuz"}})
+  // After: set Dir to keep state across runs (and to Suspend/Resume).
+  m, err := b.Start(ctx, &vm.Spec{Dir: dir, Kernel: vm.Kernel{Path: "vmlinuz"}})
+  ```
+- A zero `vm.Spec.CPUs` selects the host CPU count on Firecracker too
+  (within its limit of 32), matching QEMU. Small guests should set `CPUs`
+  and `Memory` explicitly, as the test fixtures do.
+- `qemu.Backend.DisableVSock` is the Go counterpart of `vsock.enabled = false`.
+- The deprecated `backend.Shutdown` helper is gone; call `Machine.Shutdown`.
+- **Breaking:** `backend/qemu/session` no longer exports `Run`, `Options`,
+  and `ExitCode`; the CLI foreground loop is backend-neutral and lives in
+  `internal/session`. Programs that embedded it should drive
+  `backend.Machine` directly (`Start`, `Wait`, `Shutdown`, `Console`) or run
+  the `virtle launch` command.
+
 ## 2026-09-03
 
 - `virtle launch --ssh` now exits 1, not 255, when the SSH client is killed by

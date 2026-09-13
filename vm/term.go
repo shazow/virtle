@@ -1,34 +1,20 @@
 package vm
 
 import (
-	"context"
+	"errors"
 	"io"
 )
 
-// Term is an interactive terminal session inside a guest: interleaved
-// stdio as a stream, window resizing, and an exit status. It is the one
-// session shape every interactive source returns — the backend serial
-// console (backend.ConsoleProvider), an SSH session to the guest daemon's
-// embedded sshd, or future transports — mirroring x/crypto/ssh.Session and
-// creack/pty.
+// ErrTermFellBehind ends a Term whose reader stopped consuming output.
+// Sources with bounded buffering (the serial console) drop such a session
+// rather than stall the guest: Read returns an error wrapping it once the
+// output queued before the drop is consumed, Write fails with it, and a
+// fresh session can be opened in its place.
+var ErrTermFellBehind = errors.New("terminal reader fell behind")
+
+// Term is an interactive stream connected to a guest's serial console.
+// Backend serial consoles expose it through backend.ConsoleProvider.
+// Closing the stream detaches the session and leaves the machine running.
 type Term interface {
 	io.ReadWriteCloser
-	// Resize updates the session's window size. Sources without resize
-	// semantics (a raw serial console) return an error wrapping
-	// errors.ErrUnsupported.
-	Resize(cols, rows int) error
-	// Wait blocks until the session ends and returns its exit code.
-	// Sources without exit semantics return an error wrapping
-	// errors.ErrUnsupported.
-	Wait(ctx context.Context) (int, error)
-}
-
-// TermOptions configures a new Term session. The zero value requests the
-// source's default shell with its default size.
-type TermOptions struct {
-	Argv     []string // command to run; default: a login shell
-	Env      []string
-	TermType string // terminal type advertised to the guest, e.g. "xterm-256color"
-	Cols     int
-	Rows     int
 }
